@@ -1,0 +1,62 @@
+[workspace]
+members = [
+    "execution-client",
+#    "consensus-client"
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Core dependencies
+tokio = { version = "1.0", features = ["full"] }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "2.0.12"
+eyre = "0.6"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1.0", features = ["v4"] }
+
+# Networking and HTTP
+reqwest = { version = "0.12.22", features = ["json"] }
+jsonrpsee = { version = "0.25", features = ["server", "client", "macros"] }
+
+#async 
+async-stream = "0.3"
+async-trait = "0.1.68"
+futures = "0.3"
+futures-core = "0.3"
+futures-util = { version = "0.3", default-features = false }
+hyper = "1.3"
+hyper-util = "0.1.5"
+
+# Crypto and hashing
+sha2 = "0.10"
+sha3 = "0.10"
+secp256k1 = "0.31"
+hex = "0.4"
+
+# Ethereum types
+ethereum-types = "0.15.1"
+rlp = "0.6.1"
+primitive-types = "0.13.1"
+
+# Time and duration
+chrono = { version = "0.4", features = ["serde"] }
+
+# Testing dependencies
+tokio-test = "0.4"
+criterion = "0.7"
+
+# Add execution and consensus client as dependencies for integration tests
+execution-client = { path = "fastevm/execution-client" }
+# consensus-client = { path = "fastevm/consensus-client" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.test]
+opt-level = 1

@@ -1,0 +1,151 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+        
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+      
+    - name: Run clippy
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      
+    - name: Run unit tests
+      run: cargo test --workspace --lib
+      
+    - name: Build binaries
+      run: cargo build --release
+      
+    - name: Run integration tests
+      run: cargo test --test integration_tests
+      
+    - name: Run benchmarks
+      run: cargo bench --no-run
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build execution client image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: fastevm/execution-client/Dockerfile
+        tags: fastevm-execution:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Build consensus client image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: fastevm/consensus-client/Dockerfile
+        tags: fastevm-consensus:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Test multi-node setup
+      run: |
+        # Update docker-compose to use built images
+        sed -i 's|build:|image: fastevm-execution:${{ github.sha }} #build:|g' docker-compose.yml
+        sed -i 's|dockerfile: fastevm/execution-client/Dockerfile|#dockerfile: fastevm/execution-client/Dockerfile|g' docker-compose.yml
+        sed -i 's|build:|image: fastevm-consensus:${{ github.sha }} #build:|g' docker-compose.yml
+        sed -i 's|dockerfile: fastevm/consensus-client/Dockerfile|#dockerfile: fastevm/consensus-client/Dockerfile|g' docker-compose.yml
+        
+        # Start services
+        docker-compose up -d
+        
+        # Wait for services to be ready
+        sleep 30
+        
+        # Test connectivity
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d '{"jsonrpc":"2.0","method":"engine_newPayloadV2","params":[{"parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","feeRecipient":"0x0000000000000000000000000000000000000000","stateRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","receiptsRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","prevRandao":"0x0000000000000000000000000000000000000000000000000000000000000000","blockNumber":"0x1","gasLimit":"0x1c9c380","gasUsed":"0x5208","timestamp":"0x499602d2","extraData":"0x","baseFeePerGas":"0x3b9aca00","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000000","transactions":[],"withdrawals":null}],"id":1}' \
+          http://localhost:8551
+          
+        # Cleanup
+        docker-compose down
+        
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+      
+    - name: Run security audit
+      run: cargo audit
+      
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [test, docker, security]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Build release binaries
+      run: cargo build --release
+      
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: |
+          FastEVM Engine API Bridge Release
+          
+          ## Changes
+          - Automatic release from main branch
+          
+          ## Installation
+          ```bash
+          # Download binaries from assets below
+          chmod +x execution-client consensus-client
+          ```
+        draft: false
+        prerelease: false

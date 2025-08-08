@@ -1,0 +1,29 @@
+[package]
+name = "execution-client"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "execution-client"
+path = "src/main.rs"
+
+[dependencies]
+# Ethereum
+alloy-eips = { version = "1.0.23", default-features = false }
+
+eyre = {workspace = true}
+futures-util = {workspace = true}
+tracing = { workspace = true }
+# anyhow = { workspace = true }
+# tokio = { workspace = true }
+# tracing-subscriber = { workspace = true }
+# clap = { version = "4.0", features = ["derive"] }
+
+# Reth
+reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-payload-builder" }
+reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-basic-payload-builder" }
+reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-payload-builder" }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum", features = ["node", "pool", "cli"] }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
