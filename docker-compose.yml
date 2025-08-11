@@ -1,0 +1,176 @@
+version: '3.8'
+
+services:
+  # Node 1
+  execution-node-1:
+    build:
+      context: .
+      dockerfile: fastevm/execution-client/Dockerfile
+    container_name: fastevm-execution-1
+    ports:
+      - "8551:8551"
+    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "1", "--log-level", "info"]
+    networks:
+      - fastevm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8551"] 
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  consensus-node-1:
+    build:
+      context: .
+      dockerfile: fastevm/consensus-client/Dockerfile
+    container_name: fastevm-consensus-1
+    depends_on:
+      execution-node-1:
+        condition: service_healthy
+    command: [
+      "./consensus-client", 
+      "--execution-url", "http://execution-node-1:8551",
+      "--node-id", "1",
+      "--poll-interval", "1000",
+      "--log-level", "info"
+    ]
+    networks:
+      - fastevm-network
+
+  # Node 2  
+  execution-node-2:
+    build:
+      context: .
+      dockerfile: fastevm/execution-client/Dockerfile
+    container_name: fastevm-execution-2
+    ports:
+      - "8552:8551"
+    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "2", "--log-level", "info"]
+    networks:
+      - fastevm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8551"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  consensus-node-2:
+    build:
+      context: .
+      dockerfile: fastevm/consensus-client/Dockerfile
+    container_name: fastevm-consensus-2
+    depends_on:
+      execution-node-2:
+        condition: service_healthy
+    command: [
+      "./consensus-client",
+      "--execution-url", "http://execution-node-2:8551", 
+      "--node-id", "2",
+      "--poll-interval", "1200",
+      "--log-level", "info"
+    ]
+    networks:
+      - fastevm-network
+
+  # Node 3
+  execution-node-3:
+    build:
+      context: .
+      dockerfile: fastevm/execution-client/Dockerfile
+    container_name: fastevm-execution-3
+    ports:
+      - "8553:8551"
+    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "3", "--log-level", "info"]
+    networks:
+      - fastevm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8551"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  consensus-node-3:
+    build:
+      context: .
+      dockerfile: fastevm/consensus-client/Dockerfile
+    container_name: fastevm-consensus-3
+    depends_on:
+      execution-node-3:
+        condition: service_healthy
+    command: [
+      "./consensus-client",
+      "--execution-url", "http://execution-node-3:8551",
+      "--node-id", "3", 
+      "--poll-interval", "800",
+      "--log-level", "info"
+    ]
+    networks:
+      - fastevm-network
+
+  # Node 4
+  execution-node-4:
+    build:
+      context: .
+      dockerfile: fastevm/execution-client/Dockerfile
+    container_name: fastevm-execution-4
+    ports:
+      - "8554:8551"
+    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "4", "--log-level", "info"]
+    networks:
+      - fastevm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8551"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  consensus-node-4:
+    build:
+      context: .
+      dockerfile: fastevm/consensus-client/Dockerfile
+    container_name: fastevm-consensus-4
+    depends_on:
+      execution-node-4:
+        condition: service_healthy
+    command: [
+      "./consensus-client",
+      "--execution-url", "http://execution-node-4:8551",
+      "--node-id", "4",
+      "--poll-interval", "1500", 
+      "--log-level", "info"
+    ]
+    networks:
+      - fastevm-network
+
+  # Monitoring service (optional)
+  monitoring:
+    image: nginx:alpine
+    container_name: fastevm-monitoring
+    ports:
+      - "8080:80"
+    volumes:
+      - ./monitoring/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./monitoring/index.html:/usr/share/nginx/html/index.html:ro
+    depends_on:
+      - execution-node-1
+      - execution-node-2
+      - execution-node-3
+      - execution-node-4
+    networks:
+      - fastevm-network
+
+networks:
+  fastevm-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  node4-data:
