@@ -1,0 +1,22 @@
+{
+    "name": "fastevm-contracts",
+    "version": "1.0.0",
+    "description": "Smart contracts for FastEVM",
+    "scripts": {
+        "build": "forge build",
+        "clean": "forge clean",
+        "test": "forge test",
+        "genesis": "node scripts/generate-genesis.js",
+        "deploy": "forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8551 --broadcast",
+        "bytecode": "node scripts/extract-bytecode.js",
+        "address": "node scripts/calculate-address.js",
+        "install": "forge install",
+        "remappings": "forge remappings > remappings.txt"
+    },
+    "devDependencies": {
+        "foundry": "^0.2.0"
+    },
+    "dependencies": {
+        "dotenv": "^17.2.1"
+    }
+}
