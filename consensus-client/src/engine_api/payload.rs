@@ -1,4 +1,4 @@
-use alloy_primitives::{Address, Bloom, Bytes, FixedBytes, U256};
+use alloy_primitives::{Address, Bloom, Bytes, FixedBytes, B256, U256};
 use alloy_rpc_types_engine::{ExecutionPayloadInputV2, ExecutionPayloadV1};
 use consensus_core::{BlockAPI, BlockRef, CommittedSubDag, VerifiedBlock};
 
@@ -20,7 +20,14 @@ impl SubDagBlock {
         block.parse();
         block
     }
-
+    pub fn get_block_timestamp(&self) -> u64 {
+        self.subdag.timestamp_ms
+    }
+    pub fn get_block_hash(&self) -> B256 {
+        //TODO: Implement this
+        unimplemented!("get_block_hash is not implemented");
+        //B256::default()
+    }
     pub fn parse(&self) {
         // any precomputation if needed
     }

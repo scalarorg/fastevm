@@ -30,9 +30,34 @@ clean:
 	docker system prune -f
 
 # Docker commands
+.PHONY: docker-builder docker-build-execution docker-build-consensus docker-build
+docker-builder:
+	@echo "Building builder Docker image..."
+	docker build -t scalarorg/fastevm-builder -f Dockerfile.builder .
+
+docker-build-execution:
+	@echo "Building execution client Docker image..."
+	docker build -t scalarorg/fastevm-execution -f Dockerfile.el .
+
+docker-build-consensus:
+	@echo "Building consensus client Docker image..."
+	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl .
+
+docker-build-consensus-dev: docker-builder
+	@echo "Building consensus client Docker image..."
+	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl.dev .
+
 docker-build:
 	@echo "Building Docker images..."
 	docker-compose build
+
+docker-up-execution:
+	@echo "Starting execution client in development mode..."
+	docker compose -f execution-client/docker-compose.yml up -d
+
+docker-up-consensus:
+	@echo "Starting consensus client in development mode..."
+	docker compose -f consensus-client/docker-compose.yml up -d
 
 docker-up:
 	@echo "Starting all services..."
@@ -48,8 +73,8 @@ docker-logs:
 
 # Development commands
 dev-execution:
-    @echo "Starting execution client in development mode..."
-    cd fastevm/execution-client && cargo run -- --port 8551 --http.addr 0.0.0.0 --log-level debug
+	@echo "Starting execution client in development mode..."
+	cd fastevm/execution-client && cargo run -- --port 8551 --http.addr 0.0.0.0 --log-level debug
 
 dev-consensus:
 	@echo "Starting consensus client in development mode..."

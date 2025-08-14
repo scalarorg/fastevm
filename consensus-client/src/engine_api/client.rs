@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use std::str::FromStr;
 use crate::engine_api::{ConsensusState, EngineApiConfig, SubDagBlock};
 use alloy_primitives::{Address, B256};
 use alloy_rpc_types_engine::{
@@ -26,15 +26,18 @@ pub struct ExecutionClient {
 
 impl ExecutionClient {
     pub fn new(
+        node_index: u32,
         config: EngineApiConfig,
         payload_tx: mpsc::UnboundedSender<ExecutionPayloadFieldV2>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let fee_recipient = Address::from_str(&config.fee_recipient)?;
+        let consensus_state = ConsensusState::new(node_index, fee_recipient);
+        Ok(Self {
             config,
-            consensus_state: Arc::new(RwLock::new(ConsensusState::default())),
+            consensus_state: Arc::new(RwLock::new(consensus_state)),
             //metrics: Arc::new(Mutex::new(ConsensusMetrics::default())),
             payload_tx,
-        }
+        })
     }
     pub fn jwt_secret(&self) -> JwtSecret {
         match JwtSecret::from_hex(&self.config.jwt_secret) {
@@ -134,7 +137,7 @@ impl ExecutionClient {
                 maybe_msg = commit_receiver.recv() => {
                     match maybe_msg {
                         Some(subdag) => {
-                            let payload = self.process_subdag(subdag);
+                            let payload = self.process_subdag(subdag).await;
                             match EngineApiClient::<EthEngineTypes>::new_payload_v2(&http_client, payload).await {
                                 Ok(resp) => info!("newPayload response: {:?}", resp),
                                 Err(e) => error!("newPayload failed: {:?}", e),
@@ -151,9 +154,9 @@ impl ExecutionClient {
 
         Ok(())
     }
-    fn process_subdag(&self, committed_subdag: CommittedSubDag) -> ExecutionPayloadInputV2 {
-        let block = SubDagBlock::new(committed_subdag);
-        let payload = block.get_execution_payload_input_v2();
+    async fn process_subdag(&self, committed_subdag: CommittedSubDag) -> ExecutionPayloadInputV2 {
+        let mut consensus_state = self.consensus_state.write().await;
+        let payload = consensus_state.process_subdag(committed_subdag);
         payload
     }
 }

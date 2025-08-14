@@ -25,9 +25,11 @@ struct Args {
     /// Execution client URL
     #[arg(short, long, default_value = "http://127.0.0.1:8551")]
     execution_url: String,
+
     /// Jwt secret in hex
     #[arg(short, long, default_value = "")]
     jwt_secret: String,
+
     /// Polling interval in milliseconds
     #[arg(short, long, default_value = "1000")]
     poll_interval: u64,
@@ -39,6 +41,9 @@ struct Args {
     /// Request timeout in seconds
     #[arg(short, long, default_value = "30")]
     timeout: u64,
+
+    #[arg(long, value_name = "FEE_RECIPIENT")]
+    fee_recipient: String,
 
     /// The working directory where the validator node will store its data.
     #[clap(long, value_name = "DIR", default_value = "consensus-client")]
@@ -81,10 +86,11 @@ async fn main() -> Result<()> {
         .init();
 
     info!(
-        "Starting FastEVM Consensus Client (Node {}, Execution URL: {}, Working Directory: {})",
+        "Starting FastEVM Consensus Client (Node {}, Execution URL: {}, Working Directory: {}, Fee Recipient: {})",
         args.node_index,
         args.execution_url,
-        args.working_directory.display()
+        args.working_directory.display(),
+        args.fee_recipient,
     );
     // Create validator node
     let mut validator = ValidatorNode::new(args.node_index, args.working_directory.clone());
@@ -125,17 +131,18 @@ async fn main() -> Result<()> {
     let config = EngineApiConfig {
         execution_url: args.execution_url,
         jwt_secret: args.jwt_secret,
+        fee_recipient: args.fee_recipient,
         poll_interval_ms: args.poll_interval,
     };
 
     // Create and start the Engine API client
-    let mut client = ExecutionClient::new(config, payload_tx);
+    let mut client = ExecutionClient::new(args.node_index, config, payload_tx)?;
 
     info!("Consensus client starting...");
 
     // Start the main client loop
     tokio::spawn(async move {
-        client.start(commit_receiver, block_receiver).await.unwrap();
+        client.start(commit_receiver, block_receiver).await
     });
 
     Ok(())
@@ -150,7 +157,7 @@ mod tests {
     async fn test_client_creation() {
         let config = EngineApiConfig::default();
         let (payload_tx, payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(config, payload_tx);
+        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
 
         let state = client.get_forcechoice_state().await;
     }

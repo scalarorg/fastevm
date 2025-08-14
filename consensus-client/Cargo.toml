@@ -1,10 +1,10 @@
 [package]
-name = "consensus-client"
+name = "fastevm-consensus"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "consensus-client"
+name = "fastevm-consensus"
 path = "src/main.rs"
 
 
