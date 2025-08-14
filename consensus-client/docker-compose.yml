@@ -1,69 +1,115 @@
-
 volumes:
+  fastevm-consensus0:
   fastevm-consensus1:
   fastevm-consensus2:
   fastevm-consensus3:
-  fastevm-consensus4: 
+  committee-config:
 
 networks:
   fastevm-network:
     external: true
 
 services:
-  # Mysticeti Validator Node 1
-  fastevm-consensus1:
+  # Init container to generate committee configuration
+  fastevm-consensus-init:
     build:
       context: .
       dockerfile: Dockerfile
     image: scalarorg/fastevm-consensus:latest
-    container_name: fastevm-consensus1
+    container_name: fastevm-consensus-init
     volumes:
-      - fastevm-consensus1:/app/data
+      - ./examples:/app/config
+    command: [
+      "generate-committee",
+      "--output", "/app/config/committees.yml",
+      "--authorities", "4",
+      "--epoch", "0",
+      "--stake", "1000",
+      "--ip-addresses", "172.20.0.10,172.20.0.11,172.20.0.12,172.20.0.13",
+      "--network-ports", "26657,26657,26657,26657"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.9
+    restart: "no"
+
+  # Mysticeti Validator Node 1
+  fastevm-consensus0:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus0
+    volumes:
+      - fastevm-consensus0:/app/data
+      - ./examples:/app/config
+
     environment:
       - RUST_LOG=info
       - NODE_INDEX=0
       - NODE_IP=172.20.0.10
-      - PEER_ADDRESSES=${PEER_ADDRESSES_NODE1:-172.20.0.11:26657,172.20.0.12:26657,172.20.0.13:26657}
     command: [
-      "--node_index", "0",
-      "--execution-url", "${EXECUTION_URL1:-http://127.0.0.1:8551}",
-      "--jwt-secret", "${JWT_SECRET1:-0x0000000000000000000000000000000000000000}",
-      "--fee-recipient", "${FEE_RECIPIENT:-0x0000000000000000000000000000000000000000}",
-      "--working-directory", "/app/data",
-      "--peer-addresses", "${PEER_ADDRESSES_NODE1:-172.20.0.11:26657,172.20.0.12:26657,172.20.0.13:26657}"
+      "start",
+      "--config", "/app/config/node0.yml"
     ]
     networks:
       fastevm-network:
         ipv4_address: ${NODE0_IP:-172.20.0.10}
     restart: unless-stopped
+    depends_on:
+      - fastevm-consensus-init
 
   # Mysticeti Validator Node 2
-  fastevm-consensus2:
+  fastevm-consensus1:
     build:
       context: .
       dockerfile: Dockerfile
     image: scalarorg/fastevm-consensus:latest  
-    container_name: fastevm-consensus2
+    container_name: fastevm-consensus1
     volumes:
-      - fastevm-consensus2:/app/data
+      - fastevm-consensus1:/app/data
+      - ./examples:/app/config
     environment:
       - RUST_LOG=info
       - NODE_INDEX=1
       - NODE_IP=172.20.0.11
-      - PEER_ADDRESSES=${PEER_ADDRESSES_NODE2:-172.20.0.10:26657,172.20.0.12:26657,172.20.0.13:26657}
     command: [
-      "--node_index", "1",
-      "--execution-url", "${EXECUTION_URL2:-http://127.0.0.1:8552}",
-      "--fee-recipient", "${FEE_RECIPIENT:-0x0000000000000000000000000000000000000000}",
-      "--working-directory", "/app/data",
-      "--peer-addresses", "${PEER_ADDRESSES_NODE2:-172.20.0.10:26657,172.20.0.12:26657,172.20.0.13:26657}"
+      "start",
+      "--config", "/app/config/node1.yml"
     ]
     networks:
       fastevm-network:
         ipv4_address: ${NODE1_IP:-172.20.0.11}
     restart: unless-stopped
-
+    depends_on:
+      - fastevm-consensus-init
+  
   # Mysticeti Validator Node 3
+  fastevm-consensus2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scalarorg/fastevm-consensus:latest    
+    container_name: fastevm-consensus2
+    volumes:
+      - fastevm-consensus2:/app/data
+      - ./examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=2
+      - NODE_IP=172.20.0.12
+    command: [
+      "start",
+      "--config", "/app/config/node2.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: ${NODE2_IP:-172.20.0.12}
+    restart: unless-stopped
+    depends_on:
+      - fastevm-consensus-init
+
+  # Mysticeti Validator Node 4
   fastevm-consensus3:
     build:
       context: .
@@ -72,46 +118,19 @@ services:
     container_name: fastevm-consensus3
     volumes:
       - fastevm-consensus3:/app/data
-    environment:
-      - RUST_LOG=info
-      - NODE_INDEX=2
-      - NODE_IP=172.20.0.12
-      - PEER_ADDRESSES=${PEER_ADDRESSES_NODE3:-172.20.0.10:26657,172.20.0.11:26657,172.20.0.13:26657}
-    command: [
-      "--node_index", "2",
-      "--execution-url", "${EXECUTION_URL3:-http://127.0.0.1:8553}",
-      "--fee-recipient", "${FEE_RECIPIENT:-0x0000000000000000000000000000000000000000}",
-      "--working-directory", "/app/data",
-      "--peer-addresses", "${PEER_ADDRESSES_NODE3:-172.20.0.10:26657,172.20.0.11:26657,172.20.0.13:26657}"
-    ]
-    networks:
-      fastevm-network:
-        ipv4_address: ${NODE2_IP:-172.20.0.12}
-    restart: unless-stopped
-
-  # Mysticeti Validator Node 4
-  fastevm-consensus4:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: scalarorg/fastevm-consensus:latest    
-    container_name: fastevm-consensus4
-    volumes:
-      - fastevm-consensus4:/app/data
+      - ./examples:/app/config
     environment:
       - RUST_LOG=info
       - NODE_INDEX=3
       - NODE_IP=172.20.0.13
-      - PEER_ADDRESSES=${PEER_ADDRESSES_NODE4:-172.20.0.10:26657,172.20.0.11:26657,172.20.0.12:26657}
     command: [
-      "--node_index", "3",
-      "--execution-url", "${EXECUTION_URL4:-http://127.0.0.1:8554}",
-      "--fee-recipient", "${FEE_RECIPIENT:-0x0000000000000000000000000000000000000000}",
-      "--working-directory", "/app/data",
-      "--peer-addresses", "${PEER_ADDRESSES_NODE4:-172.20.0.10:26657,172.20.0.11:26657,172.20.0.12:26657}"
+      "start",
+      "--config", "/app/config/node3.yml"
     ]
     networks:
       fastevm-network:
         ipv4_address: ${NODE3_IP:-172.20.0.13}
     restart: unless-stopped
+    depends_on:
+      - fastevm-consensus-init
 

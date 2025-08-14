@@ -23,7 +23,7 @@ reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.
 
 tower = { version = "0.5", features = ["full"] }
 # pin-project.workspace = true
-
+rand.workspace = true
 prometheus = "0.13.3"
 derive-getters = { workspace = true }
 tokio = { workspace = true }
@@ -33,6 +33,9 @@ tracing-subscriber = { workspace = true }
 jsonrpsee = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }
 tiny-keccak = "2.0.2"
+serde = { workspace = true }
+serde_yaml = "0.9"
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+tempfile = "3.8"

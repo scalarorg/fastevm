@@ -3435,7 +3435,7 @@ name = "enum-compat-util"
 version = "0.1.0"
 source = "git+https://github.com/MystenLabs/sui?rev=c58d2a0bfaae04581c56510548194524e89e2888#c58d2a0bfaae04581c56510548194524e89e2888"
 dependencies = [
- "serde_yaml",
+ "serde_yaml 0.8.26",
 ]
 
 [[package]]
@@ -3735,10 +3735,14 @@ dependencies = [
  "jsonrpsee",
  "mysten-metrics",
  "prometheus",
+ "rand 0.8.5",
  "reth-ethereum-engine-primitives",
  "reth-rpc-api",
  "reth-rpc-layer",
+ "serde",
+ "serde_yaml 0.9.34+deprecated",
  "sui-protocol-config",
+ "tempfile",
  "tiny-keccak",
  "tokio",
  "tokio-test",
@@ -11194,6 +11198,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap 2.10.0",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "serdect"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11609,7 +11626,7 @@ name = "sui-enum-compat-util"
 version = "0.1.0"
 source = "git+https://github.com/MystenLabs/sui?rev=c58d2a0bfaae04581c56510548194524e89e2888#c58d2a0bfaae04581c56510548194524e89e2888"
 dependencies = [
- "serde_yaml",
+ "serde_yaml 0.8.26",
 ]
 
 [[package]]
@@ -12839,6 +12856,12 @@ dependencies = [
  "crypto-common",
  "subtle",
 ]
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "unsigned-varint"

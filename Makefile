@@ -43,7 +43,7 @@ docker-build-consensus:
 	@echo "Building consensus client Docker image..."
 	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl .
 
-docker-build-consensus-dev: docker-builder
+docker-build-consensus-dev:
 	@echo "Building consensus client Docker image..."
 	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl.dev .
 
@@ -51,11 +51,16 @@ docker-build:
 	@echo "Building Docker images..."
 	docker-compose build
 
-docker-up-execution:
+.PHONY: docker-network docker-up-execution docker-up-consensus docker-up
+docker-network:
+	@echo "Creating network..."
+	./scripts/network.sh
+
+docker-up-execution: docker-network
 	@echo "Starting execution client in development mode..."
 	docker compose -f execution-client/docker-compose.yml up -d
 
-docker-up-consensus:
+docker-up-consensus: docker-network
 	@echo "Starting consensus client in development mode..."
 	docker compose -f consensus-client/docker-compose.yml up -d
 
@@ -63,13 +68,19 @@ docker-up:
 	@echo "Starting all services..."
 	docker-compose up -d
 
+.PHONY: docker-down-consensus docker-down-execution docker-down
+docker-down-consensus:
+	@echo "Stopping consensus client..."
+	docker compose -f consensus-client/docker-compose.yml down
+
+docker-down-execution:
+	@echo "Stopping execution client..."
+	docker compose -f execution-client/docker-compose.yml down
+
+.PHONY: docker-down
 docker-down:
 	@echo "Stopping all services..."
-	docker-compose down
-
-docker-logs:
-	@echo "Showing logs from all services..."
-	docker-compose logs -f
+	docker compose down
 
 # Development commands
 dev-execution:
