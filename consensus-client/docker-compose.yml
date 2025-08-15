@@ -1,0 +1,136 @@
+volumes:
+  fastevm-consensus0:
+  fastevm-consensus1:
+  fastevm-consensus2:
+  fastevm-consensus3:
+  committee-config:
+
+networks:
+  fastevm-network:
+    external: true
+
+services:
+  # Init container to generate committee configuration
+  fastevm-consensus-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus-init
+    volumes:
+      - ./examples:/app/config
+    command: [
+      "generate-committee",
+      "--output", "/app/config/committees.yml",
+      "--authorities", "4",
+      "--epoch", "0",
+      "--stake", "1000",
+      "--ip-addresses", "172.20.0.10,172.20.0.11,172.20.0.12,172.20.0.13",
+      "--network-ports", "26657,26657,26657,26657"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.9
+    restart: "no"
+
+  # Mysticeti Validator Node 1
+  fastevm-consensus0:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus0
+    volumes:
+      - fastevm-consensus0:/app/data
+      - ./examples:/app/config
+
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=0
+      - NODE_IP=172.20.0.10
+    command: [
+      "start",
+      "--config", "/app/config/node0.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: ${NODE0_IP:-172.20.0.10}
+    restart: unless-stopped
+    depends_on:
+      - fastevm-consensus-init
+
+  # Mysticeti Validator Node 2
+  fastevm-consensus1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scalarorg/fastevm-consensus:latest  
+    container_name: fastevm-consensus1
+    volumes:
+      - fastevm-consensus1:/app/data
+      - ./examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=1
+      - NODE_IP=172.20.0.11
+    command: [
+      "start",
+      "--config", "/app/config/node1.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: ${NODE1_IP:-172.20.0.11}
+    restart: unless-stopped
+    depends_on:
+      - fastevm-consensus-init
+  
+  # Mysticeti Validator Node 3
+  fastevm-consensus2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scalarorg/fastevm-consensus:latest    
+    container_name: fastevm-consensus2
+    volumes:
+      - fastevm-consensus2:/app/data
+      - ./examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=2
+      - NODE_IP=172.20.0.12
+    command: [
+      "start",
+      "--config", "/app/config/node2.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: ${NODE2_IP:-172.20.0.12}
+    restart: unless-stopped
+    depends_on:
+      - fastevm-consensus-init
+
+  # Mysticeti Validator Node 4
+  fastevm-consensus3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scalarorg/fastevm-consensus:latest    
+    container_name: fastevm-consensus3
+    volumes:
+      - fastevm-consensus3:/app/data
+      - ./examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=3
+      - NODE_IP=172.20.0.13
+    command: [
+      "start",
+      "--config", "/app/config/node3.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: ${NODE3_IP:-172.20.0.13}
+    restart: unless-stopped
+    depends_on:
+      - fastevm-consensus-init
+

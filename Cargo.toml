@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "execution-client",
-#    "consensus-client"
+    "consensus-client"
 ]
 resolver = "2"
 
@@ -9,6 +9,7 @@ resolver = "2"
 # Core dependencies
 tokio = { version = "1.0", features = ["full"] }
 
+rand = "0.8.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -45,13 +46,15 @@ primitive-types = "0.13.1"
 # Time and duration
 chrono = { version = "0.4", features = ["serde"] }
 
+derive-getters = "0.5.0"
+
 # Testing dependencies
 tokio-test = "0.4"
 criterion = "0.7"
 
 # Add execution and consensus client as dependencies for integration tests
 execution-client = { path = "fastevm/execution-client" }
-# consensus-client = { path = "fastevm/consensus-client" }
+consensus-client = { path = "fastevm/consensus-client" }
 
 [profile.release]
 opt-level = 3
