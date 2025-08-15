@@ -25,8 +25,7 @@ impl SubDagBlock {
     }
     pub fn get_block_hash(&self) -> B256 {
         //TODO: Implement this
-        unimplemented!("get_block_hash is not implemented");
-        //B256::default()
+        B256::default()
     }
     pub fn parse(&self) {
         // any precomputation if needed

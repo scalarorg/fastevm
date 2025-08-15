@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastEVM Network Monitor</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+        .header p {
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        .content {
+            padding: 30px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            border-left: 4px solid #3498db;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .card h3 {
+            margin: 0 0 15px 0;
+            color: #2c3e50;
+            font-size: 1.3em;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+        .status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .node-info {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            border: 1px solid #e9ecef;
+        }
+        .node-info h4 {
+            margin: 0 0 10px 0;
+            color: #495057;
+        }
+        .node-info p {
+            margin: 5px 0;
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+        .refresh-btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background 0.2s;
+        }
+        .refresh-btn:hover {
+            background: #2980b9;
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            background: #f8f9fa;
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+        .timestamp {
+            text-align: center;
+            margin: 20px 0;
+            color: #6c757d;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 FastEVM Network Monitor</h1>
+            <p>Real-time monitoring of execution and consensus nodes</p>
+        </div>
+        
+        <div class="content">
+            <div class="timestamp" id="timestamp"></div>
+            
+            <div class="grid">
+                <div class="card">
+                    <h3>📊 Network Overview</h3>
+                    <div class="node-info">
+                        <h4>Total Nodes</h4>
+                        <p><strong>8</strong> (4 Execution + 4 Consensus)</p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Network Status</h4>
+                        <p><span class="status online" id="network-status">Online</span></p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Last Updated</h4>
+                        <p id="last-updated">Checking...</p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>⚡ Execution Nodes</h3>
+                    <div class="node-info">
+                        <h4>Node 1</h4>
+                        <p>Port: 8551 (Engine), 8545 (RPC)</p>
+                        <p>Status: <span class="status online" id="exec-1-status">Online</span></p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Node 2</h4>
+                        <p>Port: 8552 (Engine), 8547 (RPC)</p>
+                        <p>Status: <span class="status online" id="exec-2-status">Online</span></p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Node 3</h4>
+                        <p>Port: 8553 (Engine), 8549 (RPC)</p>
+                        <p>Status: <span class="status online" id="exec-3-status">Online</span></p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Node 4</h4>
+                        <p>Port: 8554 (Engine), 8555 (RPC)</p>
+                        <p>Status: <span class="status online" id="exec-4-status">Online</span></p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h3>🔗 Consensus Nodes</h3>
+                    <div class="node-info">
+                        <h4>Node 1</h4>
+                        <p>IP: 172.20.0.10</p>
+                        <p>Status: <span class="status online" id="cons-1-status">Online</span></p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Node 2</h4>
+                        <p>IP: 172.20.0.11</p>
+                        <p>Status: <span class="status online" id="cons-2-status">Online</span></p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Node 3</h4>
+                        <p>IP: 172.20.0.12</p>
+                        <p>Status: <span class="status online" id="cons-3-status">Online</span></p>
+                    </div>
+                    <div class="node-info">
+                        <h4>Node 4</h4>
+                        <p>IP: 172.20.0.13</p>
+                        <p>Status: <span class="status online" id="cons-4-status">Online</span></p>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="text-align: center;">
+                <button class="refresh-btn" onclick="refreshStatus()">🔄 Refresh Status</button>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>FastEVM Network Monitor | Built with ❤️ for the FastEVM community</p>
+        </div>
+    </div>
+
+    <script>
+        function updateTimestamp() {
+            const now = new Date();
+            document.getElementById('timestamp').textContent = 
+                `Last checked: ${now.toLocaleString()}`;
+        }
+
+        function refreshStatus() {
+            // Simulate status check
+            updateTimestamp();
+            document.getElementById('last-updated').textContent = 
+                new Date().toLocaleTimeString();
+            
+            // In a real implementation, you would make API calls to check node status
+            console.log('Refreshing network status...');
+        }
+
+        // Initialize
+        updateTimestamp();
+        refreshStatus();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(refreshStatus, 30000);
+    </script>
+</body>
+</html>

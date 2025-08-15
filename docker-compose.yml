@@ -1,151 +1,348 @@
-version: '3.8'
-
 services:
-  # Node 1
-  execution-node-1:
-    build:
-      context: .
-      dockerfile: fastevm/execution-client/Dockerfile
-    container_name: fastevm-execution-1
-    ports:
-      - "8551:8551"
-    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "1", "--log-level", "info"]
+  # ===== INIT CONTAINERS =====
+  
+  # Genesis and JWT setup init container
+  genesis-init:
+    image: alpine:3.20
+    container_name: fastevm-genesis-init
+    working_dir: /scripts
+    command: ["/bin/sh", "/scripts/init.sh"]
+    volumes:
+      - execution-data1:/data1
+      - execution-data2:/data2
+      - execution-data3:/data3
+      - execution-data4:/data4
+      - ./execution-client/shared:/shared
+      - ./scripts:/scripts
+      - ./consensus-client:/consensus-client
+      - ./execution-client:/execution-client
     networks:
       - fastevm-network
+    restart: "no"
+
+  # Committee configuration init container
+  consensus-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.cl.dev
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus-init
+    volumes:
+      - ./consensus-client/examples:/app/config
+    command: [
+      "generate-committee",
+      "--output", "/app/config/committees.yml",
+      "--authorities", "4",
+      "--epoch", "0",
+      "--stake", "1000",
+      "--ip-addresses", "172.20.0.10,172.20.0.11,172.20.0.12,172.20.0.13",
+      "--network-ports", "26657,26657,26657,26657"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.9
+    restart: "no"
+    depends_on:
+      - genesis-init
+
+  # ===== EXECUTION NODES =====
+  
+  # Execution Node 1
+  execution-node1:
+    build:
+      context: .
+      dockerfile: Dockerfile.el.dev
+    image: scalarorg/fastevm-execution:latest
+    container_name: fastevm-execution1
+    user: root
+    ports:
+      - "8551:8551"   # Engine API
+      - "8545:8545"   # HTTP RPC
+      - "8546:8546"   # WS RPC
+    command: [
+      "node",
+      "--chain", "dev",
+      "--datadir", "/data0",
+      "--http",
+      "--http.api", "eth,net,web3",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--ws",
+      "--ws.api", "eth,net,web3",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data0/jwt.hex"
+    ]
+    volumes:
+      - execution-data1:/data0:rw
+      - ./scripts:/scripts:ro
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.20
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8551"] 
+      test: ["CMD", "/scripts/healthcheck.sh"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
-
-  consensus-node-1:
-    build:
-      context: .
-      dockerfile: fastevm/consensus-client/Dockerfile
-    container_name: fastevm-consensus-1
     depends_on:
-      execution-node-1:
-        condition: service_healthy
-    command: [
-      "./consensus-client", 
-      "--execution-url", "http://execution-node-1:8551",
-      "--node-id", "1",
-      "--poll-interval", "1000",
-      "--log-level", "info"
-    ]
-    networks:
-      - fastevm-network
+      genesis-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
-  # Node 2  
-  execution-node-2:
+  # Execution Node 2
+  execution-node2:
     build:
       context: .
-      dockerfile: fastevm/execution-client/Dockerfile
-    container_name: fastevm-execution-2
+      dockerfile: Dockerfile.el.dev
+    image: scalarorg/fastevm-execution:latest  
+    container_name: fastevm-execution2
+    user: root
     ports:
-      - "8552:8551"
-    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "2", "--log-level", "info"]
+      - "8552:8551"   # Engine API
+      - "8547:8545"   # HTTP RPC
+      - "8548:8546"   # WS RPC
+    command: [
+      "node",
+      "--chain", "dev",
+      "--datadir", "/data1",
+      "--http",
+      "--http.api", "eth,net,web3",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--ws",
+      "--ws.api", "eth,net,web3",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data1/jwt.hex"
+    ]
+    volumes:
+      - execution-data2:/data1:rw
+      - ./scripts:/scripts:ro
     networks:
-      - fastevm-network
+      fastevm-network:
+        ipv4_address: 172.20.0.21
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8551"]
+      test: ["CMD", "/scripts/healthcheck.sh"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
-
-  consensus-node-2:
-    build:
-      context: .
-      dockerfile: fastevm/consensus-client/Dockerfile
-    container_name: fastevm-consensus-2
     depends_on:
-      execution-node-2:
-        condition: service_healthy
-    command: [
-      "./consensus-client",
-      "--execution-url", "http://execution-node-2:8551", 
-      "--node-id", "2",
-      "--poll-interval", "1200",
-      "--log-level", "info"
-    ]
-    networks:
-      - fastevm-network
+      genesis-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
-  # Node 3
-  execution-node-3:
+  # Execution Node 3
+  execution-node3:
     build:
       context: .
-      dockerfile: fastevm/execution-client/Dockerfile
-    container_name: fastevm-execution-3
+      dockerfile: Dockerfile.el.dev
+    image: scalarorg/fastevm-execution:latest  
+    container_name: fastevm-execution3
+    user: root
     ports:
-      - "8553:8551"
-    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "3", "--log-level", "info"]
+      - "8553:8551"   # Engine API
+      - "8549:8545"   # HTTP RPC
+      - "8550:8546"   # WS RPC
+    command: [
+      "node",
+      "--chain", "dev",
+      "--datadir", "/data2",
+      "--http",
+      "--http.api", "eth,net,web3",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--ws",
+      "--ws.api", "eth,net,web3",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data2/jwt.hex"
+    ]
+    volumes:
+      - execution-data3:/data2:rw
+      - ./scripts:/scripts:ro
     networks:
-      - fastevm-network
+      fastevm-network:
+        ipv4_address: 172.20.0.22
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8551"]
+      test: ["CMD", "/scripts/healthcheck.sh"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
-
-  consensus-node-3:
-    build:
-      context: .
-      dockerfile: fastevm/consensus-client/Dockerfile
-    container_name: fastevm-consensus-3
     depends_on:
-      execution-node-3:
-        condition: service_healthy
-    command: [
-      "./consensus-client",
-      "--execution-url", "http://execution-node-3:8551",
-      "--node-id", "3", 
-      "--poll-interval", "800",
-      "--log-level", "info"
-    ]
-    networks:
-      - fastevm-network
+      genesis-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
-  # Node 4
-  execution-node-4:
+  # Execution Node 4
+  execution-node4:
     build:
       context: .
-      dockerfile: fastevm/execution-client/Dockerfile
-    container_name: fastevm-execution-4
+      dockerfile: Dockerfile.el.dev
+    image: scalarorg/fastevm-execution:latest 
+    container_name: fastevm-execution4
+    user: root
     ports:
-      - "8554:8551"
-    command: ["./execution-client", "--port", "8551", "--http.addr", "0.0.0.0", "--node-id", "4", "--log-level", "info"]
+      - "8554:8551"   # Engine API
+      - "8555:8545"   # HTTP RPC
+      - "8556:8546"   # WS RPC
+    command: [
+      "node",
+      "--chain", "dev",
+      "--datadir", "/data3",
+      "--http",
+      "--http.api", "eth,net,web3",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--ws",
+      "--ws.api", "eth,net,web3",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data3/jwt.hex"
+    ]
+    volumes:
+      - execution-data4:/data3:rw
+      - ./scripts:/scripts:ro
     networks:
-      - fastevm-network
+      fastevm-network:
+        ipv4_address: 172.20.0.23
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8551"]
+      test: ["CMD", "/scripts/healthcheck.sh"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 30s
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
-  consensus-node-4:
+  # ===== CONSENSUS NODES =====
+  
+  # Consensus Node 1
+  consensus-node1:
     build:
       context: .
-      dockerfile: fastevm/consensus-client/Dockerfile
-    container_name: fastevm-consensus-4
-    depends_on:
-      execution-node-4:
-        condition: service_healthy
+      dockerfile: Dockerfile.cl.dev
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus1
+    volumes:
+      - consensus-data1:/app/data
+      - ./consensus-client/examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=0
+      - NODE_IP=172.20.0.10
     command: [
-      "./consensus-client",
-      "--execution-url", "http://execution-node-4:8551",
-      "--node-id", "4",
-      "--poll-interval", "1500", 
-      "--log-level", "info"
+      "start",
+      "--config", "/app/config/node1.yml"
     ]
     networks:
-      - fastevm-network
+      fastevm-network:
+        ipv4_address: 172.20.0.10
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node1:
+        condition: service_healthy
 
-  # Monitoring service (optional)
+  # Consensus Node 2
+  consensus-node2:
+    build:
+      context: ./consensus-client
+      dockerfile: Dockerfile.cl.dev
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus2
+    volumes:
+      - consensus-data2:/app/data
+      - ./consensus-client/examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=1
+      - NODE_IP=172.20.0.11
+    command: [
+      "start",
+      "--config", "/app/config/node2.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.11
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node2:
+        condition: service_healthy
+
+  # Consensus Node 3
+  consensus-node3:
+    build:
+      context: .
+      dockerfile: Dockerfile.cl.dev
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus3
+    volumes:
+      - consensus-data3:/app/data
+      - ./consensus-client/examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=2
+      - NODE_IP=172.20.0.12
+    command: [
+      "start",
+      "--config", "/app/config/node3.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.12
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node3:
+        condition: service_healthy
+
+  # Consensus Node 4
+  consensus-node4:
+    build:
+      context: .
+      dockerfile: Dockerfile.cl.dev
+    image: scalarorg/fastevm-consensus:latest
+    container_name: fastevm-consensus4
+    volumes:
+      - consensus-data4:/app/data
+      - ./consensus-client/examples:/app/config
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=3
+      - NODE_IP=172.20.0.13
+    command: [
+      "start",
+      "--config", "/app/config/node4.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.13
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node4:
+        condition: service_healthy
+
+  # ===== MONITORING SERVICE =====
+  
   monitoring:
     image: nginx:alpine
     container_name: fastevm-monitoring
@@ -155,10 +352,14 @@ services:
       - ./monitoring/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./monitoring/index.html:/usr/share/nginx/html/index.html:ro
     depends_on:
-      - execution-node-1
-      - execution-node-2
-      - execution-node-3
-      - execution-node-4
+      - execution-node1
+      - execution-node2
+      - execution-node3
+      - execution-node4
+      - consensus-node1
+      - consensus-node2
+      - consensus-node3
+      - consensus-node4
     networks:
       - fastevm-network
 
@@ -170,7 +371,13 @@ networks:
         - subnet: 172.20.0.0/16
 
 volumes:
-  node1-data:
-  node2-data:
-  node3-data:
-  node4-data:
+  # Execution node data volumes
+  execution-data1:
+  execution-data2:
+  execution-data3:
+  execution-data4:
+  # Consensus node data volumes
+  consensus-data1:
+  consensus-data2:
+  consensus-data3:
+  consensus-data4:

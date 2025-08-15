@@ -9,11 +9,14 @@ services:
   init:
     image: alpine:3.20
     container_name: init-genesis
-    command: ["/bin/sh", "/shared/init.sh"]
-    #entrypoint: ["sleep", "infinity"]
+    working_dir: /scripts
+    command: ["/bin/sh", "/scripts/init.sh"]
     volumes:
-      - reth-data:/data
+      - reth-data:/data0
       - ./shared:/shared
+      - ../scripts:/scripts
+      - .:/execution-client
+      - ../consensus-client:/consensus-client
     networks: [devnet]
   reth:
     image: scalarorg/fastevm-execution:latest
@@ -25,12 +28,12 @@ services:
       - "8546:8546"   # WS RPC
       - "8551:8551"   # Engine API (for CL)
     volumes:
-      - reth-data:/data:rw
+      - reth-data:/data0:rw
     command:
       [
         "node",
         "--chain", "dev", # possible values: mainnet,sepolia,holesky,hoodi,dev
-        "--datadir", "/data",
+        "--datadir", "/data0",
         "--http",
         "--http.api", "eth,net,web3",
         "--http.addr", "0.0.0.0",
@@ -41,5 +44,5 @@ services:
         "--ws.port", "8546",
         "--authrpc.addr", "0.0.0.0",
         "--authrpc.port", "8551",
-        "--authrpc.jwtsecret", "/data/jwt.hex"
+        "--authrpc.jwtsecret", "/data0/jwt.hex"
       ]
