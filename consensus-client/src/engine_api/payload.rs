@@ -4,8 +4,6 @@ use consensus_core::{BlockAPI, BlockRef, CommittedSubDag};
 
 use super::merkle_root_keccak;
 
-type FixedByte32 = FixedBytes<32>;
-
 // Your SubDagBlock wrapper (replace CommittedSubDag type)
 #[derive(Debug, Clone)]
 pub struct SubDagBlock {
@@ -102,27 +100,28 @@ impl SubDagBlock {
             parent_hash,
             fee_recipient,
             state_root: FixedBytes::from(transactions_root), // TODO: map to real post-state root
-            receipts_root: FixedByte32::default(), // TODO: compute receipts root from execution receipts
+            receipts_root: B256::default(), // TODO: compute receipts root from execution receipts
             logs_bloom: Bloom::default(),          // TODO
-            prev_randao: FixedByte32::default(),   // TODO: mixHash or randomness
+            prev_randao: B256::default(),   // TODO: mixHash or randomness
             block_number,
             gas_limit,
             gas_used,
             timestamp: timestamp_secs,
             extra_data: Bytes::default(), // TODO: any extra data
             base_fee_per_gas: base_fee,
-            block_hash: FixedByte32::default(), // placeholder: NOT real block hash. TODO compute header hash.
+            block_hash: B256::default(), // placeholder: NOT real block hash. TODO compute header hash.
             transactions: flattened_txs,
         };
 
         ExecutionPayloadInputV2 {
             execution_payload,
-            withdrawals: None,
+            // For post-Shanghai blocks, withdrawals must be present (empty vec for no withdrawals)
+            withdrawals: Some(vec![]),
         }
     }
 }
 
-fn try_digest_from_blockref(_br: &BlockRef) -> Option<FixedByte32> {
+fn try_digest_from_blockref(_br: &BlockRef) -> Option<B256> {
     // TODO: BlockRef likely contains digest info (display uses BlockRef in commit.rs).
     // Example:
     // if br has a .digest() -> Digest type which can be converted into bytes, do that.

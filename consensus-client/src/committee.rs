@@ -146,7 +146,7 @@ pub fn load_committees(config_path: &Path) -> Result<(Committee, Vec<(NetworkKey
     Ok((committee, key_pairs))
 }
 
-pub fn extract_peer_addresses(committee: &Committee) -> Vec<String> {
+pub fn extract_peer_addresses(committee:&Committee) -> Vec<String> {
     committee.authorities()
         .map(|(_, authority)| {
             let address_str = authority.address.to_string();

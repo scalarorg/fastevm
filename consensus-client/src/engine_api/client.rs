@@ -1,12 +1,12 @@
 use std::sync::Arc;
-use std::str::FromStr;
-use crate::engine_api::{ConsensusState, EngineApiConfig};
-use alloy_primitives::{Address, B256};
+use crate::beacon_chain::{BeaconState};
+use crate::NodeConfig;
+use alloy_primitives::B256;
 use alloy_rpc_types_engine::{
-    ExecutionPayloadEnvelopeV2, ExecutionPayloadFieldV2, ExecutionPayloadInputV2,
-    ForkchoiceState, PayloadAttributes, PayloadId,
+    ExecutionPayloadEnvelopeV3, ExecutionPayloadV3, ForkchoiceState, PayloadAttributes, PayloadId
 };
 use anyhow::{anyhow, Result};
+use consensus_config::Committee;
 use consensus_core::{CertifiedBlocksOutput, CommittedSubDag};
 use jsonrpsee::core::client::SubscriptionClientT;
 use mysten_metrics::monitored_mpsc::UnboundedReceiver;
@@ -15,30 +15,32 @@ use reth_rpc_api::clients::EngineApiClient;
 use reth_rpc_layer::{AuthClientLayer, JwtSecret};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{self, Duration};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub struct ExecutionClient {
-    config: EngineApiConfig,
-    consensus_state: Arc<RwLock<ConsensusState>>,
+    config: NodeConfig,
+    committee: Committee,
+    consensus_state: Arc<RwLock<BeaconState>>,
     //metrics: Arc<Mutex<ConsensusMetrics>>,
-    payload_tx: mpsc::UnboundedSender<ExecutionPayloadFieldV2>,
+    payload_tx: mpsc::UnboundedSender<ExecutionPayloadV3>,
 }
 
 impl ExecutionClient {
     pub fn new(
-        node_index: u32,
-        config: EngineApiConfig,
-        payload_tx: mpsc::UnboundedSender<ExecutionPayloadFieldV2>,
+        config: NodeConfig,
+        committee: Committee,
+        payload_tx: mpsc::UnboundedSender<ExecutionPayloadV3>,
     ) -> Result<Self> {
-        let fee_recipient = Address::from_str(&config.fee_recipient)?;
-        let consensus_state = ConsensusState::new(node_index, fee_recipient);
+        //Genesis state
+        let consensus_state = BeaconState::from_config(&config)?;
         Ok(Self {
             config,
+            committee,
             consensus_state: Arc::new(RwLock::new(consensus_state)),
-            //metrics: Arc::new(Mutex::new(ConsensusMetrics::default())),
             payload_tx,
         })
     }
+
     pub fn jwt_secret(&self) -> JwtSecret {
         match JwtSecret::from_hex(&self.config.jwt_secret) {
             Ok(jwt_secret) => jwt_secret,
@@ -55,22 +57,11 @@ impl ExecutionClient {
     }
     pub async fn get_forcechoice_state(&self) -> ForkchoiceState {
         let state = self.consensus_state.read().await;
-        let block_hash = state.finalized_block_hash();
-        ForkchoiceState {
-            head_block_hash: block_hash.clone(),
-            safe_block_hash: block_hash.clone(),
-            finalized_block_hash: block_hash.clone(),
-        }
+        state.get_fork_choice_state()
     }
-    fn get_payload_attributes(&self) -> Option<PayloadAttributes> {
-        let attributes = PayloadAttributes {
-            timestamp: 0,
-            prev_randao: B256::default(),
-            suggested_fee_recipient: Address::default(),
-            withdrawals: None,
-            parent_beacon_block_root: None,
-        };
-        Some(attributes)
+    async fn get_payload_attributes(&self) -> Option<PayloadAttributes> {
+        let state = self.consensus_state.read().await;
+        state.get_payload_attributes()
     }
     /// Returns a http client connected to the server.
     ///
@@ -88,11 +79,17 @@ impl ExecutionClient {
     // pub fn get_metrics(&self) -> ConsensusMetrics {
     //     self.metrics.lock().unwrap().clone()
     // }
-    async fn send_payload_for_consensus(&self, payload: ExecutionPayloadEnvelopeV2) -> Result<()> {
-        let ExecutionPayloadEnvelopeV2 {
+    async fn send_payload_for_consensus(&self, payload: ExecutionPayloadEnvelopeV3) -> Result<()> {
+        let ExecutionPayloadEnvelopeV3 {
             execution_payload,
-            block_value: _block_value,
+            block_value: _,
+            blobs_bundle: _,
+            should_override_builder: _,
         } = payload;
+        if execution_payload.payload_inner.payload_inner.transactions.len() == 0 {
+            debug!("No transactions in execution payload");
+            return Ok(());
+        }
         if let Err(err) = self.payload_tx.send(execution_payload) {
             error!("Error when broadcast execution payload {:?}", err)
         }
@@ -121,21 +118,27 @@ impl ExecutionClient {
             }
         };
         
-        let mut interval = time::interval(Duration::from_secs(self.config.poll_interval_ms));
+        let mut interval = time::interval(Duration::from_secs(self.config.poll_interval));
         let mut payload_id: Option<PayloadId> = None;
         let mut consecutive_errors = 0;
         const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
-        info!("Engine API client started successfully. Polling every {}ms", self.config.poll_interval_ms);
+        info!("Engine API client started successfully. Polling every {}ms", self.config.poll_interval);
 
         loop {
             tokio::select! {
                _ = interval.tick() => {
                     // Call forkChoiceUpdated
                     let fc_state = self.get_forcechoice_state().await;
-                    let payload_attributes = self.get_payload_attributes();
-                    
-                    match EngineApiClient::<EthEngineTypes>::fork_choice_updated_v2(&http_client, fc_state.clone(), payload_attributes).await {
+                    let payload_attributes = self.get_payload_attributes().await;
+                    info!("forkChoiceUpdated: {:?}, payload_attributes: {:?}", fc_state, payload_attributes);
+                    /*
+                     * "shanghaiTime": 1700001200,  // Shanghai activates at this timestamp
+                     * "cancunTime": 1710000000     // Cancun activates at this timestamp Saturday, March 9, 2024 4:00:00 PM
+                     * After cancunTime, we must use fork_choice_updated_v3
+                     * Before cancunTime, we must use fork_choice_updated_v2
+                     */
+                    match EngineApiClient::<EthEngineTypes>::fork_choice_updated_v3(&http_client, fc_state.clone(), payload_attributes).await {
                         Ok(resp) => {
                             info!("forkChoiceUpdated response: {:?}", resp);
                             payload_id = resp.payload_id;
@@ -143,7 +146,8 @@ impl ExecutionClient {
                         },
                         Err(e) => {
                             consecutive_errors += 1;
-                            error!("forkChoiceUpdated failed (attempt {}/{}): {:?}", consecutive_errors, MAX_CONSECUTIVE_ERRORS, e);
+                            error!("forkChoiceUpdated failed (attempt {}/{}): {:?}", 
+                                consecutive_errors, MAX_CONSECUTIVE_ERRORS, e);
                             
                             if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                                 error!("Too many consecutive errors, stopping Engine API client");
@@ -153,7 +157,7 @@ impl ExecutionClient {
                     }
                     
                     if let Some(payload_id) = payload_id.as_ref() {
-                       match EngineApiClient::<EthEngineTypes>::get_payload_v2(&http_client, payload_id.clone()).await {
+                       match EngineApiClient::<EthEngineTypes>::get_payload_v3(&http_client, payload_id.clone()).await {
                             Ok(payload) => {
                                 let _res = self.send_payload_for_consensus(payload).await;
                             },
@@ -167,8 +171,10 @@ impl ExecutionClient {
                 maybe_msg = commit_receiver.recv() => {
                     match maybe_msg {
                         Some(subdag) => {
+                            info!("Processing subdag: {:?}", subdag);
                             let payload = self.process_subdag(subdag).await;
-                            match EngineApiClient::<EthEngineTypes>::new_payload_v2(&http_client, payload).await {
+                            info!("Payload: {:?}", payload);
+                            match EngineApiClient::<EthEngineTypes>::new_payload_v3(&http_client, payload, vec![], B256::default()).await {
                                 Ok(resp) => info!("newPayload response: {:?}", resp),
                                 Err(e) => error!("newPayload failed: {:?}", e),
                             }
@@ -185,7 +191,7 @@ impl ExecutionClient {
         info!("Engine API client stopped");
         Ok(())
     }
-    async fn process_subdag(&self, committed_subdag: CommittedSubDag) -> ExecutionPayloadInputV2 {
+    async fn process_subdag(&self, committed_subdag: CommittedSubDag) -> ExecutionPayloadV3 {
         let mut consensus_state = self.consensus_state.write().await;
         let payload = consensus_state.process_subdag(committed_subdag);
         payload
@@ -194,33 +200,44 @@ impl ExecutionClient {
 
 #[cfg(test)]
 mod tests {
+
+    use std::str::FromStr;
+
+    use crate::beacon_chain::{beacon_block::ChainSpec, GENESIS_TIME};
+
     use super::*;
-    use alloy_primitives::{Bloom, Bytes, U256};
+    use alloy_primitives::{Address, Bloom, Bytes, B256, U256};
     use alloy_rpc_types_engine::ExecutionPayloadV1;
     use tokio::sync::mpsc;
     use consensus_core::{BlockRef, CommitConsumer, CommitDigest, CommitRef, CommittedSubDag};
-
+    fn create_test_committee() -> Committee {
+        Committee::new(1, vec![])
+    }
     // Helper function to create test config
-    fn create_test_config() -> EngineApiConfig {
-        EngineApiConfig {
+    fn create_test_config() -> NodeConfig {
+        NodeConfig {
             execution_url: "http://127.0.0.1:8551".to_string(),
             jwt_secret: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+            genesis_block_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+            genesis_time: GENESIS_TIME,
             fee_recipient: "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6".to_string(),
-            poll_interval_ms: 1000,
+            poll_interval: 1000,
+            max_retries: 3,
+            timeout: 5000,
+            working_directory: "/tmp/test".to_string(),
+            peer_addresses: vec![],
+            node_index: 0,
+            log_level: "info".to_string(),
+            committee_path: "committee.yml".to_string(),
         }
-    }
-
-    // Helper function to create test consensus state
-    fn create_test_consensus_state() -> ConsensusState {
-        ConsensusState::new(0, Address::from_str("0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6").unwrap())
     }
 
     #[tokio::test]
     async fn test_execution_client_new_success() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        
-        let result = ExecutionClient::new(0, config, payload_tx);
+        let committee = create_test_committee();
+        let result = ExecutionClient::new(config, committee, payload_tx);
         assert!(result.is_ok());
         
         let client = result.unwrap();
@@ -232,8 +249,8 @@ mod tests {
         let mut config = create_test_config();
         config.fee_recipient = "invalid_address".to_string();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        
-        let result = ExecutionClient::new(0, config, payload_tx);
+        let committee = create_test_committee();
+        let result = ExecutionClient::new(config, committee, payload_tx);
         assert!(result.is_err());
     }
 
@@ -241,7 +258,8 @@ mod tests {
     async fn test_jwt_secret_success() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         let jwt_secret = client.jwt_secret();
         assert!(jwt_secret.as_bytes().len() == 32);
@@ -253,7 +271,8 @@ mod tests {
         let mut config = create_test_config();
         config.jwt_secret = "invalid_hex".to_string();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         // This should panic
         let _ = client.jwt_secret();
@@ -263,7 +282,8 @@ mod tests {
     async fn test_http_url() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         let url = client.http_url();
         assert_eq!(url, "http://127.0.0.1:8551");
@@ -273,7 +293,8 @@ mod tests {
     async fn test_get_forcechoice_state() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         let fc_state = client.get_forcechoice_state().await;
         assert_eq!(fc_state.head_block_hash, B256::default());
@@ -281,20 +302,25 @@ mod tests {
         assert_eq!(fc_state.finalized_block_hash, B256::default());
     }
 
-    #[test]
-    fn test_get_payload_attributes() {
+    #[tokio::test]
+    async fn test_get_payload_attributes() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
-        let attributes = client.get_payload_attributes();
+        let attributes = client.get_payload_attributes().await;
         assert!(attributes.is_some());
         
         let attributes = attributes.unwrap();
-        assert_eq!(attributes.timestamp, 0);
+        // Timestamp should be current time, not 0
+        assert!(attributes.timestamp > 0);
         assert_eq!(attributes.prev_randao, B256::default());
-        assert_eq!(attributes.suggested_fee_recipient, Address::default());
-        assert!(attributes.withdrawals.is_none());
+        // Fee recipient should be from config, not default
+        assert_eq!(attributes.suggested_fee_recipient, Address::from_str("0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6").unwrap());
+        // Withdrawals should be Some(vec![]) for post-Shanghai blocks
+        assert!(attributes.withdrawals.is_some());
+        assert_eq!(attributes.withdrawals.unwrap().len(), 0);
         assert!(attributes.parent_beacon_block_root.is_none());
     }
 
@@ -302,7 +328,8 @@ mod tests {
     async fn test_http_client_creation() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         let http_client = client.http_client();
         // Test that we can create the client without panicking
@@ -310,78 +337,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_payload_for_consensus_success() {
-        let config = create_test_config();
-        let (payload_tx, mut payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
-        
-        let payload = ExecutionPayloadEnvelopeV2 {
-            execution_payload: ExecutionPayloadFieldV2::V1(ExecutionPayloadV1 {
-                parent_hash: B256::default(),
-                fee_recipient: Address::default(),
-                state_root: [0u8; 32].into(),
-                receipts_root: [0u8; 32].into(),
-                logs_bloom: Bloom::default(),
-                prev_randao: [0u8; 32].into(),
-                block_number: 1,
-                gas_limit: 0,
-                gas_used: 0,
-                timestamp: 0,
-                extra_data: Bytes::default(),
-                base_fee_per_gas: U256::default(),
-                block_hash: [0u8; 32].into(),
-                transactions: vec![],
-            }),
-            block_value: U256::default(),
-        };
-        
-        let result = client.send_payload_for_consensus(payload).await;
-        assert!(result.is_ok());
-        
-        // Check that the payload was sent
-        let received = payload_rx.try_recv();
-        assert!(received.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_send_payload_for_consensus_channel_closed() {
-        let config = create_test_config();
-        let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
-        
-        // Drop the receiver to close the channel
-        drop(_payload_rx);
-        
-        let payload = ExecutionPayloadEnvelopeV2 {
-            execution_payload: ExecutionPayloadFieldV2::V1(ExecutionPayloadV1 {
-                parent_hash: B256::default(),
-                fee_recipient: Address::default(),
-                state_root: [0u8; 32].into(),
-                receipts_root: [0u8; 32].into(),
-                logs_bloom: Bloom::default(),
-                prev_randao: [0u8; 32].into(),
-                block_number: 1,
-                gas_limit: 0,
-                gas_used: 0,
-                timestamp: 0,
-                extra_data: Bytes::default(),
-                base_fee_per_gas: U256::default(),
-                block_hash: [0u8; 32].into(),
-                transactions: vec![],
-            }),
-            block_value: U256::default(),
-        };
-        
-        // This should not panic even when the channel is closed
-        let result = client.send_payload_for_consensus(payload).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_process_subdag() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         let leader = BlockRef::MIN;
         let blocks = vec![];
@@ -398,10 +358,11 @@ mod tests {
     #[tokio::test]
     async fn test_start_method_basic() {
         let mut config = create_test_config();
-        config.poll_interval_ms = 100; // Use shorter interval for testing
+        config.poll_interval = 100; // Use shorter interval for testing
         
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let mut client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         // Create mock receivers
         let (_, commit_receiver,block_receiver) = CommitConsumer::new(0);
@@ -424,10 +385,11 @@ mod tests {
     #[tokio::test]
     async fn test_start_method_with_commit_messages() {
         let mut config = create_test_config();
-        config.poll_interval_ms = 100; // Use shorter interval for testing
+        config.poll_interval = 100; // Use shorter interval for testing
         
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let mut client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         // Create mock receivers
         let (commit_consumer, commit_receiver, block_receiver) = CommitConsumer::new(0);
@@ -462,10 +424,11 @@ mod tests {
     #[tokio::test]
     async fn test_start_method_channel_closed() {
         let mut config = create_test_config();
-        config.poll_interval_ms = 100; // Use shorter interval for testing
+        config.poll_interval = 100; // Use shorter interval for testing
         
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let mut client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         // Create mock receivers and immediately close them
         let (_, commit_receiver, block_receiver) = CommitConsumer::new(0);
@@ -485,10 +448,11 @@ mod tests {
     async fn test_error_handling_in_start_loop() {
         let mut config = create_test_config();
         config.execution_url = "http://invalid-url:9999".to_string(); // Invalid URL
-        config.poll_interval_ms = 100;
+        config.poll_interval = 100;
         
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let mut client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         // Create mock receivers
         let (_, commit_receiver, block_receiver) = CommitConsumer::new(0);
@@ -513,17 +477,19 @@ mod tests {
     async fn test_boundary_conditions() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = ExecutionClient::new(0, config, payload_tx).unwrap();
+        let committee = create_test_committee();
+        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
         
         // Test with zero values
         let fc_state = client.get_forcechoice_state().await;
         assert_eq!(fc_state.head_block_hash, B256::default());
         
         // Test with default values
-        let attributes = client.get_payload_attributes();
+        let attributes = client.get_payload_attributes().await;
         assert!(attributes.is_some());
         let attributes = attributes.unwrap();
-        assert_eq!(attributes.timestamp, 0);
+        // Timestamp should be current time, not 0
+        assert!(attributes.timestamp > 0);
         assert_eq!(attributes.prev_randao, B256::default());
     }
 
@@ -532,7 +498,8 @@ mod tests {
     async fn test_concurrent_access() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let client = Arc::new(ExecutionClient::new(0, config, payload_tx).unwrap());
+        let committee = create_test_committee();
+        let client = Arc::new(ExecutionClient::new(config, committee, payload_tx).unwrap());
         
         let client_clone1 = Arc::clone(&client);
         let client_clone2 = Arc::clone(&client);

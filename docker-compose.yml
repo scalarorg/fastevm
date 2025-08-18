@@ -3,19 +3,27 @@ services:
   
   # Genesis and JWT setup init container
   genesis-init:
-    image: alpine:3.20
+    build:
+      context: .
+      dockerfile: Dockerfile.el.dev
+    image: scalarorg/fastevm-execution:latest
     container_name: fastevm-genesis-init
     working_dir: /scripts
-    command: ["/bin/sh", "/scripts/init.sh"]
+    user: root
+    entrypoint: ["/bin/sh", "-x", "/scripts/init.sh"]
+    #entrypoint: ["sleep", "infinity"]
     volumes:
-      - execution-data1:/data1
-      - execution-data2:/data2
-      - execution-data3:/data3
-      - execution-data4:/data4
+      - execution-data1:/execution1:rw 
+      - execution-data2:/execution2:rw
+      - execution-data3:/execution3:rw
+      - execution-data4:/execution4:rw
+      - consensus-data1:/consensus1:rw
+      - consensus-data2:/consensus2:rw
+      - consensus-data3:/consensus3:rw
+      - consensus-data4:/consensus4:rw
       - ./execution-client/shared:/shared
       - ./scripts:/scripts
       - ./consensus-client:/consensus-client
-      - ./execution-client:/execution-client
     networks:
       - fastevm-network
     restart: "no"
@@ -27,17 +35,14 @@ services:
       dockerfile: Dockerfile.cl.dev
     image: scalarorg/fastevm-consensus:latest
     container_name: fastevm-consensus-init
+    user: root
     volumes:
-      - ./consensus-client/examples:/app/config
-    command: [
-      "generate-committee",
-      "--output", "/app/config/committees.yml",
-      "--authorities", "4",
-      "--epoch", "0",
-      "--stake", "1000",
-      "--ip-addresses", "172.20.0.10,172.20.0.11,172.20.0.12,172.20.0.13",
-      "--network-ports", "26657,26657,26657,26657"
-    ]
+      - consensus-data1:/consensus1
+      - consensus-data2:/consensus2
+      - consensus-data3:/consensus3
+      - consensus-data4:/consensus4
+      - ./scripts:/scripts
+    entrypoint: ["/bin/sh", "/scripts/init.sh", "--consensus"]
     networks:
       fastevm-network:
         ipv4_address: 172.20.0.9
@@ -59,10 +64,13 @@ services:
       - "8551:8551"   # Engine API
       - "8545:8545"   # HTTP RPC
       - "8546:8546"   # WS RPC
+    volumes:
+      - execution-data1:/data:rw
+      - ./scripts:/scripts:ro
     command: [
       "node",
-      "--chain", "dev",
-      "--datadir", "/data0",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3",
       "--http.addr", "0.0.0.0",
@@ -73,11 +81,8 @@ services:
       "--ws.port", "8546",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data0/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex"
     ]
-    volumes:
-      - execution-data1:/data0:rw
-      - ./scripts:/scripts:ro
     networks:
       fastevm-network:
         ipv4_address: 172.20.0.20
@@ -104,10 +109,13 @@ services:
       - "8552:8551"   # Engine API
       - "8547:8545"   # HTTP RPC
       - "8548:8546"   # WS RPC
+    volumes:
+      - execution-data2:/data:rw
+      - ./scripts:/scripts:ro
     command: [
       "node",
-      "--chain", "dev",
-      "--datadir", "/data1",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3",
       "--http.addr", "0.0.0.0",
@@ -118,11 +126,8 @@ services:
       "--ws.port", "8546",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data1/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex"
     ]
-    volumes:
-      - execution-data2:/data1:rw
-      - ./scripts:/scripts:ro
     networks:
       fastevm-network:
         ipv4_address: 172.20.0.21
@@ -149,10 +154,13 @@ services:
       - "8553:8551"   # Engine API
       - "8549:8545"   # HTTP RPC
       - "8550:8546"   # WS RPC
+    volumes:
+      - execution-data3:/data:rw
+      - ./scripts:/scripts:ro
     command: [
       "node",
-      "--chain", "dev",
-      "--datadir", "/data2",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3",
       "--http.addr", "0.0.0.0",
@@ -163,11 +171,8 @@ services:
       "--ws.port", "8546",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data2/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex"
     ]
-    volumes:
-      - execution-data3:/data2:rw
-      - ./scripts:/scripts:ro
     networks:
       fastevm-network:
         ipv4_address: 172.20.0.22
@@ -194,10 +199,13 @@ services:
       - "8554:8551"   # Engine API
       - "8555:8545"   # HTTP RPC
       - "8556:8546"   # WS RPC
+    volumes:
+      - execution-data4:/data:rw
+      - ./scripts:/scripts:ro
     command: [
       "node",
-      "--chain", "dev",
-      "--datadir", "/data3",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3",
       "--http.addr", "0.0.0.0",
@@ -208,11 +216,8 @@ services:
       "--ws.port", "8546",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data3/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex"
     ]
-    volumes:
-      - execution-data4:/data3:rw
-      - ./scripts:/scripts:ro
     networks:
       fastevm-network:
         ipv4_address: 172.20.0.23
@@ -236,16 +241,17 @@ services:
       dockerfile: Dockerfile.cl.dev
     image: scalarorg/fastevm-consensus:latest
     container_name: fastevm-consensus1
+    user: root
     volumes:
-      - consensus-data1:/app/data
-      - ./consensus-client/examples:/app/config
+      - consensus-data1:/app/data:rw
     environment:
       - RUST_LOG=info
       - NODE_INDEX=0
       - NODE_IP=172.20.0.10
+   # entrypoint: ["sleep", "infinity"]
     command: [
       "start",
-      "--config", "/app/config/node1.yml"
+      "--config", "/app/data/node.yml"
     ]
     networks:
       fastevm-network:
@@ -264,16 +270,16 @@ services:
       dockerfile: Dockerfile.cl.dev
     image: scalarorg/fastevm-consensus:latest
     container_name: fastevm-consensus2
+    user: root
     volumes:
       - consensus-data2:/app/data
-      - ./consensus-client/examples:/app/config
     environment:
       - RUST_LOG=info
       - NODE_INDEX=1
       - NODE_IP=172.20.0.11
     command: [
       "start",
-      "--config", "/app/config/node2.yml"
+      "--config", "/app/data/node.yml"
     ]
     networks:
       fastevm-network:
@@ -292,16 +298,16 @@ services:
       dockerfile: Dockerfile.cl.dev
     image: scalarorg/fastevm-consensus:latest
     container_name: fastevm-consensus3
+    user: root
     volumes:
       - consensus-data3:/app/data
-      - ./consensus-client/examples:/app/config
     environment:
       - RUST_LOG=info
       - NODE_INDEX=2
       - NODE_IP=172.20.0.12
     command: [
       "start",
-      "--config", "/app/config/node3.yml"
+      "--config", "/app/data/node.yml"
     ]
     networks:
       fastevm-network:
@@ -320,16 +326,16 @@ services:
       dockerfile: Dockerfile.cl.dev
     image: scalarorg/fastevm-consensus:latest
     container_name: fastevm-consensus4
+    user: root
     volumes:
       - consensus-data4:/app/data
-      - ./consensus-client/examples:/app/config
     environment:
       - RUST_LOG=info
       - NODE_INDEX=3
       - NODE_IP=172.20.0.13
     command: [
       "start",
-      "--config", "/app/config/node4.yml"
+      "--config", "/app/data/node.yml"
     ]
     networks:
       fastevm-network:

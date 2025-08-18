@@ -21,20 +21,37 @@ reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.g
 reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api", features=["client"] }
 reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-layer" }
 
-tower = { version = "0.5", features = ["full"] }
-# pin-project.workspace = true
-rand.workspace = true
-prometheus = "0.13.3"
-derive-getters = { workspace = true }
-tokio = { workspace = true }
+# Lighthouse
+# beacon_chain = { git= "https://github.com/sigp/lighthouse.git", package = "beacon_chain" }
+# fork_choice = { git= "https://github.com/sigp/lighthouse.git", package = "fork_choice" }
+
 anyhow = { workspace = true }
+arbitrary = { version = "1", features = ["derive"] }
+
+clap = { version = "4.0", features = ["derive"] }
+derivative = "2"
+derive-getters = { workspace = true }
+ethereum_ssz = "0.8.2"
+ethereum_ssz_derive = "0.8.2"
+
+jsonrpsee = { workspace = true }
+# pin-project.workspace = true
+prometheus = "0.13.3"
+
+rand.workspace = true
+serde = { workspace = true }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+thiserror = { workspace = true }
+tiny-keccak = "2.0.2"
+rlp = "0.6"
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-jsonrpsee = { workspace = true }
-clap = { version = "4.0", features = ["derive"] }
-tiny-keccak = "2.0.2"
-serde = { workspace = true }
-serde_yaml = "0.9"
+tree_hash = "0.10"
+tree_hash_derive = "0.10"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

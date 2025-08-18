@@ -1,12 +1,12 @@
 #!/bin/sh
-set -euo pipefail
 
+DIR=$(cd "$(dirname "$0")" && pwd)
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
-
+CLI=fastevm-execution
 # Function to print colored output
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -26,8 +26,8 @@ show_usage() {
     echo
     echo "Options:"
     echo "  -h, --help     Show this help message"
-    echo "  -v, --verify   Verify JWT secrets without updating files"
-    echo "  -u, --update   Update JWT secrets in existing consensus configs only"
+    echo "  -c, --consensus Generate committee config for each validator node"
+    echo "  -t, --test     Test genesis block hash extraction with sample output"
     echo
     echo "This script sets up FastEVM nodes by generating JWT secrets and configs"
     echo "for both execution and consensus clients."
@@ -37,16 +37,16 @@ show_usage() {
     echo "  2. Ensure consensus-client directory exists for full setup"
     echo
     echo "Examples:"
-    echo "  ./scripts/init.sh              # Full setup (default)"
-    echo "  ./scripts/init.sh --verify     # Verify existing JWT secrets"
-    echo "  ./scripts/init.sh --update     # Update JWT secrets in existing configs"
+    echo "  ./scripts/init.sh               # Full setup (default)"
+    echo "  ./scripts/init.sh --consensus   # Generate committee config for each validator node"
+    echo "  ./scripts/init.sh --test        # Test genesis block hash extraction"
+
 }
 
 generate_secret_key() {
   key_file=$1
   if [ ! -f "$key_file" ]; then
-    #openssl rand -hex 32 | tr -d "\n" > "$key_file"
-    if dd if=/dev/urandom bs=32 count=1 2>/dev/null | xxd -p -c 64 > "$key_file"; then
+    if openssl rand -hex 32 | tr -d "\n" > "$key_file"; then
       print_info "Generated JWT secret: $key_file"
       return 0
     else
@@ -57,32 +57,6 @@ generate_secret_key() {
     print_info "JWT secret already exists: $key_file"
     return 0
   fi
-}
-
-# Function to clean up old consensus configs if needed
-cleanup_old_configs() {
-    num_nodes=$1
-    
-    if [ ! -d "../consensus-client" ]; then
-        return 0
-    fi
-    
-    print_info "Checking for old consensus configs..."
-    
-    # Find all node config files
-    config_files=$(find ../consensus-client/examples/ -name "node*.yml" -type f | sort)
-    
-    for config_file in $config_files; do
-        # Extract node index from filename
-        filename=$(basename "$config_file")
-        node_index=$(echo "$filename" | sed 's/node\([0-9]*\)\.yml/\1/')
-        
-        # Check if this node index is within our current range
-        if [ "$node_index" -ge "$num_nodes" ]; then
-            print_warning "Removing old config for node $node_index: $config_file"
-            rm -f "$config_file"
-        fi
-    done
 }
 
 # Function to validate JWT secret format
@@ -122,182 +96,42 @@ read_jwt_secret() {
     echo "$jwt_secret"
 }
 
-# Function to update JWT secret in a config file (standalone function)
-update_jwt_secret() {
-    config_file="$1"
-    new_jwt_secret="$2"
-    
-    if [ ! -f "$config_file" ]; then
-        print_error "Config file not found: $config_file"
-        return 1
-    fi
-    
-    # Create backup of the original file
-    backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
-    cp "$config_file" "$backup_file"
-    print_info "Created backup: $backup_file"
-    
-    # Update the JWT secret in the config file
-    # Use sed to replace the jwt_secret line while preserving the comment
-    sed -i.bak "s/^jwt_secret:.*$/jwt_secret: \"$new_jwt_secret\"  # JWT secret for authentication/" "$config_file"
-    
-    # Remove the temporary .bak file created by sed
-    rm -f "${config_file}.bak"
-    
-    print_info "Updated JWT secret in: $config_file"
-}
-
 # Function to update consensus client config file
 update_consensus_config() {
     node_index=$1
     jwt_secret="$2"
-    config_file="../consensus-client/examples/node${node_index}.yml"
-    template_file="../consensus-client/examples/node.template.yml"
+    genesis_block_hash="$3"
+    config_file="/consensus${node_index}/node.yml"
+    template_file="$DIR/../consensus-client/examples/node.template.yml"
     
     # Check if consensus client directory exists
-    if [ ! -d "../consensus-client" ]; then
+    if [ ! -d "$DIR/../consensus-client" ]; then
         print_warning "Consensus client directory not found. Skipping config update."
         return 1
     fi
     
-    # If config file doesn't exist, create it from template
-    if [ ! -f "$config_file" ]; then
-        if [ -f "$template_file" ]; then
-            print_info "Creating consensus config from template: $config_file"
-            cp "$template_file" "$config_file"
-            
-            # Replace placeholders in the new config file
-            sed -i "s/{NODE_INDEX}/$node_index/g" "$config_file"
-            sed -i "s/{AUTHORITY_INDEX}/$(($node_index - 1))/g" "$config_file"
-            sed -i "s/{JWT_SECRET}/$jwt_secret/g" "$config_file"
-            
-            print_info "Generated new consensus config: $config_file"
-        else
-            print_warning "Template file not found: $template_file"
-            return 1
-        fi
+    # If config file from template and replace placeholders
+     if [ -f "$template_file" ]; then
+        print_info "Creating consensus config from template: $config_file"
+        cp "$template_file" "$config_file"
+        
+        # Replace placeholders in the new config file
+        sed -i "s/{NODE_INDEX}/$node_index/g" "$config_file"
+        sed -i "s/{AUTHORITY_INDEX}/$(($node_index - 1))/g" "$config_file"
+        sed -i "s/{JWT_SECRET}/$jwt_secret/g" "$config_file"
+        sed -i "s/{GENESIS_BLOCK_HASH}/$genesis_block_hash/g" "$config_file"
+        
+        print_info "Generated new consensus config: $config_file"
+        cat "$config_file"
     else
-        # Create backup of the existing file
-        backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
-        cp "$config_file" "$backup_file"
-        print_info "Created backup: $backup_file"
-        
-        # Update the JWT secret in the existing config file
-        # Use sed to replace the jwt_secret line while preserving the comment
-        sed -i.bak "s/^jwt_secret:.*$/jwt_secret: \"$jwt_secret\"  # JWT secret for authentication/" "$config_file"
-        
-        # Remove the temporary .bak file created by sed
-        rm -f "${config_file}.bak"
-        
-        print_info "Updated JWT secret in existing consensus config: $config_file"
+        print_warning "Template file not found: $template_file"
+        return 1
     fi
-}
-
-# Function to verify JWT secrets without updating
-verify_jwt_secrets() {
-    print_info "Verifying JWT secrets (read-only mode)..."
-    
-    # POSIX-compatible mapping using parallel arrays
-    data_dirs="/data1 /data2 /data3 /data4"
-    config_files="consensus-client/examples/node0.yml consensus-client/examples/node1.yml consensus-client/examples/node2.yml consensus-client/examples/node3.yml"
-    
-    # Convert to arrays
-    set -- $data_dirs
-    data_dirs_array="$@"
-    set -- $config_files
-    config_files_array="$@"
-    
-    # Process each mapping
-    i=1
-    for data_dir in $data_dirs_array; do
-        config_file=$(echo "$config_files_array" | cut -d' ' -f$i)
-        jwt_file="${data_dir}/jwt.hex"
-        
-        echo "Node: $data_dir -> $config_file"
-        
-        if [ -f "$jwt_file" ]; then
-            jwt_secret=$(read_jwt_secret "$jwt_file" 2>/dev/null || echo "ERROR")
-            echo "  JWT file: $jwt_file"
-            echo "  JWT secret: ${jwt_secret%??????????}..."
-        else
-            echo "  JWT file: NOT FOUND"
-        fi
-        
-        if [ -f "$config_file" ]; then
-            current_jwt=$(grep "^jwt_secret:" "$config_file" | sed 's/.*jwt_secret: *"\([^"]*\)".*/\1/')
-            echo "  Config file: $config_file"
-            echo "  Current JWT: ${current_jwt%??????????}..."
-        else
-            echo "  Config file: NOT FOUND"
-        fi
-        
-        echo
-        i=$((i + 1))
-    done
-}
-
-# Function to update JWT secrets in existing consensus configs only
-update_existing_jwt_secrets() {
-    print_info "Starting JWT secret update process for existing configs..."
-    
-    # POSIX-compatible mapping using parallel arrays
-    data_dirs="/data1 /data2 /data3 /data4"
-    config_files="consensus-client/examples/node0.yml consensus-client/examples/node1.yml consensus-client/examples/node2.yml consensus-client/examples/node3.yml"
-    
-    # Check if we're running in the right context
-    if [ ! -d "consensus-client" ] || [ ! -d "execution-client" ]; then
-        print_error "This script must be run from the project root directory"
-        print_error "Current directory: $(pwd)"
-        exit 1
-    fi
-    
-    # Process each node mapping
-    i=1
-    for data_dir in $data_dirs; do
-        config_file=$(echo "$config_files" | cut -d' ' -f$i)
-        jwt_file="${data_dir}/jwt.hex"
-        
-        print_info "Processing node: $data_dir -> $config_file"
-        
-        # Check if the JWT file exists
-        if [ ! -f "$jwt_file" ]; then
-            print_warning "JWT file not found: $jwt_file"
-            print_warning "Skipping this node. Make sure to run execution-client/shared/init.sh first."
-            continue
-        fi
-        
-        # Check if the config file exists
-        if [ ! -f "$config_file" ]; then
-            print_warning "Config file not found: $config_file"
-            print_warning "Skipping this node."
-            continue
-        fi
-        
-        # Read the JWT secret
-        if jwt_secret=$(read_jwt_secret "$jwt_file"); then
-            print_info "Read JWT secret: ${jwt_secret%??????????}..."
-            
-            # Update the config file
-            if update_jwt_secret "$config_file" "$jwt_secret"; then
-                print_info "Successfully updated $config_file"
-            else
-                print_error "Failed to update $config_file"
-            fi
-        else
-            print_error "Failed to read JWT secret from $jwt_file"
-        fi
-        
-        echo
-        i=$((i + 1))
-    done
-    
-    print_info "JWT secret update process completed!"
-    print_info "Please verify the changes in the config files before running the consensus clients."
 }
 
 prepare_data_dir() {
   node_index=$1
-  data_dir="/data${node_index}"
+  data_dir="/execution${node_index}"
   success=true
   
   print_info "Preparing data directory for node $node_index: $data_dir"
@@ -314,25 +148,33 @@ prepare_data_dir() {
     success=false
   fi
   
-  # Copy genesis.json from template if needed
-  if [ ! -f ${data_dir}/genesis.json ]; then
-    if cp /shared/genesis.template.json ${data_dir}/genesis.json; then
-      print_info "Copied genesis.json to ${data_dir}/genesis.json"
+  # Copy genesis.json from template
+  if cp /shared/genesis.json ${data_dir}/genesis.json; then
+    print_info "Copied genesis.json to ${data_dir}/genesis.json"      
+    # Extract the genesis block hash
+    if last_line=$($CLI init --datadir $data_dir --chain $data_dir/genesis.json 2>&1 | tail -n 1); then
+      print_info "Genesis output: $last_line"
+      genesis_block_hash=$(echo "$last_line" | grep -o '0x[0-9a-fA-F]\{64\}')
+      if [ -z "$genesis_block_hash" ]; then
+        print_warning "Could not find genesis block hash in output"
+      else
+        print_info "Extracted genesis block hash: ${genesis_block_hash}"
+      fi
     else
-      print_error "Failed to copy genesis.json to ${data_dir}/genesis.json"
-      success=false
+      print_warning "Failed to extract genesis block hash"
     fi
   else
-    print_info "Genesis file already exists: ${data_dir}/genesis.json"
+    print_error "Failed to copy genesis.json to ${data_dir}/genesis.json"
+    success=false
   fi
   
   # Read the generated JWT secret
-  jwt_secret
+  jwt_secret=""
   if jwt_secret=$(read_jwt_secret "${data_dir}/jwt.hex"); then
     print_info "Node $node_index JWT secret: ${jwt_secret%??????????}..."
     
     # Update consensus client config
-    if update_consensus_config "$node_index" "$jwt_secret"; then
+    if update_consensus_config "$node_index" "$jwt_secret" "$genesis_block_hash"; then
       print_info "Successfully updated consensus config for node $node_index"
     else
       print_warning "Failed to update consensus config for node $node_index"
@@ -351,38 +193,35 @@ prepare_data_dir() {
     return 1
   fi
 }
+consensus() {
+  print_info "Starting FastEVM consensus node setup process..."
+  print_info "This will generate committee config for each validator node"
+  
+  # Define the number of nodes
+  num_nodes=${1:-4}
+  for i in $(seq 1 $num_nodes); do
+    echo "Generating committee config for node $i"
+    fastevm-consensus generate-committee \
+      --output "/consensus${i}/committees.yml" \
+      --authorities "4" \
+      --epoch "0" \
+      --stake "1000" \
+      --ip-addresses "172.20.0.10,172.20.0.11,172.20.0.12,172.20.0.13" \
+      --network-ports "26657,26657,26657,26657"
+  done
+}
 
 # Main execution
 main() {
     print_info "Starting FastEVM node setup process..."
-    print_info "This will generate JWT secrets and configs for both execution and consensus clients"
-    
-    # Check if we're in the right context
-    if [ ! -d "../execution-client" ]; then
-        print_error "Execution client directory not found. Please run this script from the project root or scripts directory."
-        exit 1
-    fi
-    
-    if [ ! -d "../consensus-client" ]; then
-        print_warning "Consensus client directory not found. Running in execution-only mode."
-    fi
-    
-    # Check if we have write permissions
-    if [ ! -w ".." ]; then
-        print_error "No write permission in parent directory."
-        exit 1
-    fi
+    print_info "This will generate JWT secrets, genesis files and configs for both execution and consensus clients"
     
     # Define the number of nodes
-    num_nodes=4
-    
-    # Cleanup old consensus configs
-    cleanup_old_configs "$num_nodes"
+    num_nodes=${1:-4}
     
     # Track success/failure for each node
     success_count=0
     failure_count=0
-    
     # Loop through all nodes
     for i in $(seq 1 $num_nodes); do
         print_info "Processing node $i..."
@@ -399,7 +238,7 @@ main() {
     print_info ""
     print_info "Node summary:"
     for i in $(seq 1 $num_nodes); do
-        data_dir="/data${i}"
+        data_dir="/execution${i}"
         jwt_file="${data_dir}/jwt.hex"
         genesis_file="${data_dir}/genesis.json"
         
@@ -412,12 +251,6 @@ main() {
     
     print_info ""
     print_info "Setup results: $success_count successful, $failure_count failed"
-    
-    if [ -d "../consensus-client" ]; then
-        print_info ""
-        print_info "Consensus client configs have been updated with the generated JWT secrets."
-        print_info "Please verify the changes before running the consensus clients."
-    fi
     
     # Exit with error if any node failed
     if [ $failure_count -gt 0 ]; then
@@ -432,12 +265,12 @@ case "${1:-}" in
         show_usage
         exit 0
         ;;
-    -v|--verify)
-        verify_jwt_secrets
+    -c|--consensus)
+        consensus
         exit 0
         ;;
-    -u|--update)
-        update_existing_jwt_secrets
+    -t|--test)
+        test_genesis_extraction
         exit 0
         ;;
     "")

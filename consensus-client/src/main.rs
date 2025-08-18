@@ -3,6 +3,7 @@
 mod engine_api;
 mod validator;
 mod committee;
+mod beacon_chain;
 
 use std::path::PathBuf;
 use std::fs;
@@ -10,7 +11,6 @@ use std::fs;
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use consensus_core::CommitConsumer;
-use engine_api::EngineApiConfig;
 use mysten_metrics::RegistryService;
 use prometheus::Registry;
 use tokio::sync::mpsc;
@@ -20,15 +20,16 @@ use validator::ValidatorNode;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use tokio::signal;
-
 use crate::engine_api::ExecutionClient;
 use crate::committee::{extract_peer_addresses, generate_committees, load_committees};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default,Serialize, Deserialize)]
 struct NodeConfig {
     committee_path: String,
     execution_url: String,
     jwt_secret: String,
+    genesis_time: u64,
+    genesis_block_hash: String,
     fee_recipient: String,
     poll_interval: u64,
     max_retries: u32,
@@ -135,7 +136,7 @@ async fn start_consensus_client(config_path: &PathBuf) -> Result<()> {
     // Start the validator node
     validator
         .start(
-            committee,
+            committee.clone(),
             keypairs,
             registry_service,
             commit_consumer,
@@ -145,15 +146,16 @@ async fn start_consensus_client(config_path: &PathBuf) -> Result<()> {
         .map_err(|e| anyhow!("Failed to start validator node: {}", e))?;
 
     // Create configuration
-    let config = EngineApiConfig {
-        execution_url: node_config.execution_url,
-        jwt_secret: node_config.jwt_secret,
-        fee_recipient: node_config.fee_recipient,
-        poll_interval_ms: node_config.poll_interval,
-    };
+    // let config = EngineApiConfig {
+    //     execution_url: node_config.execution_url,
+    //     jwt_secret: node_config.jwt_secret,
+    //     genesis_block_hash: node_config.genesis_block_hash,
+    //     fee_recipient: node_config.fee_recipient,
+    //     poll_interval_ms: node_config.poll_interval,
+    // };
 
     // Create and start the Engine API client
-    let mut client = ExecutionClient::new(node_config.node_index, config, payload_tx)?;
+    let mut client = ExecutionClient::new(node_config, committee.clone(), payload_tx)?;
 
     info!("Consensus client starting...");
 
@@ -215,6 +217,7 @@ async fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use consensus_config::Committee;
     use tempfile::tempdir;
     use std::fs;
 
@@ -276,6 +279,8 @@ validity_threshold: 1
             committee_path: "committee.yml".to_string(),
             execution_url: "http://localhost:8080".to_string(),
             jwt_secret: "secret123".to_string(),
+            genesis_block_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+            genesis_time: crate::beacon_chain::GENESIS_TIME,
             fee_recipient: "0x1234567890abcdef".to_string(),
             poll_interval: 5000,
             max_retries: 5,
@@ -505,48 +510,27 @@ log_level: info
         }
     }
 
-    #[test]
-    fn test_engine_api_config_creation() {
-        let config = EngineApiConfig {
-            execution_url: "http://localhost:8080".to_string(),
-            jwt_secret: "secret123".to_string(),
-            fee_recipient: "0x1234567890abcdef".to_string(),
-            poll_interval_ms: 5000,
-        };
-        
-        assert_eq!(config.execution_url, "http://localhost:8080");
-        assert_eq!(config.jwt_secret, "secret123");
-        assert_eq!(config.fee_recipient, "0x1234567890abcdef");
-        assert_eq!(config.poll_interval_ms, 5000);
-    }
-
-    #[test]
-    fn test_execution_client_creation() {
-        let config = EngineApiConfig {
-            execution_url: "http://127.0.0.1:8551".to_string(),
-            jwt_secret: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
-            fee_recipient: "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6".to_string(),
-            poll_interval_ms: 1000,
-        };
-        
-        let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let result = ExecutionClient::new(0, config, payload_tx);
-        
-        // Test that we can create the client
-        assert!(result.is_ok());
-    }
 
     #[test]
     fn test_execution_client_creation_with_invalid_fee_recipient() {
-        let config = EngineApiConfig {
+        let config = NodeConfig {
+            committee_path: "committee.yml".to_string(),
             execution_url: "http://127.0.0.1:8551".to_string(),
             jwt_secret: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+            genesis_block_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
+            genesis_time: crate::beacon_chain::GENESIS_TIME,
             fee_recipient: "invalid_address".to_string(),
-            poll_interval_ms: 1000,
+            poll_interval: 1000,
+            max_retries: 3,
+            timeout: 5000,
+            working_directory: "/tmp/test".to_string(),
+            peer_addresses: vec![],
+            node_index: 0,
+            log_level: "info".to_string(),
         };
-        
+        let committee = Committee::new(1, vec![]);
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let result = ExecutionClient::new(0, config, payload_tx);
+        let result = ExecutionClient::new( config, committee, payload_tx);
         
         // Test that invalid fee recipient is handled
         assert!(result.is_err());

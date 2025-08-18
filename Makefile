@@ -79,7 +79,7 @@ docker-up-consensus: docker-network
 
 docker-up:
 	@echo "Starting all services..."
-	docker-compose up -d
+	docker compose up -d
 
 .PHONY: docker-down-consensus docker-down-execution docker-down
 docker-down-consensus:

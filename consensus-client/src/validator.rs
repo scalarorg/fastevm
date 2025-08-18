@@ -1,9 +1,9 @@
 // Copyright (c) Scalar Org, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use alloy_rpc_types_engine::ExecutionPayloadFieldV2;
+use alloy_rpc_types_engine::{ExecutionPayloadFieldV2, ExecutionPayloadV3};
 use anyhow::Result;
-use consensus_config::{AuthorityIndex, NetworkKeyPair, Parameters, ProtocolKeyPair};
+use consensus_config::{AuthorityIndex, Committee, NetworkKeyPair, Parameters, ProtocolKeyPair};
 use consensus_core::{
     Clock, CommitConsumer, ConsensusAuthority, TransactionIndex, TransactionVerifier,
     ValidationError,
@@ -48,11 +48,11 @@ impl ValidatorNode {
 
     pub async fn start(
         &mut self,
-        committee: consensus_config::Committee,
+        committee: Committee,
         keypairs: Vec<(NetworkKeyPair, ProtocolKeyPair)>,
         registry_service: RegistryService,
         commit_consumer: CommitConsumer,
-        input_payload_rx: mpsc::UnboundedReceiver<ExecutionPayloadFieldV2>,
+        input_payload_rx: mpsc::UnboundedReceiver<ExecutionPayloadV3>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting validator node {}", self.authority_index);
 
@@ -103,7 +103,7 @@ impl ValidatorNode {
 
     async fn start_transaction_processing(
         &self,
-        mut input_payload_rx: mpsc::UnboundedReceiver<ExecutionPayloadFieldV2>,
+        mut input_payload_rx: mpsc::UnboundedReceiver<ExecutionPayloadV3>,
     ) {
         // Process received payload from execution client
         let transaction_client = self
@@ -114,7 +114,7 @@ impl ValidatorNode {
         tokio::spawn(async move {
             while let Some(payload) = input_payload_rx.recv().await {
                 info!("Received payload from execution client: {:?}", &payload);
-                let tx_data = extract_transaction(payload);
+                let tx_data = extract_transaction_from_payload_v3(payload);
                 match transaction_client.submit(tx_data).await {
                     Ok((block_ref, _status_receiver)) => {
                         info!(
@@ -143,7 +143,18 @@ impl ValidatorNode {
     // }
 }
 
-fn extract_transaction(payload: ExecutionPayloadFieldV2) -> Vec<Vec<u8>> {
+fn extract_transaction_from_payload_v3(payloadv3: ExecutionPayloadV3) -> Vec<Vec<u8>> {
+    let payload_v2 = payloadv3.payload_inner;
+    let payload_v1 = payload_v2.payload_inner;
+    let tx_data = payload_v1
+        .transactions
+        .into_iter()
+        .map(|tx| tx.0.into())
+        .collect();
+    tx_data
+}
+
+fn extract_transaction_from_payload_field_v2(payload: ExecutionPayloadFieldV2) -> Vec<Vec<u8>> {
     let payload_v1 = match payload {
         ExecutionPayloadFieldV2::V1(execution_payload_v1) => execution_payload_v1,
         ExecutionPayloadFieldV2::V2(execution_payload_v2) => execution_payload_v2.payload_inner,
@@ -165,7 +176,7 @@ mod tests {
     use tempfile::tempdir;
     use std::time::Duration;
     use alloy_primitives::{Address, B256, Bloom, Bytes, U256};
-    use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2};
+    use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
 
     // Helper function to create test committee
     fn create_test_committee() -> Committee {
@@ -312,7 +323,7 @@ mod tests {
             ],
         });
         
-        let tx_data = extract_transaction(payload);
+        let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 2);
         assert_eq!(tx_data[0], vec![1, 2, 3]);
         assert_eq!(tx_data[1], vec![4, 5, 6]);
@@ -343,7 +354,7 @@ mod tests {
             withdrawals: vec![],
         });
         
-        let tx_data = extract_transaction(payload);
+        let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 2);
         assert_eq!(tx_data[0], vec![7, 8, 9]);
         assert_eq!(tx_data[1], vec![10, 11, 12]);
@@ -368,7 +379,7 @@ mod tests {
             transactions: vec![],
         });
         
-        let tx_data = extract_transaction(payload);
+        let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 0);
     }
 
@@ -391,7 +402,7 @@ mod tests {
             transactions: vec![Bytes::from(vec![42])],
         });
         
-        let tx_data = extract_transaction(payload);
+        let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 1);
         assert_eq!(tx_data[0], vec![42]);
     }
@@ -416,7 +427,7 @@ mod tests {
             transactions: vec![Bytes::from(large_tx.clone())],
         });
         
-        let tx_data = extract_transaction(payload);
+        let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 1);
         assert_eq!(tx_data[0], large_tx);
     }
@@ -532,22 +543,29 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         
         // Send a test payload
-        let test_payload = ExecutionPayloadFieldV2::V1(ExecutionPayloadV1 {
-            parent_hash: B256::default(),
-            fee_recipient: Address::default(),
-            state_root: [0u8; 32].into(),
-            receipts_root: [0u8; 32].into(),
-            logs_bloom: Bloom::default(),
-            prev_randao: [0u8; 32].into(),
-            block_number: 1,
-            gas_limit: 0,
-            gas_used: 0,
-            timestamp: 0,
-            extra_data: Bytes::default(),
-            base_fee_per_gas: U256::default(),
-            block_hash: [0u8; 32].into(),
-            transactions: vec![Bytes::from(vec![1, 2, 3])],
-        });
+        let test_payload = ExecutionPayloadV3 {
+            payload_inner: ExecutionPayloadV2 {
+                payload_inner: ExecutionPayloadV1 {
+                    parent_hash: B256::default(),
+                    fee_recipient: Address::default(),
+                    state_root: [0u8; 32].into(),
+                    receipts_root: [0u8; 32].into(),
+                    logs_bloom: Bloom::default(),
+                    prev_randao: [0u8; 32].into(),
+                    block_number: 1,
+                    gas_limit: 0,
+                    gas_used: 0,
+                    timestamp: 0,
+                    extra_data: Bytes::default(),
+                    base_fee_per_gas: U256::default(),
+                    block_hash: [0u8; 32].into(),
+                    transactions: vec![Bytes::from(vec![1, 2, 3])],
+                },
+                withdrawals: Vec::new(),
+            },
+            blob_gas_used: 0,
+            excess_blob_gas: 0,
+        };
         
         let _ = input_payload_tx.send(test_payload);
         
