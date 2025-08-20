@@ -1,0 +1,48 @@
+networks:
+  devnet:
+    driver: bridge
+
+volumes:
+  reth-data:
+
+services:
+  init:
+    image: alpine:3.20
+    container_name: init-genesis
+    working_dir: /scripts
+    command: ["/bin/sh", "/scripts/init.sh"]
+    volumes:
+      - reth-data:/data0
+      - ./shared:/shared
+      - ../scripts:/scripts
+      - .:/execution-client
+      - ../consensus-client:/consensus-client
+    networks: [devnet]
+  reth:
+    image: scalarorg/fastevm-execution:latest
+    container_name: reth-node
+    restart: unless-stopped
+    user: root
+    ports:
+      - "8545:8545"   # HTTP RPC
+      - "8546:8546"   # WS RPC
+      - "8551:8551"   # Engine API (for CL)
+    volumes:
+      - reth-data:/data0:rw
+    command:
+      [
+        "node",
+        "--chain", "dev", # possible values: mainnet,sepolia,holesky,hoodi,dev
+        "--datadir", "/data0",
+        "--http",
+        "--http.api", "eth,net,web3",
+        "--http.addr", "0.0.0.0",
+        "--http.port", "8545",
+        "--ws",
+        "--ws.api", "eth,net,web3",
+        "--ws.addr", "0.0.0.0",
+        "--ws.port", "8546",
+        "--authrpc.addr", "0.0.0.0",
+        "--authrpc.port", "8551",
+        "--authrpc.jwtsecret", "/data0/jwt.hex"
+      ]

@@ -1,0 +1,129 @@
+# FastEVM Bootnode Configuration
+# This file defines the bootnode setup for execution nodes
+
+bootnode:
+  # Reference node configuration
+  reference_node:
+    name: "execution-node1"
+    container_name: "fastevm-execution1"
+    ip_address: "172.20.0.20"
+    http_port: 8545
+    ws_port: 8546
+    engine_port: 8551
+    instance: 1
+    
+    # APIs enabled for bootnode functionality
+    http_apis: ["eth", "net", "web3", "admin", "debug"]
+    ws_apis: ["eth", "net", "web3", "admin", "debug"]
+    
+    # CORS settings for cross-origin requests
+    cors_domains: ["*"]
+    ws_origins: ["*"]
+    
+    # Health check configuration
+    health_check:
+      test: ["CMD", "/scripts/healthcheck.sh"]
+      interval: "10s"
+      timeout: "5s"
+      retries: 3
+      start_period: "30s"
+
+  # Client nodes that will connect to the bootnode
+  client_nodes:
+    - name: "execution-node2"
+      container_name: "fastevm-execution2"
+      ip_address: "172.20.0.21"
+      http_port: 8547
+      ws_port: 8548
+      engine_port: 8552
+      instance: 2
+      depends_on: ["execution-node1"]
+      
+    - name: "execution-node3"
+      container_name: "fastevm-execution3"
+      ip_address: "172.20.0.22"
+      http_port: 8549
+      ws_port: 8550
+      engine_port: 8553
+      instance: 3
+      depends_on: ["execution-node1"]
+      
+    - name: "execution-node4"
+      container_name: "fastevm-execution4"
+      ip_address: "172.20.0.23"
+      http_port: 8555
+      ws_port: 8556
+      engine_port: 8554
+      instance: 4
+      depends_on: ["execution-node1"]
+
+# Network configuration
+network:
+  name: "fastevm-network"
+  driver: "bridge"
+  subnet: "172.20.0.0/16"
+  gateway: "172.20.0.1"
+
+# Discovery configuration
+discovery:
+  # FastEVM doesn't support standard Ethereum discovery
+  # This section documents what's NOT supported
+  not_supported:
+    - "--networkid"
+    - "--discovery.addr"
+    - "--discovery.port"
+    - "--discovery.v5"
+    - "--maxpeers"
+    - "--nodiscover"
+    - "--bootnodes"
+  
+  # Alternative approaches for FastEVM
+  alternatives:
+    - "Manual peer addition via admin APIs (if available)"
+    - "Consensus layer coordination"
+    - "Custom peer discovery protocol"
+    - "No P2P networking (independent nodes)"
+
+# Startup sequence
+startup_sequence:
+  1. "genesis-init: Setup genesis files and JWT secrets"
+  2. "execution-node1: Start reference/boot node first"
+  3. "execution-node2: Start after execution-node1 is healthy"
+  4. "execution-node3: Start after execution-node1 is healthy"
+  5. "execution-node4: Start after execution-node1 is healthy"
+  6. "consensus nodes: Start after all execution nodes are healthy"
+
+# Health check endpoints
+health_checks:
+  http: "/"
+  json_rpc: "web3_clientVersion"
+  admin: "rpc_modules"
+  peer_count: "net_peerCount"
+  chain_id: "net_version"
+  block_number: "eth_blockNumber"
+
+# Troubleshooting
+troubleshooting:
+  common_issues:
+    - "Parameter not supported: Remove unsupported flags"
+    - "Admin APIs not available: Check RPC modules"
+    - "Peer count always 0: FastEVM may not support P2P"
+    - "Nodes not syncing: Check if they're supposed to sync"
+  
+  debug_commands:
+    - "Check container status: docker-compose ps"
+    - "View logs: docker-compose logs -f execution-node1"
+    - "Test RPC: curl -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"web3_clientVersion\",\"params\":[],\"id\":1}' http://localhost:8545"
+    - "Check admin APIs: curl -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"rpc_modules\",\"params\":[],\"id\":1}' http://localhost:8545"
+  
+  scripts:
+    - "Basic test: ./scripts/test-fastevm.sh"
+    - "Bootnode setup: ./scripts/setup-bootnode.sh"
+    - "Debug nodes: ./scripts/debug-nodes.sh"
+
+# Notes
+notes:
+  - "FastEVM is a custom implementation, not a standard Ethereum client"
+  - "Peer discovery may work differently than expected"
+  - "The consensus layer might handle node coordination"
+  - "Check FastEVM documentation for specific peer discovery mechanisms"

@@ -290,7 +290,7 @@ docker run fastevm-consensus --execution-url http://host.docker.internal:8551
 ### Multi-Node Cluster
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 This starts:
@@ -300,8 +300,192 @@ This starts:
 - Prometheus monitoring (port 9090)
 - Loki log aggregation (port 3100)
 
-## 📈 Performance
+## 🌐 Network Setup
 
+The FastEVM network consists of a unified setup with 4 execution nodes and 4 consensus nodes, providing a robust testing and development environment.
+
+### Network Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐
+│   Genesis Init  │    │ Consensus Init  │
+│   Container     │    │   Container     │
+└─────────┬───────┘    └─────────┬───────┘
+          │                       │
+          ▼                       ▼
+┌─────────────────────────────────────────────────┐
+│              EXECUTION NODES                   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ │
+│  │ Execution 1 │ │ Execution 2 │ │ Execution 3 │ │
+│  │ Port: 8551  │ │ Port: 8552  │ │ Port: 8553  │ │
+│  └─────────────┘ └─────────────┘ └─────────────┘ │
+│  ┌─────────────┐                                 │
+│  │ Execution 4 │                                 │
+│  │ Port: 8554  │                                 │
+│  └─────────────┘                                 │
+└─────────────────────────────────────────────────┘
+          │                       │
+          ▼                       ▼
+┌─────────────────────────────────────────────────┐
+│              CONSENSUS NODES                   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ │
+│  │ Consensus 1 │ │ Consensus 2 │ │ Consensus 3 │ │
+│  │ IP: 172.20.0.10 │ │ IP: 172.20.0.11 │ │ IP: 172.20.0.12 │ │
+│  └─────────────┘ └─────────────┘ └─────────────┘ │
+│  ┌─────────────┐                                 │
+│  │ Consensus 4 │                                 │
+│  │ IP: 172.20.0.13 │                                 │
+│  └─────────────┘                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Port Mapping
+
+#### Execution Nodes
+| Node | Engine API | HTTP RPC | WebSocket RPC |
+|------|------------|----------|---------------|
+| 1    | 8551       | 8545     | 8546          |
+| 2    | 8552       | 8547     | 8548          |
+| 3    | 8553       | 8549     | 8550          |
+| 4    | 8554       | 8555     | 8556          |
+
+#### Consensus Nodes
+| Node | IP Address    | Internal Port |
+|------|---------------|---------------|
+| 1    | 172.20.0.10  | 26657         |
+| 2    | 172.20.0.11  | 26657         |
+| 3    | 172.20.0.12  | 26657         |
+| 4    | 172.20.0.13  | 26657         |
+
+#### Monitoring
+- **Dashboard**: http://localhost:8080
+
+### Network Management
+
+#### Quick Start Commands
+
+```bash
+# Start the entire network
+./scripts/run.sh start
+
+# Check network status
+./scripts/run.sh status
+
+# View all logs
+./scripts/run.sh logs
+
+# Stop the network
+./scripts/run.sh stop
+```
+
+#### Alternative Docker Compose Commands
+
+```bash
+# Start network
+docker compose up -d
+
+# Check status
+docker compose ps
+
+# View logs
+docker compose logs -f [service-name]
+
+# Stop network
+docker compose down
+```
+
+### Startup Sequence
+
+The network follows this startup sequence:
+
+1. **Init Containers**:
+   - `genesis-init`: Sets up genesis files and JWT secrets for all execution nodes
+   - `consensus-init`: Generates committee configuration for consensus nodes
+
+2. **Execution Nodes**: Start in parallel after genesis setup
+3. **Consensus Nodes**: Start after execution nodes are healthy
+4. **Monitoring**: Starts after all nodes are running
+
+### Configuration Files
+
+- **Genesis Template**: `execution-client/shared/genesis.template.json`
+- **Init Script**: `execution-client/shared/init.sh`
+- **Node Configs**: `consensus-client/examples/node*.yml`
+- **Committee Config**: `consensus-client/examples/committees.yml`
+
+### Data Persistence
+
+Each node has its own persistent volume:
+- `execution-data-1` through `execution-data-4`: Execution node data
+- `consensus-data-1` through `consensus-data-4`: Consensus node data
+
+### Network Configuration
+
+- **Subnet**: 172.20.0.0/16
+- **Driver**: Bridge
+- **External**: false (managed by docker compose)
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Port Conflicts**: Ensure ports 8545-8556 are available
+2. **Init Container Failures**: Check logs with `docker compose logs genesis-init`
+3. **Node Startup Issues**: Verify dependencies and health checks
+
+#### Debug Commands
+
+```bash
+# Check container status
+docker compose ps
+
+# View service logs
+docker compose logs -f [service-name]
+
+# Check network connectivity
+docker network inspect fastevm_fastevm-network
+
+# Access container shell
+docker exec -it [container-name] /bin/sh
+```
+
+#### Reset Network
+
+```bash
+# Complete cleanup and restart
+./scripts/run.sh cleanup
+./scripts/run.sh start
+```
+
+### Development
+
+#### Adding New Nodes
+
+To add more nodes:
+
+1. Copy existing node configuration
+2. Update ports and IP addresses
+3. Add new volumes
+4. Update monitoring dependencies
+
+#### Customizing Configuration
+
+- Modify genesis template in `execution-client/shared/genesis.template.json`
+- Adjust consensus parameters in `consensus-client/examples/`
+- Update init scripts as needed
+
+### Security Notes
+
+- JWT secrets are generated automatically for each execution node
+- Each node has isolated data volumes
+- Network is isolated to the docker bridge network
+- No external access by default
+
+## 📈 Performance
+### Testing
+#### Ethereum tests [https://github.com/ethereum/tests]
+#### Test tool [https://github.com/paradigmxyz/reth/tree/main/testing]
+   
 ### Benchmarks
 
 Run `make benchmark` to see performance metrics:

@@ -30,26 +30,77 @@ clean:
 	docker system prune -f
 
 # Docker commands
+.PHONY: docker-build-execution docker-build-consensus docker-build
+docker-build-execution:
+	@echo "Building execution client Docker image..."
+	docker build -t scalarorg/fastevm-execution -f Dockerfile.el .
+
+docker-build-consensus:
+	@echo "Building consensus client Docker image..."
+	docker build -t fastevm-consensus -f Dockerfile.cl .
+
+.PHONY: docker-builder docker-build-execution docker-build-consensus docker-build
+docker-builder:
+	@echo "Building builder Docker image..."
+	docker build -t scalarorg/fastevm-builder -f Dockerfile.builder .
+
+docker-build-execution:
+	@echo "Building execution client Docker image..."
+	docker build -t scalarorg/fastevm-execution -f Dockerfile.el .
+
+docker-build-consensus:
+	@echo "Building consensus client Docker image..."
+	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl .
+
+docker-build-execution-dev:
+	@echo "Building execution client Docker image..."
+	docker build -t scalarorg/fastevm-execution -f Dockerfile.el.dev .
+
+docker-build-consensus-dev:
+	@echo "Building consensus client Docker image..."
+	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl.dev .
+
 docker-build:
 	@echo "Building Docker images..."
 	docker-compose build
 
+.PHONY: docker-network docker-up-execution docker-up-consensus docker-up
+docker-network:
+	@echo "Creating network..."
+	./scripts/network.sh
+
+docker-up-execution: docker-network
+	@echo "Starting execution client in development mode..."
+	docker compose -f execution-client/docker-compose.yml up -d
+
+docker-up-consensus: docker-network
+	@echo "Starting consensus client in development mode..."
+	docker compose -f consensus-client/docker-compose.yml up -d
+
 docker-up:
 	@echo "Starting all services..."
-	docker-compose up -d
+	docker compose up -d
 
+.PHONY: docker-down-consensus docker-down-execution docker-down
+docker-down-consensus:
+	@echo "Stopping consensus client..."
+	docker compose -f consensus-client/docker-compose.yml down
+
+docker-down-execution:
+	@echo "Stopping execution client..."
+	docker compose -f execution-client/docker-compose.yml down
+
+.PHONY: docker-down
 docker-down:
 	@echo "Stopping all services..."
-	docker-compose down
-
-docker-logs:
-	@echo "Showing logs from all services..."
-	docker-compose logs -f
+	docker compose down
 
 # Development commands
 dev-execution:
-    @echo "Starting execution client in development mode..."
-    cd fastevm/execution-client && cargo run -- --port 8551 --http.addr 0.0.0.0 --log-level debug
+	@echo "Starting execution client in development mode..."
+	cd fastevm/execution-client && cargo run -- --port 8551 --http.addr 0.0.0.0 --log-level debug
+	@echo "Starting execution client in development mode..."
+	cd fastevm/execution-client && cargo run -- --port 8551 --http.addr 0.0.0.0 --log-level debug
 
 dev-consensus:
 	@echo "Starting consensus client in development mode..."

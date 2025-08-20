@@ -1,0 +1,60 @@
+[package]
+name = "fastevm-consensus"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fastevm-consensus"
+path = "src/main.rs"
+
+
+[dependencies]
+#Mysticeti
+consensus-core = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-core" }
+consensus-config = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-config" }
+mysten-metrics = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "mysten-metrics"}
+sui-protocol-config = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "sui-protocol-config"}
+alloy-primitives = { version = "1.3.0", default-features = false, features = ["map-foldhash"] }
+alloy-rpc-types-engine = { version = "1.0.23", default-features = false }
+# reth-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-engine-primitives" }
+reth_primitives_traits = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives-traits" }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-primitives" }
+reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-engine-primitives" }
+reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api", features=["client"] }
+reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-layer" }
+
+# Lighthouse
+# beacon_chain = { git= "https://github.com/sigp/lighthouse.git", package = "beacon_chain" }
+# fork_choice = { git= "https://github.com/sigp/lighthouse.git", package = "fork_choice" }
+
+anyhow = { workspace = true }
+arbitrary = { version = "1", features = ["derive"] }
+
+clap = { version = "4.0", features = ["derive"] }
+derivative = "2"
+derive-getters = { workspace = true }
+ethereum_ssz = "0.8.2"
+ethereum_ssz_derive = "0.8.2"
+
+jsonrpsee = { workspace = true }
+# pin-project.workspace = true
+prometheus = "0.13.3"
+
+rand.workspace = true
+serde = { workspace = true }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+thiserror = { workspace = true }
+tiny-keccak = "2.0.2"
+rlp = "0.6"
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tree_hash = "0.10"
+tree_hash_derive = "0.10"
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile = "3.8"
