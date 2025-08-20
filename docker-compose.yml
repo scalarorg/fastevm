@@ -41,6 +41,7 @@ services:
       - consensus-data2:/consensus2
       - consensus-data3:/consensus3
       - consensus-data4:/consensus4
+      - ./consensus-client/examples/parameters.yml:/parameters.yml
       - ./scripts:/scripts
     entrypoint: ["/bin/sh", "/scripts/init.sh", "--consensus"]
     networks:
@@ -52,7 +53,7 @@ services:
 
   # ===== EXECUTION NODES =====
   
-  # Execution Node 1
+  # Execution Node 1 (Reference/Boot Node)
   execution-node1:
     build:
       context: .
@@ -64,24 +65,31 @@ services:
       - "8551:8551"   # Engine API
       - "8545:8545"   # HTTP RPC
       - "8546:8546"   # WS RPC
+      - "30306:30306/tcp"
+      - "30306:30306/udp"
     volumes:
       - execution-data1:/data:rw
       - ./scripts:/scripts:ro
+    # entrypoint: ["sleep", "infinity"]
     command: [
       "node",
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin,debug",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin,debug",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--port", "30306",
+      "--discovery.port", "30306"
     ]
     networks:
       fastevm-network:
@@ -117,16 +125,19 @@ services:
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--bootnodes", "enode://${BOOTNODE}@execution-node1:30306"
     ]
     networks:
       fastevm-network:
@@ -140,6 +151,8 @@ services:
     depends_on:
       genesis-init:
         condition: service_completed_successfully
+      execution-node1:
+        condition: service_healthy
     restart: unless-stopped
 
   # Execution Node 3
@@ -162,16 +175,19 @@ services:
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--bootnodes", "enode://${BOOTNODE}@execution-node1:30306"
     ]
     networks:
       fastevm-network:
@@ -185,6 +201,8 @@ services:
     depends_on:
       genesis-init:
         condition: service_completed_successfully
+      execution-node1:
+        condition: service_healthy
     restart: unless-stopped
 
   # Execution Node 4
@@ -207,16 +225,19 @@ services:
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--bootnodes", "enode://${BOOTNODE}@execution-node1:30306"
     ]
     networks:
       fastevm-network:
@@ -230,6 +251,8 @@ services:
     depends_on:
       genesis-init:
         condition: service_completed_successfully
+      execution-node1:
+        condition: service_healthy
     restart: unless-stopped
 
   # ===== CONSENSUS NODES =====
@@ -353,7 +376,7 @@ services:
     image: nginx:alpine
     container_name: fastevm-monitoring
     ports:
-      - "8080:80"
+      - "8088:80"
     volumes:
       - ./monitoring/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./monitoring/index.html:/usr/share/nginx/html/index.html:ro

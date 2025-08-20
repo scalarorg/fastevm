@@ -10,6 +10,7 @@ use std::fs;
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
+use consensus_config::Parameters;
 use consensus_core::CommitConsumer;
 use mysten_metrics::RegistryService;
 use prometheus::Registry;
@@ -26,6 +27,7 @@ use crate::committee::{extract_peer_addresses, generate_committees, load_committ
 #[derive(Default,Serialize, Deserialize)]
 struct NodeConfig {
     committee_path: String,
+    parameters_path: String, // Path to consensus parameters YAML file
     execution_url: String,
     jwt_secret: String,
     genesis_time: u64,
@@ -38,6 +40,7 @@ struct NodeConfig {
     peer_addresses: Vec<String>,
     node_index: u32,
     log_level: String,
+    
 }
 
 #[derive(Parser, Debug)]
@@ -95,7 +98,8 @@ async fn start_consensus_client(config_path: &PathBuf) -> Result<()> {
     // Load the full configuration
     let config_content = fs::read_to_string(config_path)?;
     let mut node_config: NodeConfig = serde_yaml::from_str(&config_content)?;
-    
+    let content = std::fs::read_to_string(&node_config.parameters_path)?;
+    let parameters: Parameters = serde_yaml::from_str(&content)?;
     // Load committee configuration from file
     let committee_path = PathBuf::from(&node_config.committee_path);
     let (committee, keypairs) = load_committees(&committee_path)?;
@@ -137,6 +141,7 @@ async fn start_consensus_client(config_path: &PathBuf) -> Result<()> {
     validator
         .start(
             committee.clone(),
+            parameters,
             keypairs,
             registry_service,
             commit_consumer,
@@ -277,6 +282,7 @@ validity_threshold: 1
     fn test_node_config_serialization() {
         let config = NodeConfig {
             committee_path: "committee.yml".to_string(),
+            parameters_path: "parameters.yml".to_string(),
             execution_url: "http://localhost:8080".to_string(),
             jwt_secret: "secret123".to_string(),
             genesis_block_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
@@ -289,6 +295,7 @@ validity_threshold: 1
             peer_addresses: vec!["peer1".to_string(), "peer2".to_string()],
             node_index: 42,
             log_level: "debug".to_string(),
+           
         };
         
         // Test serialization
@@ -308,6 +315,7 @@ validity_threshold: 1
         assert_eq!(config.peer_addresses, deserialized.peer_addresses);
         assert_eq!(config.node_index, deserialized.node_index);
         assert_eq!(config.log_level, deserialized.log_level);
+        assert_eq!(config.parameters_path, deserialized.parameters_path);
     }
 
     #[test]
@@ -515,6 +523,7 @@ log_level: info
     fn test_execution_client_creation_with_invalid_fee_recipient() {
         let config = NodeConfig {
             committee_path: "committee.yml".to_string(),
+            parameters_path: "parameters.yml".to_string(),
             execution_url: "http://127.0.0.1:8551".to_string(),
             jwt_secret: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
             genesis_block_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
@@ -526,7 +535,7 @@ log_level: info
             working_directory: "/tmp/test".to_string(),
             peer_addresses: vec![],
             node_index: 0,
-            log_level: "info".to_string(),
+            log_level: "info".to_string(),           
         };
         let committee = Committee::new(1, vec![]);
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();

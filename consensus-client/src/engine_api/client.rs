@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use crate::beacon_chain::{BeaconState};
 use crate::NodeConfig;
-use alloy_primitives::B256;
 use alloy_rpc_types_engine::{
-    ExecutionPayloadEnvelopeV3, ExecutionPayloadV3, ForkchoiceState, PayloadAttributes, PayloadId
+    CancunPayloadFields, ExecutionData, ExecutionPayload, ExecutionPayloadEnvelopeV3, ExecutionPayloadV3, ForkchoiceState, PayloadAttributes, PayloadId, PayloadStatus
 };
 use anyhow::{anyhow, Result};
 use consensus_config::Committee;
@@ -172,11 +171,13 @@ impl ExecutionClient {
                     match maybe_msg {
                         Some(subdag) => {
                             info!("Processing subdag: {:?}", subdag);
-                            let payload = self.process_subdag(subdag).await;
-                            info!("Payload: {:?}", payload);
-                            match EngineApiClient::<EthEngineTypes>::new_payload_v3(&http_client, payload, vec![], B256::default()).await {
-                                Ok(resp) => info!("newPayload response: {:?}", resp),
-                                Err(e) => error!("newPayload failed: {:?}", e),
+                            match self.process_subdag(subdag).await {
+                                Ok(payload_status) => {
+                                    info!("PayloadStatus: {:?}", payload_status);
+                                }
+                                Err(e) => {
+                                    error!("Error processing subdag: {:?}", e);
+                                }                                               
                             }
                         }
                         None => {
@@ -187,14 +188,29 @@ impl ExecutionClient {
                 }
             }
         }
-
         info!("Engine API client stopped");
         Ok(())
     }
-    async fn process_subdag(&self, committed_subdag: CommittedSubDag) -> ExecutionPayloadV3 {
+    async fn process_subdag(&self, committed_subdag: CommittedSubDag) -> Result<PayloadStatus> {
         let mut consensus_state = self.consensus_state.write().await;
-        let payload = consensus_state.process_subdag(committed_subdag);
-        payload
+        let ExecutionData {
+            payload,
+            sidecar,
+        } = consensus_state.process_subdag(committed_subdag)?;
+        info!("ExecutionPayload: {:?}, Sidecar: {:?}", payload, sidecar);
+        if let (ExecutionPayload::V3(payload),
+            Some(CancunPayloadFields {
+                versioned_hashes,
+                parent_beacon_block_root,
+            })) = (payload, sidecar.into_cancun()) {
+            let http_client = self.http_client();
+            return EngineApiClient::<EthEngineTypes>::new_payload_v3(&http_client, 
+                payload, 
+                versioned_hashes,
+                parent_beacon_block_root)
+                .await.map_err(|e| anyhow!("newPayload failed: {:?}", e));
+        }
+        Err(anyhow!("Invalid payload"))        
     }
 }
 
@@ -203,11 +219,10 @@ mod tests {
 
     use std::str::FromStr;
 
-    use crate::beacon_chain::{beacon_block::ChainSpec, GENESIS_TIME};
+    use crate::{beacon_chain::{GENESIS_TIME}, NodeConfig};
 
     use super::*;
-    use alloy_primitives::{Address, Bloom, Bytes, B256, U256};
-    use alloy_rpc_types_engine::ExecutionPayloadV1;
+    use alloy_primitives::{Address, B256};
     use tokio::sync::mpsc;
     use consensus_core::{BlockRef, CommitConsumer, CommitDigest, CommitRef, CommittedSubDag};
     fn create_test_committee() -> Committee {
@@ -229,6 +244,7 @@ mod tests {
             node_index: 0,
             log_level: "info".to_string(),
             committee_path: "committee.yml".to_string(),
+            parameters_path: "parameters.yml".to_string(),
         }
     }
 

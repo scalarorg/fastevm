@@ -17,6 +17,8 @@ sui-protocol-config = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a
 alloy-primitives = { version = "1.3.0", default-features = false, features = ["map-foldhash"] }
 alloy-rpc-types-engine = { version = "1.0.23", default-features = false }
 # reth-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-engine-primitives" }
+reth_primitives_traits = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives-traits" }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-primitives" }
 reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-engine-primitives" }
 reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api", features=["client"] }
 reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-layer" }

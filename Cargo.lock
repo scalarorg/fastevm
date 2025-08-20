@@ -3813,6 +3813,8 @@ dependencies = [
  "prometheus",
  "rand 0.8.5",
  "reth-ethereum-engine-primitives",
+ "reth-ethereum-primitives",
+ "reth-primitives-traits",
  "reth-rpc-api",
  "reth-rpc-layer",
  "rlp 0.6.1",

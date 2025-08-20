@@ -482,7 +482,10 @@ To add more nodes:
 - No external access by default
 
 ## 📈 Performance
-
+### Testing
+#### Ethereum tests [https://github.com/ethereum/tests]
+#### Test tool [https://github.com/paradigmxyz/reth/tree/main/testing]
+   
 ### Benchmarks
 
 Run `make benchmark` to see performance metrics:

@@ -101,7 +101,12 @@ wait_for_init_completion() {
     echo "   ❌ $service did not complete after $max_attempts attempts"
     return 1
 }
-
+extract_bootnode() {
+    docker logs fastevm-execution1 \
+  | grep "P2P networking initialized" \
+  | awk -F'enode://' '{print $2}' \
+  | awk -F'@' '{print $1}'
+}
 # Function to start the network
 start_network() {
     echo "📦 Starting init containers..."
@@ -123,7 +128,7 @@ start_network() {
     fi
     
     echo "🔄 Starting execution nodes..."
-    docker compose up -d execution-node1 execution-node2 execution-node3 execution-node4
+    docker compose up -d execution-node1
     
     echo "⏳ Waiting for execution nodes to be healthy..."
     echo "   Waiting for execution-node1..."
@@ -132,7 +137,11 @@ start_network() {
         docker compose logs execution-node1 --tail=50
         exit 1
     fi
-    
+    echo " Extract node1 bootnode then start other execution nodes"
+    export BOOTNODE=$(extract_bootnode)
+    echo " Bootnode: $BOOTNODE"
+
+    docker compose up -d execution-node2 execution-node3 execution-node4
     echo "   Waiting for execution-node2..."
     if ! wait_for_healthy execution-node2; then
         echo "❌ Execution node 2 failed to become healthy. Check logs:"
@@ -153,7 +162,7 @@ start_network() {
         docker compose logs execution-node4 --tail=50
         exit 1
     fi
-    
+
     echo "🔄 Starting consensus nodes..."
     docker compose up -d consensus-node1 consensus-node2 consensus-node3 consensus-node4
     
@@ -161,6 +170,7 @@ start_network() {
     sleep 10
     
     echo "📊 Starting monitoring service..."
+ 
     docker compose up -d monitoring
     
     echo "✅ Network startup complete!"

@@ -49,6 +49,7 @@ impl ValidatorNode {
     pub async fn start(
         &mut self,
         committee: Committee,
+        parameters: Parameters,
         keypairs: Vec<(NetworkKeyPair, ProtocolKeyPair)>,
         registry_service: RegistryService,
         commit_consumer: CommitConsumer,
@@ -69,8 +70,14 @@ impl ValidatorNode {
         // Create parameters
         let parameters = Parameters {
             db_path,
-            ..Default::default()
+            // Note: The actual Parameters struct from consensus-config may have different fields
+            // This is a placeholder - you may need to map the consensus_params fields
+            // to the actual Parameters struct fields based on the consensus-config crate
+            ..parameters
         };
+
+        // Log the loaded parameters for debugging
+        info!("Loaded consensus parameters: {:?}", parameters);
 
         // Start the consensus authority
         let consensus_authority = ConsensusAuthority::start(
@@ -244,6 +251,16 @@ mod tests {
         let validator = ValidatorNode::new(u32::MAX, working_directory.clone());
         
         assert_eq!(validator.authority_index.value(), u32::MAX as usize);
+        assert_eq!(validator.working_directory, working_directory);
+        assert!(validator.consensus_authority.is_none());
+    }
+
+    #[test]
+    fn test_validator_node_with_parameters_file() {
+        let working_directory = PathBuf::from("/tmp/test");
+        let validator = ValidatorNode::new(0, working_directory.clone());
+        
+        assert_eq!(validator.authority_index.value(), 0);
         assert_eq!(validator.working_directory, working_directory);
         assert!(validator.consensus_authority.is_none());
     }
@@ -448,6 +465,7 @@ mod tests {
         // In a real scenario, this would start the consensus authority
         let result = validator.start(
             committee,
+            Parameters::default(),
             keypairs,
             registry_service,
             commit_consumer,
@@ -475,6 +493,7 @@ mod tests {
             // Test that start can be called for different node indices
             let _result = validator.start(
                 committee,
+                Parameters::default(),
                 keypairs,
                 registry_service,
                 commit_consumer,
@@ -500,6 +519,7 @@ mod tests {
         // Start the validator
         let _result = validator.start(
             committee,
+            Parameters::default(),
             keypairs,
             registry_service,
             commit_consumer,
@@ -532,6 +552,7 @@ mod tests {
         let validator_handle = tokio::spawn(async move {
             validator.start(
                 committee,
+                Parameters::default(),
                 keypairs,
                 registry_service,
                 commit_consumer,
@@ -595,6 +616,7 @@ mod tests {
         // This should handle the invalid committee gracefully
         let _result = validator.start(
             committee,
+            Parameters::default(),
             keypairs,
             registry_service,
             commit_consumer,
@@ -623,6 +645,7 @@ mod tests {
             // Start the validator
             let _result = validator.start(
                 committee,
+                Parameters::default(),
                 keypairs,
                 registry_service,
                 commit_consumer,

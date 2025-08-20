@@ -201,6 +201,8 @@ consensus() {
   num_nodes=${1:-4}
   for i in $(seq 1 $num_nodes); do
     echo "Generating committee config for node $i"
+    # Copy parameters.yml to the consensus client directory
+    cp /parameters.yml /consensus${i}/parameters.yml
     fastevm-consensus generate-committee \
       --output "/consensus${i}/committees.yml" \
       --authorities "4" \

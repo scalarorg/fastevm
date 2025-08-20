@@ -1,9 +1,14 @@
-use alloy_primitives::Address;
+use alloy_primitives::{Address, Bloom, Bytes};
+use alloy_rpc_types_engine::{CancunPayloadFields, ExecutionData, ExecutionPayload, ExecutionPayloadSidecar, ExecutionPayloadV3, PayloadError};
 use derivative::Derivative;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 use tree_hash::Hash256;
+use consensus_core::{CommittedSubDag, BlockAPI};
+use reth_ethereum_primitives::TransactionSigned;
+use reth_primitives_traits::{Block as _, SealedBlock, SignedTransaction};
 
 /// Beacon block header containing essential block information
 #[derive(
@@ -11,8 +16,8 @@ use tree_hash::Hash256;
 )]
 #[derivative(PartialEq, Eq, Hash)]
 pub struct BeaconBlockHeader {
-    /// Slot number when this block was proposed
-    pub slot: u64,
+    /// block number when this block was proposed
+    pub block_number: u64,
     /// Index of the proposer
     pub proposer_index: u32,
     /// Hash of the parent block
@@ -26,14 +31,14 @@ pub struct BeaconBlockHeader {
 impl BeaconBlockHeader {
     /// Create a new block header
     pub fn new(
-        slot: u64,
+        block_number: u64,
         proposer_index: u32,
         parent_root: Hash256,
         state_root: Hash256,
         body_root: Hash256,
     ) -> Self {
         Self {
-            slot,
+            block_number,
             proposer_index,
             parent_root,
             state_root,
@@ -47,504 +52,242 @@ impl BeaconBlockHeader {
     }
 }
 
-/// Beacon block body containing all block operations
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct BeaconBlockBody {
-    /// Randomness beacon for this block
-    pub randao_reveal: Hash256,
-    /// ETH1 data for this block
-    pub eth1_data: Eth1Data,
-    /// Graffiti data
-    pub graffiti: Hash256,
-    // Proposer slashings
-    pub proposer_slashings: Vec<ProposerSlashing>,
-    /// Attester slashings
-    pub attester_slashings: Vec<AttesterSlashing>,
-    /// Attestations included in this block
-    pub attestations: Vec<Attestation>,
-    /// Deposits included in this block
-    pub deposits: Vec<Deposit>,
-    /// Voluntary exits
-    pub voluntary_exits: Vec<SignedVoluntaryExit>,
-    /// Sync committee aggregate (Altair+)
-    pub sync_aggregate: Option<SyncAggregate>,
-    /// Execution payload (Merge+)
-    pub execution_payload: Option<ExecutionPayload>,
+#[derive(Debug)]
+pub struct SubDagBlock {
+    fee_recipient: Address,
+    subdag: CommittedSubDag,
 }
 
-impl BeaconBlockBody {
-    /// Create a new empty block body
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Create a new block body with basic fields
-    pub fn with_basic_fields(
-        randao_reveal: Hash256,
-        eth1_data: Eth1Data,
-        graffiti: Hash256,
+impl SubDagBlock {
+    pub fn new(
+        fee_recipient: Address,
+        subdag: CommittedSubDag,
     ) -> Self {
-        Self {
-            randao_reveal,
-            eth1_data,
-            graffiti,
-            ..Default::default()
-        }
+        Self { fee_recipient, subdag }
     }
     
-    /// Get a simplified hash of the body
-    pub fn hash(&self) -> Hash256 {
-        // Simplified hash - in real implementation this would be a proper hash
-        let mut result = [0u8; 32];
-        for (i, byte) in result.iter_mut().enumerate() {
-            *byte = (self.randao_reveal.as_slice()[0] as u8).wrapping_add(i as u8);
+    pub fn create_execution_data_v3(&self, parent_beacon_block_header: &mut BeaconBlockHeader,) -> Result<ExecutionData, PayloadError> {
+        // Convert timestamp from milliseconds to seconds (Ethereum standard)
+        let timestamp_secs = (self.subdag.timestamp_ms / 1000) as u64;
+        
+        // For now, create an empty execution payload since transaction extraction is complex
+        // In a production environment, this would extract actual transactions from the consensus blocks
+        let transactions: Vec<Bytes> = self.flatten_transactions();
+        info!("[SubDagBlock::get_execution_payload_v3] transactions: {:?}", transactions);
+        let total_gas_used = 0u64;
+        
+        // Calculate state root from transactions (simplified - in production this would be post-execution state)
+        let state_root = self.calculate_state_root(transactions.as_slice()  );
+        
+        // Calculate receipts root (simplified - in production this would be from execution receipts)
+        let receipts_root = self.calculate_receipts_root(transactions.as_slice());
+        
+        // Calculate logs bloom (simplified - in production this would be from execution logs)
+        let logs_bloom = self.calculate_logs_bloom(transactions.as_slice());
+        
+        // Calculate prev_randao (mixHash) from subdag randomness
+        let prev_randao = self.calculate_prev_randao();
+        
+        // Calculate fee recipient from leader authority
+        let fee_recipient = self.fee_recipient.clone();
+        
+        // Calculate block number from commit reference
+        let block_number = parent_beacon_block_header.block_number + 1;
+        
+        // Set gas limit to standard Ethereum block gas limit
+        let gas_limit = 30_000_000u64;
+        
+        // Calculate base fee per gas (EIP-1559)
+        let base_fee_per_gas = self.calculate_base_fee_per_gas();
+        
+        // Calculate blob gas fields for EIP-4844 (Cancun upgrade)
+        let (blob_gas_used, excess_blob_gas) = self.calculate_blob_gas_fields();
+        
+        // Create extra data with subdag information
+        let extra_data = self.create_extra_data();
+        
+        let execution_payload_v1 = alloy_rpc_types_engine::ExecutionPayloadV1 {
+            parent_hash: parent_beacon_block_header.parent_root.clone(),
+                    fee_recipient,
+                    state_root,
+                    receipts_root,
+                    logs_bloom,
+                    prev_randao,
+                    block_number,
+                    gas_limit,
+                    gas_used: total_gas_used,
+                    timestamp: timestamp_secs,
+                    extra_data,
+                    base_fee_per_gas,
+                    block_hash: Hash256::ZERO,
+                    transactions,
+        };
+        let mut execution_payload_v3 = ExecutionPayloadV3 {
+            payload_inner: alloy_rpc_types_engine::ExecutionPayloadV2 {
+                payload_inner: execution_payload_v1,
+                withdrawals: Vec::new(), // Post-Shanghai blocks require withdrawals (empty for no withdrawals)
+            },
+            blob_gas_used,
+            excess_blob_gas,
+        };
+        let execution_payload: ExecutionPayload = ExecutionPayload::V3(execution_payload_v3.clone());
+        let sidecar = ExecutionPayloadSidecar::v3(CancunPayloadFields {
+            versioned_hashes: Vec::new(),
+            parent_beacon_block_root: parent_beacon_block_header.canonical_root(),
+        });
+        // First parse the block
+        let sealed_block = execution_payload.try_into_block_with_sidecar::<TransactionSigned>(&sidecar)?.seal_slow();
+        let block_hash = sealed_block.hash();
+        execution_payload_v3.payload_inner.payload_inner.block_hash = block_hash;
+        info!("block_hash: {:?}", block_hash);
+        //Update header
+        parent_beacon_block_header.block_number += 1;
+        parent_beacon_block_header.parent_root = block_hash;
+        Ok(ExecutionData {
+            payload: execution_payload_v3.into(),
+            sidecar,
+        })
+    }
+    
+    /// Calculate state root from transactions
+    fn calculate_state_root(&self, transactions: &[Bytes]) -> Hash256 {
+        if transactions.is_empty() {
+            return Hash256::ZERO;
         }
-        Hash256::from(result)
-    }
-}
-
-/// Main beacon block structure
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct BeaconBlock {
-    /// Block header
-    pub header: BeaconBlockHeader,
-    /// Block body
-    pub body: BeaconBlockBody,
-}
-
-impl BeaconBlock {
-    /// Create a new beacon block
-    pub fn new(
-        slot: u64,
-        proposer_index: u32,
-        parent_root: Hash256,
-        state_root: Hash256,
-        body: BeaconBlockBody,
-    ) -> Self {
-        let header = BeaconBlockHeader::new(
-            slot,
-            proposer_index,
-            parent_root,
-            state_root,
-            body.hash(),
-        );
-
-        Self {
-            header,
-            body,
+        
+        // Create a simple merkle-like hash from transactions
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        for tx in transactions {
+            tx.hash(&mut hasher);
         }
+        
+        let hash_value = hasher.finish();
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&hash_value.to_le_bytes());
+        
+        Hash256::from(bytes)
     }
-
-    /// Create an empty block for a given slot
-    pub fn empty(_spec: &ChainSpec) -> Self {
-        Self::new(
-            0,
-            0,
-            Hash256::ZERO,
-            Hash256::ZERO,
-            BeaconBlockBody::new(),
-        )
-    }
-
-    /// Get the slot number
-    pub fn slot(&self) -> u64 {
-        self.header.slot
-    }
-
-    /// Get the proposer index
-    pub fn proposer_index(&self) -> u32 {
-        self.header.proposer_index
-    }
-
-    /// Get the parent root
-    pub fn parent_root(&self) -> Hash256 {
-        self.header.parent_root
-    }
-
-    /// Get the state root
-    pub fn state_root(&self) -> Hash256 {
-        self.header.state_root
-    }
-
-    /// Get the body root
-    pub fn body_root(&self) -> Hash256 {
-        self.header.body_root
-    }
-
-    /// Get a reference to the block body
-    pub fn body(&self) -> &BeaconBlockBody {
-        &self.body
-    }
-
-    /// Get a mutable reference to the block body
-    pub fn body_mut(&mut self) -> &mut BeaconBlockBody {
-        &mut self.body
-    }
-
-    /// Create a temporary block header from this block
-    pub fn temporary_block_header(&self) -> BeaconBlockHeader {
-        BeaconBlockHeader {
-            slot: self.slot(),
-            proposer_index: self.proposer_index(),
-            parent_root: self.parent_root(),
-            state_root: self.state_root(),
-            body_root: self.body().hash(),
+    
+    /// Calculate receipts root from transactions
+    fn calculate_receipts_root(&self, transactions: &[Bytes]) -> Hash256 {
+        if transactions.is_empty() {
+            return Hash256::ZERO;
         }
+        
+        // In a real implementation, this would be calculated from execution receipts
+        // For now, create a deterministic hash
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        transactions.len().hash(&mut hasher);
+        
+        let hash_value = hasher.finish();
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&hash_value.to_le_bytes());
+        
+        Hash256::from(bytes)
     }
-
-    /// Verify that this block is valid for the given slot
-    pub fn verify_slot(&self, expected_slot: u64) -> Result<(), BlockError> {
-        if self.slot() != expected_slot {
-            return Err(BlockError::SlotMismatch {
-                expected: expected_slot,
-                got: self.slot(),
-            });
+    
+    /// Calculate logs bloom from transactions
+    fn calculate_logs_bloom(&self, transactions: &[Bytes]) -> Bloom {
+        if transactions.is_empty() {
+            return Bloom::default();
         }
-        Ok(())
-    }
-
-    /// Verify that this block's parent matches the expected parent
-    pub fn verify_parent(&self, expected_parent: Hash256) -> Result<(), BlockError> {
-        if self.parent_root() != expected_parent {
-            return Err(BlockError::ParentMismatch {
-                expected: expected_parent,
-                got: self.parent_root(),
-            });
+        
+        // In a real implementation, this would be calculated from execution logs
+        // For now, create a simple bloom filter
+        let mut bloom = Bloom::default();
+        
+        // Set some bits based on transaction count
+        let tx_count = transactions.len() as u64;
+        for i in 0..8 {
+            let bit_index = (tx_count + i) % 2048;
+            let byte_index = (bit_index / 8) as usize;
+            let bit_offset = (bit_index % 8) as u8;
+            if byte_index < 256 {
+                bloom.0[byte_index] |= 1 << bit_offset;
+            }
         }
-        Ok(())
+        
+        bloom
     }
-}
-
-/// Signed beacon block with proposer signature
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct SignedBeaconBlock {
-    /// The beacon block
-    pub message: BeaconBlock,
-    /// Proposer signature
-    pub signature: Hash256,
-}
-
-impl SignedBeaconBlock {
-    /// Create a new signed beacon block
-    pub fn new(message: BeaconBlock, signature: Hash256) -> Self {
-        Self { message, signature }
+    
+    /// Calculate prev_randao (mixHash) from subdag randomness
+    fn calculate_prev_randao(&self) -> Hash256 {
+        // In a real implementation, this would be the RANDAO reveal from the beacon chain
+        // For now, create a deterministic hash from timestamp and round
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        self.subdag.timestamp_ms.hash(&mut hasher);
+        self.subdag.leader.round.hash(&mut hasher);
+        
+        let hash_value = hasher.finish();
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&hash_value.to_le_bytes());
+        
+        Hash256::from(bytes)
     }
-
-    /// Create a signed block from an unsigned block
-    pub fn from_block(block: BeaconBlock, signature: Hash256) -> Self {
-        Self::new(block, signature)
+    
+    /// Calculate base fee per gas (EIP-1559)
+    fn calculate_base_fee_per_gas(&self) -> alloy_primitives::U256 {
+        // In a real implementation, this would be calculated based on network congestion
+        // For now, use a reasonable default base fee
+        alloy_primitives::U256::from(1_000_000_000u64) // 1 gwei
     }
-
-    /// Get the block
-    pub fn block(&self) -> &BeaconBlock {
-        &self.message
+    
+    /// Calculate blob gas fields for EIP-4844
+    fn calculate_blob_gas_fields(&self) -> (u64, u64) {
+        // In a real implementation, these would be calculated based on blob transactions
+        // For now, return zeros (no blob gas used)
+        (0, 0)
     }
-
-    /// Get the signature
-    pub fn signature(&self) -> Hash256 {
-        self.signature
+    
+    /// Create extra data with subdag information
+    fn create_extra_data(&self) -> Bytes {
+        // Include subdag metadata in extra data
+        let mut extra_data = Vec::new();
+        
+        // Add subdag round
+        extra_data.extend_from_slice(&self.subdag.leader.round.to_le_bytes());
+        
+        // Add timestamp
+        extra_data.extend_from_slice(&self.subdag.timestamp_ms.to_le_bytes());
+        
+        // Add commit reference index
+        extra_data.extend_from_slice(&self.subdag.commit_ref.index.to_le_bytes());
+        
+        // Add a marker to identify this as a FastEVM block
+        extra_data.extend_from_slice(b"FastEVM");
+        
+        Bytes::from(extra_data)
     }
-}
+    
+    pub fn flatten_transactions(&self) -> Vec<Bytes> {
+        let mut flattened_txs: Vec<Bytes> = Vec::new();
+        let mut total_gas_used: u64 = 0;
 
-// Supporting data structures
-
-/// ETH1 data for a block
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, TreeHash, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct Eth1Data {
-    /// Deposit root
-    pub deposit_root: Hash256,
-    /// Deposit count
-    pub deposit_count: u64,
-    /// Block hash
-    pub block_hash: Hash256,
-}
-
-/// Proposer slashing
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct ProposerSlashing {
-    /// First signed header
-    pub signed_header_1: SignedBeaconBlockHeader,
-    /// Second signed header
-    pub signed_header_2: SignedBeaconBlockHeader,
-}
-
-/// Attester slashing
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct AttesterSlashing {
-    /// First attestation
-    pub attestation_1: IndexedAttestation,
-    /// Second attestation
-    pub attestation_2: IndexedAttestation,
-}
-
-/// Attestation
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct Attestation {
-    /// Aggregation bits
-    pub aggregation_bits: Hash256,
-    /// Attestation data
-    pub data: AttestationData,
-    /// Aggregate signature
-    pub signature: Hash256,
-}
-
-/// Attestation data
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, TreeHash, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct AttestationData {
-    /// Slot
-    pub slot: u64,
-    /// Committee index
-    pub index: u64,
-    /// Beacon block root
-    pub beacon_block_root: Hash256,
-    /// Source checkpoint
-    pub source: Checkpoint,
-    /// Target checkpoint
-    pub target: Checkpoint,
-}
-
-/// Checkpoint
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, TreeHash, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct Checkpoint {
-    /// Epoch
-    pub epoch: u64,
-    /// Root
-    pub root: Hash256,
-}
-
-/// Indexed attestation
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct IndexedAttestation {
-    /// Attesting validator indices
-    pub attesting_indices: Vec<u64>,
-    /// Attestation data
-    pub data: AttestationData,
-    /// Aggregate signature
-    pub signature: Hash256,
-}
-
-/// Deposit
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct Deposit {
-    /// Proof
-    pub proof: Vec<Hash256>,
-    /// Deposit data
-    pub data: DepositData,
-}
-
-/// Deposit data
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct DepositData {
-    /// Public key
-    pub pubkey: Hash256,
-    /// Withdrawal credentials
-    pub withdrawal_credentials: Hash256,
-    /// Amount
-    pub amount: u64,
-    /// Signature
-    pub signature: Hash256,
-}
-
-/// Voluntary exit
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct VoluntaryExit {
-    /// Epoch
-    pub epoch: u64,
-    /// Validator index
-    pub validator_index: u64,
-}
-
-/// Signed voluntary exit
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct SignedVoluntaryExit {
-    /// Voluntary exit
-    pub message: VoluntaryExit,
-    /// Signature
-    pub signature: Hash256,
-}
-
-/// Sync committee aggregate
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct SyncAggregate {
-    /// Sync committee bits
-    pub sync_committee_bits: Hash256,
-    /// Sync committee signature
-    pub sync_committee_signature: Hash256,
-}
-
-/// Execution payload
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct ExecutionPayload {
-    /// Parent hash
-    pub parent_hash: Hash256,
-    /// Fee recipient
-    pub fee_recipient: Address,
-    /// State root
-    pub state_root: Hash256,
-    /// Receipts root
-    pub receipts_root: Hash256,
-    /// Logs bloom
-    pub logs_bloom: Hash256,
-    /// Previous randao
-    pub prev_randao: Hash256,
-    /// Block number
-    pub block_number: u64,
-    /// Gas limit
-    pub gas_limit: u64,
-    /// Gas used
-    pub gas_used: u64,
-    /// Timestamp
-    pub timestamp: u64,
-    /// Extra data
-    pub extra_data: Vec<u8>,
-    /// Base fee per gas
-    pub base_fee_per_gas: u64,
-    /// Block hash
-    pub block_hash: Hash256,
-    /// Transactions
-    pub transactions: Vec<Vec<u8>>,
-}
-
-/// Signed beacon block header
-#[derive(
-    Default, Debug, Clone, Serialize, Deserialize, TreeHash, Derivative,
-)]
-#[derivative(PartialEq, Eq, Hash)]
-pub struct SignedBeaconBlockHeader {
-    /// Beacon block header
-    pub message: BeaconBlockHeader,
-    /// Signature
-    pub signature: Hash256,
-}
-
-// Error types
-#[derive(Debug, thiserror::Error)]
-pub enum BlockError {
-    #[error("Slot mismatch: expected {expected}, got {got}")]
-    SlotMismatch { expected: u64, got: u64 },
-    #[error("Parent mismatch: expected {expected}, got {got}")]
-    ParentMismatch { expected: Hash256, got: Hash256 },
-    #[error("Invalid proposer index: {0}")]
-    InvalidProposerIndex(u32),
-    #[error("Invalid signature")]
-    InvalidSignature,
-}
-
-/// Chain specification
-#[derive(Debug, Clone)]
-pub struct ChainSpec {
-    pub slots_per_epoch: u64,
-    pub slots_per_historical_root: u64,
-    pub epochs_per_historical_vector: u64,
-    pub epochs_per_slashings_vector: u64,
-    pub max_validators_per_committee: u64,
-    pub target_committee_size: u64,
-    pub max_proposer_slashings: u64,
-    pub max_attester_slashings: u64,
-    pub max_attestations: u64,
-    pub max_deposits: u64,
-    pub max_voluntary_exits: u64,
-}
-
-impl Default for ChainSpec {
-    fn default() -> Self {
-        Self {
-            slots_per_epoch: 32,
-            slots_per_historical_root: 8192,
-            epochs_per_historical_vector: 65536,
-            epochs_per_slashings_vector: 8192,
-            max_validators_per_committee: 2048,
-            target_committee_size: 128,
-            max_proposer_slashings: 16,
-            max_attester_slashings: 2,
-            max_attestations: 128,
-            max_deposits: 16,
-            max_voluntary_exits: 16,
+        for vb in &self.subdag.blocks {
+            // --- IMPORTANT: replace the code below with the real one ---
+            // Possible valid variants (adapt to your VerifiedBlock API):
+            // 1) if VerifiedBlock has .transactions() -> &[TxType]:
+            //    for tx in vb.transactions().iter() { flattened_txs.push(tx.to_raw_bytes()); total_gas_used += tx.gas_used(); }
+            //
+            // 2) if VerifiedBlock stores raw bytes: for raw in vb.raw_transactions() { flattened_txs.push(raw.clone()); }
+            //
+            //Extract transactions from verified block
+            for tx in vb.transactions() {
+                let raw_data = Bytes::from(tx.data().to_vec());
+                //Add calculated gas used here
+                total_gas_used = total_gas_used.saturating_add(0); // if you can measure gas, add it here
+                flattened_txs.push(raw_data);
+            }
         }
+        flattened_txs
     }
 }
-
-impl ChainSpec {
-    /// Create a new chain specification
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Create a custom chain specification
-    pub fn custom(
-        slots_per_epoch: u64,
-        slots_per_historical_root: u64,
-        epochs_per_historical_vector: u64,
-        epochs_per_slashings_vector: u64,
-        max_validators_per_committee: u64,
-        target_committee_size: u64,
-        max_proposer_slashings: u64,
-        max_attester_slashings: u64,
-        max_attestations: u64,
-        max_deposits: u64,
-        max_voluntary_exits: u64,
-    ) -> Self {
-        Self {
-            slots_per_epoch,
-            slots_per_historical_root,
-            epochs_per_historical_vector,
-            epochs_per_slashings_vector,
-            max_validators_per_committee,
-            target_committee_size,
-            max_proposer_slashings,
-            max_attester_slashings,
-            max_attestations,
-            max_deposits,
-            max_voluntary_exits,
-        }
-    }
-}
-
