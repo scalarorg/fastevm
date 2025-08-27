@@ -15,6 +15,8 @@ use sui_protocol_config::{ConsensusNetwork, ProtocolConfig};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
+use crate::engine_api::PayloadItem;
+
 // Simple transaction verifier that accepts all transactions
 #[derive(Debug)]
 struct SimpleTransactionVerifier;
@@ -52,7 +54,7 @@ impl ValidatorNode {
         keypairs: Vec<(NetworkKeyPair, ProtocolKeyPair)>,
         registry_service: RegistryService,
         commit_consumer: CommitConsumer,
-        input_payload_rx: mpsc::UnboundedReceiver<ExecutionPayloadV3>,
+        input_payload_rx: mpsc::UnboundedReceiver<PayloadItem>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting validator node {}", self.authority_index);
 
@@ -103,7 +105,7 @@ impl ValidatorNode {
 
     async fn start_transaction_processing(
         &self,
-        mut input_payload_rx: mpsc::UnboundedReceiver<ExecutionPayloadV3>,
+        mut input_payload_rx: mpsc::UnboundedReceiver<PayloadItem>,
     ) {
         // Process received payload from execution client
         let transaction_client = self
@@ -114,7 +116,8 @@ impl ValidatorNode {
         tokio::spawn(async move {
             while let Some(payload) = input_payload_rx.recv().await {
                 info!("Received payload from execution client: {:?}", &payload);
-                let tx_data = extract_transaction_from_payload_v3(payload);
+                //let tx_data = extract_transaction_from_payload_v3(payload);
+                let tx_data = payload.into_iter().map(|tx| tx.into()).collect();
                 match transaction_client.submit(tx_data).await {
                     Ok((block_ref, _status_receiver)) => {
                         info!(
@@ -170,27 +173,29 @@ fn extract_transaction_from_payload_field_v2(payload: ExecutionPayloadFieldV2) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use consensus_config::{Authority, AuthorityKeyPair, Committee, NetworkKeyPair, ProtocolKeyPair, Stake};
+    use alloy_primitives::{Address, Bloom, Bytes, B256, U256};
+    use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
+    use consensus_config::{
+        Authority, AuthorityKeyPair, Committee, NetworkKeyPair, ProtocolKeyPair, Stake,
+    };
     use prometheus::Registry;
     use std::path::PathBuf;
-    use tempfile::tempdir;
     use std::time::Duration;
-    use alloy_primitives::{Address, B256, Bloom, Bytes, U256};
-    use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
+    use tempfile::tempdir;
 
     // Helper function to create test committee
     fn create_test_committee() -> Committee {
         let mut rng = rand::thread_rng();
         let mut authorities = vec![];
-        
+
         for i in 0..3 {
             let authority_keypair = AuthorityKeyPair::generate(&mut rng);
             let protocol_keypair = ProtocolKeyPair::generate(&mut rng);
             let network_keypair = NetworkKeyPair::generate(&mut rng);
-            
+
             let address = format!("/ip4/172.20.0.{}/udp/{}", 10 + i, 26657 + i);
             let address = address.parse().unwrap();
-            
+
             authorities.push(Authority {
                 stake: Stake::from(1000u64),
                 address,
@@ -200,7 +205,7 @@ mod tests {
                 network_key: network_keypair.public(),
             });
         }
-        
+
         Committee::new(1, authorities)
     }
 
@@ -208,13 +213,13 @@ mod tests {
     fn create_test_keypairs() -> Vec<(NetworkKeyPair, ProtocolKeyPair)> {
         let mut rng = rand::thread_rng();
         let mut keypairs = vec![];
-        
+
         for _ in 0..3 {
             let protocol_keypair = ProtocolKeyPair::generate(&mut rng);
             let network_keypair = NetworkKeyPair::generate(&mut rng);
             keypairs.push((network_keypair, protocol_keypair));
         }
-        
+
         keypairs
     }
 
@@ -222,7 +227,7 @@ mod tests {
     fn test_validator_node_new() {
         let working_directory = PathBuf::from("/tmp/test");
         let validator = ValidatorNode::new(42, working_directory.clone());
-        
+
         assert_eq!(validator.authority_index.value(), 42);
         assert_eq!(validator.working_directory, working_directory);
         assert!(validator.consensus_authority.is_none());
@@ -232,7 +237,7 @@ mod tests {
     fn test_validator_node_new_with_zero_index() {
         let working_directory = PathBuf::from("/tmp/test");
         let validator = ValidatorNode::new(0, working_directory.clone());
-        
+
         assert_eq!(validator.authority_index.value(), 0);
         assert_eq!(validator.working_directory, working_directory);
         assert!(validator.consensus_authority.is_none());
@@ -242,7 +247,7 @@ mod tests {
     fn test_validator_node_new_with_large_index() {
         let working_directory = PathBuf::from("/tmp/test");
         let validator = ValidatorNode::new(u32::MAX, working_directory.clone());
-        
+
         assert_eq!(validator.authority_index.value(), u32::MAX as usize);
         assert_eq!(validator.working_directory, working_directory);
         assert!(validator.consensus_authority.is_none());
@@ -252,7 +257,7 @@ mod tests {
     fn test_simple_transaction_verifier_verify_batch() {
         let verifier = SimpleTransactionVerifier;
         let batch = vec![b"tx1" as &[u8], b"tx2" as &[u8], b"tx3" as &[u8]];
-        
+
         let result = verifier.verify_batch(&batch);
         assert!(result.is_ok());
     }
@@ -261,7 +266,7 @@ mod tests {
     fn test_simple_transaction_verifier_verify_batch_empty() {
         let verifier = SimpleTransactionVerifier;
         let batch: Vec<&[u8]> = vec![];
-        
+
         let result = verifier.verify_batch(&batch);
         assert!(result.is_ok());
     }
@@ -272,7 +277,7 @@ mod tests {
         let large_data1 = vec![0u8; 10000];
         let large_data2 = vec![1u8; 10000];
         let batch: Vec<&[u8]> = vec![&large_data1, &large_data2];
-        
+
         let result = verifier.verify_batch(&batch);
         assert!(result.is_ok());
     }
@@ -281,10 +286,10 @@ mod tests {
     fn test_simple_transaction_verifier_verify_and_vote_batch() {
         let verifier = SimpleTransactionVerifier;
         let batch = vec![b"tx1" as &[u8], b"tx2" as &[u8], b"tx3" as &[u8]];
-        
+
         let result = verifier.verify_and_vote_batch(&batch);
         assert!(result.is_ok());
-        
+
         let transaction_indices = result.unwrap();
         assert_eq!(transaction_indices.len(), 0); // Returns empty vec as per implementation
     }
@@ -293,10 +298,10 @@ mod tests {
     fn test_simple_transaction_verifier_verify_and_vote_batch_empty() {
         let verifier = SimpleTransactionVerifier;
         let batch: Vec<&[u8]> = vec![];
-        
+
         let result = verifier.verify_and_vote_batch(&batch);
         assert!(result.is_ok());
-        
+
         let transaction_indices = result.unwrap();
         assert_eq!(transaction_indices.len(), 0);
     }
@@ -317,12 +322,9 @@ mod tests {
             extra_data: Bytes::default(),
             base_fee_per_gas: U256::default(),
             block_hash: [0u8; 32].into(),
-            transactions: vec![
-                Bytes::from(vec![1, 2, 3]),
-                Bytes::from(vec![4, 5, 6]),
-            ],
+            transactions: vec![Bytes::from(vec![1, 2, 3]), Bytes::from(vec![4, 5, 6])],
         });
-        
+
         let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 2);
         assert_eq!(tx_data[0], vec![1, 2, 3]);
@@ -346,14 +348,11 @@ mod tests {
                 extra_data: Bytes::default(),
                 base_fee_per_gas: U256::default(),
                 block_hash: [0u8; 32].into(),
-                transactions: vec![
-                    Bytes::from(vec![7, 8, 9]),
-                    Bytes::from(vec![10, 11, 12]),
-                ],
+                transactions: vec![Bytes::from(vec![7, 8, 9]), Bytes::from(vec![10, 11, 12])],
             },
             withdrawals: vec![],
         });
-        
+
         let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 2);
         assert_eq!(tx_data[0], vec![7, 8, 9]);
@@ -378,7 +377,7 @@ mod tests {
             block_hash: [0u8; 32].into(),
             transactions: vec![],
         });
-        
+
         let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 0);
     }
@@ -401,7 +400,7 @@ mod tests {
             block_hash: [0u8; 32].into(),
             transactions: vec![Bytes::from(vec![42])],
         });
-        
+
         let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 1);
         assert_eq!(tx_data[0], vec![42]);
@@ -426,7 +425,7 @@ mod tests {
             block_hash: [0u8; 32].into(),
             transactions: vec![Bytes::from(large_tx.clone())],
         });
-        
+
         let tx_data = extract_transaction_from_payload_field_v2(payload);
         assert_eq!(tx_data.len(), 1);
         assert_eq!(tx_data[0], large_tx);
@@ -437,23 +436,25 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let working_directory = temp_dir.path().to_path_buf();
         let mut validator = ValidatorNode::new(0, working_directory);
-        
+
         let committee = create_test_committee();
         let keypairs = create_test_keypairs();
         let registry_service = RegistryService::new(Registry::new());
-        let (commit_consumer, _ , _) = CommitConsumer::new(0);
+        let (commit_consumer, _, _) = CommitConsumer::new(0);
         let (_, input_payload_rx) = mpsc::unbounded_channel();
-        
+
         // This test verifies that the start method can be called without panicking
         // In a real scenario, this would start the consensus authority
-        let result = validator.start(
-            committee,
-            keypairs,
-            registry_service,
-            commit_consumer,
-            input_payload_rx,
-        ).await;
-        
+        let result = validator
+            .start(
+                committee,
+                keypairs,
+                registry_service,
+                commit_consumer,
+                input_payload_rx,
+            )
+            .await;
+
         // The test passes if we can call start without panicking
         // The actual result may vary depending on the consensus authority setup
         assert!(true);
@@ -463,24 +464,26 @@ mod tests {
     async fn test_validator_node_start_with_different_indices() {
         let temp_dir = tempdir().unwrap();
         let working_directory = temp_dir.path().to_path_buf();
-        
+
         for node_index in [0, 1, 2] {
             let mut validator = ValidatorNode::new(node_index, working_directory.clone());
             let committee = create_test_committee();
             let keypairs = create_test_keypairs();
             let registry_service = RegistryService::new(Registry::new());
-            let (commit_consumer,_ ,_) = CommitConsumer::new(0);
+            let (commit_consumer, _, _) = CommitConsumer::new(0);
             let (_, input_payload_rx) = mpsc::unbounded_channel();
-            
+
             // Test that start can be called for different node indices
-            let _result = validator.start(
-                committee,
-                keypairs,
-                registry_service,
-                commit_consumer,
-                input_payload_rx,
-            ).await;
-            
+            let _result = validator
+                .start(
+                    committee,
+                    keypairs,
+                    registry_service,
+                    commit_consumer,
+                    input_payload_rx,
+                )
+                .await;
+
             assert!(true);
         }
     }
@@ -490,27 +493,29 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let working_directory = temp_dir.path().to_path_buf();
         let mut validator = ValidatorNode::new(0, working_directory.clone());
-        
+
         let committee = create_test_committee();
         let keypairs = create_test_keypairs();
         let registry_service = RegistryService::new(Registry::new());
-        let (commit_consumer,_, _) = CommitConsumer::new(0);
+        let (commit_consumer, _, _) = CommitConsumer::new(0);
         let (_, input_payload_rx) = mpsc::unbounded_channel();
-        
+
         // Start the validator
-        let _result = validator.start(
-            committee,
-            keypairs,
-            registry_service,
-            commit_consumer,
-            input_payload_rx,
-        ).await;
-        
+        let _result = validator
+            .start(
+                committee,
+                keypairs,
+                registry_service,
+                commit_consumer,
+                input_payload_rx,
+            )
+            .await;
+
         // Check that the node directory was created
         let node_dir = working_directory.join("node-0");
         assert!(node_dir.exists());
         assert!(node_dir.is_dir());
-        
+
         // Check that the consensus database file was created
         let db_path = node_dir.join("consensus.db");
         assert!(db_path.exists());
@@ -521,27 +526,29 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let working_directory = temp_dir.path().to_path_buf();
         let mut validator = ValidatorNode::new(0, working_directory);
-        
+
         let committee = create_test_committee();
         let keypairs = create_test_keypairs();
         let registry_service = RegistryService::new(Registry::new());
         let (commit_consumer, _, _) = CommitConsumer::new(0);
         let (input_payload_tx, input_payload_rx) = mpsc::unbounded_channel();
-        
+
         // Start the validator in a separate task
         let validator_handle = tokio::spawn(async move {
-            validator.start(
-                committee,
-                keypairs,
-                registry_service,
-                commit_consumer,
-                input_payload_rx,
-            ).await
+            validator
+                .start(
+                    committee,
+                    keypairs,
+                    registry_service,
+                    commit_consumer,
+                    input_payload_rx,
+                )
+                .await
         });
-        
+
         // Give it a moment to start
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         // Send a test payload
         let test_payload = ExecutionPayloadV3 {
             payload_inner: ExecutionPayloadV2 {
@@ -566,15 +573,19 @@ mod tests {
             blob_gas_used: 0,
             excess_blob_gas: 0,
         };
-        
-        let _ = input_payload_tx.send(test_payload);
-        
+
+        let tx_data = extract_transaction_from_payload_v3(test_payload)
+            .into_iter()
+            .map(|tx| tx.into())
+            .collect();
+        let _ = input_payload_tx.send(tx_data);
+
         // Give it a moment to process
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         // Cancel the task
         validator_handle.abort();
-        
+
         // Test passes if we can start transaction processing without panicking
         assert!(true);
     }
@@ -584,23 +595,25 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let working_directory = temp_dir.path().to_path_buf();
         let mut validator = ValidatorNode::new(0, working_directory);
-        
+
         // Create an empty committee (invalid)
         let committee = Committee::new(1, vec![]);
         let keypairs = create_test_keypairs();
         let registry_service = RegistryService::new(Registry::new());
         let (commit_consumer, _, _) = CommitConsumer::new(0);
         let (_, input_payload_rx) = mpsc::unbounded_channel();
-        
+
         // This should handle the invalid committee gracefully
-        let _result = validator.start(
-            committee,
-            keypairs,
-            registry_service,
-            commit_consumer,
-            input_payload_rx,
-        ).await;
-        
+        let _result = validator
+            .start(
+                committee,
+                keypairs,
+                registry_service,
+                commit_consumer,
+                input_payload_rx,
+            )
+            .await;
+
         // Test passes if we can handle invalid input without panicking
         assert!(true);
     }
@@ -609,26 +622,28 @@ mod tests {
     async fn test_validator_node_start_with_different_working_directories() {
         let temp_dir = tempdir().unwrap();
         let base_path = temp_dir.path().to_path_buf();
-        
+
         for i in 0..3 {
             let working_directory = base_path.join(format!("validator-{}", i));
             let mut validator = ValidatorNode::new(i, working_directory.clone());
-            
+
             let committee = create_test_committee();
             let keypairs = create_test_keypairs();
             let registry_service = RegistryService::new(Registry::new());
             let (commit_consumer, _, _) = CommitConsumer::new(0);
             let (_, input_payload_rx) = mpsc::unbounded_channel();
-            
+
             // Start the validator
-            let _result = validator.start(
-                committee,
-                keypairs,
-                registry_service,
-                commit_consumer,
-                input_payload_rx,
-            ).await;
-            
+            let _result = validator
+                .start(
+                    committee,
+                    keypairs,
+                    registry_service,
+                    commit_consumer,
+                    input_payload_rx,
+                )
+                .await;
+
             // Check that the directory was created
             let node_dir = working_directory.join(format!("node-{}", i));
             assert!(node_dir.exists());
@@ -639,7 +654,7 @@ mod tests {
     fn test_simple_transaction_verifier_debug() {
         let verifier = SimpleTransactionVerifier;
         let debug_str = format!("{:?}", verifier);
-        
+
         // Test that debug formatting works
         assert!(!debug_str.is_empty());
     }
@@ -647,12 +662,12 @@ mod tests {
     #[test]
     fn test_transaction_verifier_trait_implementation() {
         let verifier = SimpleTransactionVerifier;
-        
+
         // Test that the verifier implements the required trait methods
         let batch = vec![b"test" as &[u8]];
         let result = verifier.verify_batch(&batch);
         assert!(result.is_ok());
-        
+
         let vote_result = verifier.verify_and_vote_batch(&batch);
         assert!(vote_result.is_ok());
         let indices = vote_result.unwrap();
@@ -664,20 +679,20 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let working_directory = temp_dir.path().to_path_buf();
         let validator = Arc::new(ValidatorNode::new(0, working_directory));
-        
+
         let validator_clone1 = Arc::clone(&validator);
         let validator_clone2 = Arc::clone(&validator);
-        
+
         let handle1 = tokio::spawn(async move {
             // Test concurrent access to validator properties
             assert_eq!(validator_clone1.authority_index.value(), 0);
         });
-        
+
         let handle2 = tokio::spawn(async move {
             // Test concurrent access to validator properties
             assert_eq!(validator_clone2.authority_index.value(), 0);
         });
-        
+
         let (result1, result2) = tokio::join!(handle1, handle2);
         assert!(result1.is_ok());
         assert!(result2.is_ok());
@@ -687,23 +702,26 @@ mod tests {
     fn test_validator_node_path_handling() {
         let working_directory = PathBuf::from("/tmp/test/validator");
         let validator = ValidatorNode::new(0, working_directory.clone());
-        
+
         // Test that the working directory is stored correctly
         assert_eq!(validator.working_directory, working_directory);
-        
+
         // Test that the node directory path would be constructed correctly
         let expected_node_dir = working_directory.join("node-0");
-        assert_eq!(expected_node_dir, PathBuf::from("/tmp/test/validator/node-0"));
+        assert_eq!(
+            expected_node_dir,
+            PathBuf::from("/tmp/test/validator/node-0")
+        );
     }
 
     #[test]
     fn test_authority_index_values() {
         let test_indices = vec![0, 1, 10, 100, 1000, u32::MAX];
-        
+
         for index in test_indices {
             let working_directory = PathBuf::from("/tmp/test");
             let validator = ValidatorNode::new(index, working_directory);
-            
+
             assert_eq!(validator.authority_index.value(), index as usize);
         }
     }

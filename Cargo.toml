@@ -1,12 +1,19 @@
 [workspace]
 members = [
+    "reth-extension",
     "execution-client",
     "consensus-client"
 ]
 resolver = "2"
 
 [workspace.dependencies]
+
 # Core dependencies
+alloy-consensus = { version = "1.0.23", default-features = false }
+alloy-eips = { version = "1.0.23", default-features = false }
+alloy-primitives = { version = "1.3.0", default-features = false, features = ["map-foldhash"] }
+alloy-rpc-types-engine = { version = "1.0.23", default-features = false }
+
 tokio = { version = "1.0", features = ["full"] }
 
 rand = "0.8.5"
@@ -22,6 +29,7 @@ uuid = { version = "1.0", features = ["v4"] }
 # Networking and HTTP
 reqwest = { version = "0.12.22", features = ["json"] }
 jsonrpsee = { version = "0.25", features = ["server", "client", "macros"] }
+http = "1.3.1"
 
 #async 
 async-stream = "0.3"
@@ -53,9 +61,9 @@ tokio-test = "0.4"
 criterion = "0.7"
 
 # Add execution and consensus client as dependencies for integration tests
-execution-client = { path = "fastevm/execution-client" }
-consensus-client = { path = "fastevm/consensus-client" }
-
+reth-extension = { path = "reth-extension" }
+execution-client = { path = "execution-client" }
+consensus-client = { path = "consensus-client" }
 [profile.release]
 opt-level = 3
 lto = true

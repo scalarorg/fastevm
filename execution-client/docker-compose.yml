@@ -19,7 +19,9 @@ services:
       - ../consensus-client:/consensus-client
     networks: [devnet]
   reth:
-    image: scalarorg/fastevm-execution:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: reth-node
     restart: unless-stopped
     user: root
@@ -31,6 +33,7 @@ services:
       - reth-data:/data0:rw
     command:
       [
+        "./fastevm-execution",
         "node",
         "--chain", "dev", # possible values: mainnet,sepolia,holesky,hoodi,dev
         "--datadir", "/data0",

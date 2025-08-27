@@ -9,13 +9,14 @@ path = "src/main.rs"
 
 
 [dependencies]
+reth-extension = { workspace = true }
 #Mysticeti
 consensus-core = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-core" }
 consensus-config = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-config" }
 mysten-metrics = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "mysten-metrics"}
 sui-protocol-config = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "sui-protocol-config"}
-alloy-primitives = { version = "1.3.0", default-features = false, features = ["map-foldhash"] }
-alloy-rpc-types-engine = { version = "1.0.23", default-features = false }
+alloy-primitives = { workspace = true }
+alloy-rpc-types-engine = { workspace = true }
 # reth-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-engine-primitives" }
 reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-engine-primitives" }
 reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api", features=["client"] }
@@ -35,6 +36,7 @@ ethereum_ssz = "0.8.2"
 ethereum_ssz_derive = "0.8.2"
 
 jsonrpsee = { workspace = true }
+http = { workspace = true }
 # pin-project.workspace = true
 prometheus = "0.13.3"
 
@@ -52,6 +54,14 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tree_hash = "0.10"
 tree_hash_derive = "0.10"
+
+# Additional dependencies for RPC client and transaction subscription
+reqwest = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }

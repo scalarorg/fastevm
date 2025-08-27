@@ -1,213 +1,178 @@
-# FastEVM - Engine API Bridge Makefile
+# FastEVM Makefile for Refactored Packages
 
-.PHONY: build test clean docker-build docker-up docker-down integration-test benchmark lint format check-all
+.PHONY: help build build-release test clean run-execution run-consensus integration-test
 
 # Default target
-all: check-all
+help:
+	@echo "FastEVM Refactored Packages - Available Targets:"
+	@echo ""
+	@echo "Building:"
+	@echo "  build          - Build all packages in debug mode"
+	@echo "  build-release  - Build all packages in release mode"
+	@echo "  clean          - Clean all build artifacts"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test           - Run all tests"
+	@echo "  integration-test - Run integration tests"
+	@echo ""
+	@echo "Running:"
+	@echo "  run-execution  - Run execution-client with transaction listener"
+	@echo "  run-consensus  - Run consensus-client with transaction subscription"
+	@echo ""
+	@echo "Development:"
+	@echo "  check          - Check code without building"
+	@echo "  fmt            - Format code with rustfmt"
+	@echo "  clippy         - Run clippy linter"
 
-# Build all targets
+# Build all packages in debug mode
 build:
-	@echo "Building all crates..."
-	cargo build --release
+	@echo "🔨 Building FastEVM packages in debug mode..."
+	cargo build --workspace
 
-# Run all tests
-test:
-	@echo "Running unit tests..."
-	cargo test --workspace
-	@echo "Running integration tests..."
-	cargo test --test integration_tests
-
-# Run benchmarks
-benchmark:
-	@echo "Running benchmarks..."
-	cargo bench
+# Build all packages in release mode
+build-release:
+	@echo "🚀 Building FastEVM packages in release mode..."
+	cargo build --workspace --release
 
 # Clean build artifacts
 clean:
-	@echo "Cleaning build artifacts..."
+	@echo "🧹 Cleaning build artifacts..."
 	cargo clean
-	docker-compose down -v
-	docker system prune -f
+	@echo "✅ Clean complete"
 
-# Docker commands
-.PHONY: docker-build-execution docker-build-consensus docker-build
-docker-build-execution:
-	@echo "Building execution client Docker image..."
-	docker build -t scalarorg/fastevm-execution -f Dockerfile.el .
+# Run all tests
+test:
+	@echo "🧪 Running FastEVM tests..."
+	cargo test --workspace
 
-docker-build-consensus:
-	@echo "Building consensus client Docker image..."
-	docker build -t fastevm-consensus -f Dockerfile.cl .
+# Check code without building
+check:
+	@echo "🔍 Checking FastEVM code..."
+	cargo check --workspace
 
-.PHONY: docker-builder docker-build-execution docker-build-consensus docker-build
-docker-builder:
-	@echo "Building builder Docker image..."
-	docker build -t scalarorg/fastevm-builder -f Dockerfile.builder .
-
-docker-build-execution:
-	@echo "Building execution client Docker image..."
-	docker build -t scalarorg/fastevm-execution -f Dockerfile.el .
-
-docker-build-consensus:
-	@echo "Building consensus client Docker image..."
-	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl .
-
-docker-build-execution-dev:
-	@echo "Building execution client Docker image..."
-	docker build -t scalarorg/fastevm-execution -f Dockerfile.el.dev .
-
-docker-build-consensus-dev:
-	@echo "Building consensus client Docker image..."
-	docker build -t scalarorg/fastevm-consensus -f Dockerfile.cl.dev .
-
-docker-build:
-	@echo "Building Docker images..."
-	docker-compose build
-
-.PHONY: docker-network docker-up-execution docker-up-consensus docker-up
-docker-network:
-	@echo "Creating network..."
-	./scripts/network.sh
-
-docker-up-execution: docker-network
-	@echo "Starting execution client in development mode..."
-	docker compose -f execution-client/docker-compose.yml up -d
-
-docker-up-consensus: docker-network
-	@echo "Starting consensus client in development mode..."
-	docker compose -f consensus-client/docker-compose.yml up -d
-
-docker-up:
-	@echo "Starting all services..."
-	docker compose up -d
-
-.PHONY: docker-down-consensus docker-down-execution docker-down
-docker-down-consensus:
-	@echo "Stopping consensus client..."
-	docker compose -f consensus-client/docker-compose.yml down
-
-docker-down-execution:
-	@echo "Stopping execution client..."
-	docker compose -f execution-client/docker-compose.yml down
-
-.PHONY: docker-down
-docker-down:
-	@echo "Stopping all services..."
-	docker compose down
-
-# Development commands
-dev-execution:
-	@echo "Starting execution client in development mode..."
-	cd fastevm/execution-client && cargo run -- --port 8551 --http.addr 0.0.0.0 --log-level debug
-	@echo "Starting execution client in development mode..."
-	cd fastevm/execution-client && cargo run -- --port 8551 --http.addr 0.0.0.0 --log-level debug
-
-dev-consensus:
-	@echo "Starting consensus client in development mode..."
-	cd fastevm/consensus-client && cargo run -- --execution-url http://127.0.0.1:8551 --log-level debug
-
-# Testing commands
-integration-test: build
-	@echo "Running comprehensive integration tests..."
-	cargo test --test integration_tests -- --nocapture
-
-unit-test:
-	@echo "Running unit tests only..."
-	cargo test --lib --workspace
-
-# Code quality
-lint:
-	@echo "Running clippy linter..."
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-format:
-	@echo "Formatting code..."
+# Format code
+fmt:
+	@echo "✨ Formatting FastEVM code..."
 	cargo fmt --all
 
-format-check:
-	@echo "Checking code formatting..."
-	cargo fmt --all -- --check
+# Run clippy linter
+clippy:
+	@echo "🔧 Running clippy linter..."
+	cargo clippy --workspace -- -D warnings
+
+# Run execution-client
+run-execution: build
+	@echo "🚀 Starting execution-client with transaction listener..."
+	cd execution-client && cargo run -- node
+
+# Run consensus-client
+run-consensus: build
+	@echo "🔗 Starting consensus-client with transaction subscription..."
+	cd consensus-client && cargo run -- start --config config.yml
+
+# Run integration tests
+integration-test: build-release
+	@echo "🧪 Running integration tests..."
+	./scripts/test-integration.sh
+
+# Install development dependencies
+install-dev:
+	@echo "📦 Installing development dependencies..."
+	cargo install cargo-watch
+	cargo install cargo-audit
+	@echo "✅ Development dependencies installed"
+
+# Watch mode for development
+watch:
+	@echo "👀 Starting watch mode for development..."
+	cargo watch -x check -x test -x run
 
 # Security audit
 audit:
-	@echo "Running security audit..."
+	@echo "🔒 Running security audit..."
 	cargo audit
 
-# Documentation
-docs:
-	@echo "Generating documentation..."
+# Generate documentation
+doc:
+	@echo "📚 Generating documentation..."
 	cargo doc --workspace --no-deps --open
 
-# Complete check pipeline
-check-all: format-check lint test
-	@echo "All checks passed!"
+# Quick development cycle
+dev: fmt clippy test
 
-# Development setup
-setup:
-	@echo "Setting up development environment..."
-	rustup component add clippy rustfmt
-	cargo install cargo-audit
-	@echo "Development environment ready!"
+# Full development cycle
+full-dev: clean build test integration-test
+
+# Docker operations
+docker-build:
+	@echo "🐳 Building Docker images..."
+	docker-compose -f execution-client/docker-compose.yml build
+	docker-compose -f consensus-client/docker-compose.yml build
+
+docker-up:
+	@echo "🚀 Starting Docker services..."
+	docker-compose -f execution-client/docker-compose.yml up -d
+	docker-compose -f consensus-client/docker-compose.yml up -d
+
+docker-down:
+	@echo "🛑 Stopping Docker services..."
+	docker-compose -f execution-client/docker-compose.yml down
+	docker-compose -f consensus-client/docker-compose.yml down
 
 # Performance testing
-perf-test:
-	@echo "Running performance tests..."
-	docker-compose up -d
-	sleep 10
-	@echo "Sending test requests..."
-	for i in {1..100}; do \
-		curl -X POST \
-		-H "Content-Type: application/json" \
-		-d '{"jsonrpc":"2.0","method":"engine_newPayloadV2","params":[{"parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","feeRecipient":"0x0000000000000000000000000000000000000000","stateRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","receiptsRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","prevRandao":"0x0000000000000000000000000000000000000000000000000000000000000000","blockNumber":"0x1","gasLimit":"0x1c9c380","gasUsed":"0x5208","timestamp":"0x499602d2","extraData":"0x","baseFeePerGas":"0x3b9aca00","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000000","transactions":[],"withdrawals":null}],"id":1}' \
-		http://localhost:8551 > /dev/null 2>&1 && echo "Request $$i completed" || echo "Request $$i failed"; \
-	done
-	docker-compose down
+bench:
+	@echo "⚡ Running benchmarks..."
+	cargo bench --workspace
 
-# Multi-node test
-multi-node-test:
-	@echo "Testing multi-node setup..."
-	docker-compose up -d
-	sleep 15
-	@echo "Testing node 0..."
-	curl -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"engine_newPayloadV2","params":[{"parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","feeRecipient":"0x0000000000000000000000000000000000000000","stateRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","receiptsRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","prevRandao":"0x0000000000000000000000000000000000000000000000000000000000000000","blockNumber":"0x1","gasLimit":"0x1c9c380","gasUsed":"0x5208","timestamp":"0x499602d2","extraData":"0x","baseFeePerGas":"0x3b9aca00","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000000","transactions":[],"withdrawals":null}],"id":1}' http://localhost:8551
-	@echo "Testing node 1..."
-	curl -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"engine_newPayloadV2","params":[{"parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","feeRecipient":"0x0000000000000000000000000000000000000000","stateRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","receiptsRoot":"0x0000000000000000000000000000000000000000000000000000000000000000","logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","prevRandao":"0x0000000000000000000000000000000000000000000000000000000000000000","blockNumber":"0x1","gasLimit":"0x1c9c380","gasUsed":"0x5208","timestamp":"0x499602d2","extraData":"0x","baseFeePerGas":"0x3b9aca00","blockHash":"0x0000000000000000000000000000000000000000000000000000000000000000","transactions":[],"withdrawals":null}],"id":1}' http://localhost:8552
-	docker-compose down
+# Coverage report
+coverage:
+	@echo "📊 Generating coverage report..."
+	cargo tarpaulin --workspace --out Html
 
-# Help
-help:
-	@echo "FastEVM Engine API Bridge - Available Commands:"
-	@echo ""
-	@echo "Build Commands:"
-	@echo "  build          - Build all crates"
-	@echo "  clean          - Clean build artifacts and Docker containers"
-	@echo ""
-	@echo "Testing Commands:"
-	@echo "  test           - Run all tests"
-	@echo "  unit-test      - Run unit tests only"
-	@echo "  integration-test - Run integration tests"
-	@echo "  benchmark      - Run performance benchmarks"
-	@echo "  perf-test      - Run performance test against running containers"
-	@echo "  multi-node-test - Test multi-node setup"
-	@echo ""
-	@echo "Docker Commands:"
-	@echo "  docker-build   - Build Docker images"
-	@echo "  docker-up      - Start all services"
-	@echo "  docker-down    - Stop all services"
-	@echo "  docker-logs    - Show logs from all services"
-	@echo ""
-	@echo "Development Commands:"
-	@echo "  dev-execution  - Start execution client in dev mode"
-	@echo "  dev-consensus  - Start consensus client in dev mode"
-	@echo ""
-	@echo "Code Quality:"
-	@echo "  lint           - Run clippy linter"
-	@echo "  format         - Format code"
-	@echo "  format-check   - Check code formatting"
-	@echo "  audit          - Run security audit"
-	@echo "  check-all      - Run all quality checks"
-	@echo ""
-	@echo "Other:"
-	@echo "  setup          - Setup development environment"
-	@echo "  docs           - Generate documentation"
-	@echo "  help           - Show this help message"
+# Dependency updates
+update-deps:
+	@echo "🔄 Updating dependencies..."
+	cargo update
+	@echo "✅ Dependencies updated"
+
+# Check for outdated dependencies
+outdated:
+	@echo "🔍 Checking for outdated dependencies..."
+	cargo outdated
+
+# Help for specific package
+help-execution:
+	@echo "Execution-Client specific targets:"
+	@echo "  run-execution  - Run execution-client"
+	@echo "  test-execution - Test execution-client only"
+	@echo "  build-execution - Build execution-client only"
+
+help-consensus:
+	@echo "Consensus-Client specific targets:"
+	@echo "  run-consensus  - Run consensus-client"
+	@echo "  test-consensus - Test consensus-client only"
+	@echo "  build-consensus - Build consensus-client only"
+
+# Package-specific builds
+build-execution:
+	@echo "🔨 Building execution-client..."
+	cargo build -p fastevm-execution
+
+build-consensus:
+	@echo "🔨 Building consensus-client..."
+	cargo build -p fastevm-consensus
+
+# Package-specific tests
+test-execution:
+	@echo "🧪 Testing execution-client..."
+	cargo test -p fastevm-execution
+
+test-consensus:
+	@echo "🧪 Testing consensus-client..."
+	cargo test -p fastevm-consensus
+
+# Quick start for development
+quick-start: install-dev build test
+	@echo "🎉 Quick start complete! Ready for development."
+	@echo "Use 'make run-execution' or 'make run-consensus' to start services."
+	@echo "Use 'make watch' for continuous development mode."

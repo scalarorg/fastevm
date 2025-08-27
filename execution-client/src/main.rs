@@ -5,103 +5,74 @@
 //! cargo run -p execution-client -- node
 //! ```
 //!
-//! This launches a regular reth node overriding the engine api payload builder with our custom.
+//! This launches a regular reth node with transaction listener and custom RPC server.
 
 #![warn(unused_crate_dependencies)]
-
-use crate::generator::EmptyBlockPayloadJobGenerator;
-use reth_basic_payload_builder::BasicPayloadJobGeneratorConfig;
+use clap::Parser;
 use reth_ethereum::{
-    chainspec::ChainSpec,
-    cli::interface::Cli,
+    cli::{chainspec::EthereumChainSpecParser, interface::Cli},
     node::{
-        api::{node::FullNodeTypes, NodeTypes},
-        builder::{components::PayloadServiceBuilder, BuilderContext},
-        core::cli::config::PayloadBuilderConfig,
+        builder::{components::BasicPayloadServiceBuilder, NodeHandle},
         node::EthereumAddOns,
-        EthEngineTypes, EthEvmConfig, EthereumNode,
+        EthereumNode,
     },
-    pool::{PoolTransaction, TransactionPool},
-    provider::CanonStateSubscriptions,
-    EthPrimitives, TransactionSigned,
 };
-use reth_ethereum_payload_builder::EthereumBuilderConfig;
-use reth_payload_builder::{PayloadBuilderHandle, PayloadBuilderService};
 
-pub mod generator;
-pub mod job;
+mod payload;
+mod rpc;
+mod transaction_listener;
 
-#[derive(Debug, Clone, Copy, Default)]
-#[non_exhaustive]
-pub struct CustomPayloadBuilder;
-
-impl<Node, Pool> PayloadServiceBuilder<Node, Pool, EthEvmConfig> for CustomPayloadBuilder
-where
-    Node: FullNodeTypes<
-        Types: NodeTypes<
-            Payload = EthEngineTypes,
-            ChainSpec = ChainSpec,
-            Primitives = EthPrimitives,
-        >,
-    >,
-    Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>
-        + Unpin
-        + 'static,
-{
-    async fn spawn_payload_builder_service(
-        self,
-        ctx: &BuilderContext<Node>,
-        pool: Pool,
-        evm_config: EthEvmConfig,
-    ) -> eyre::Result<PayloadBuilderHandle<<Node::Types as NodeTypes>::Payload>> {
-        tracing::info!("Spawning a custom payload builder");
-
-        let payload_builder = reth_ethereum_payload_builder::EthereumPayloadBuilder::new(
-            ctx.provider().clone(),
-            pool,
-            evm_config,
-            EthereumBuilderConfig::new(),
-        );
-
-        let conf = ctx.payload_builder_config();
-
-        let payload_job_config = BasicPayloadJobGeneratorConfig::default()
-            .interval(conf.interval())
-            .deadline(conf.deadline())
-            .max_payload_tasks(conf.max_payload_tasks());
-
-        let payload_generator = EmptyBlockPayloadJobGenerator::with_builder(
-            ctx.provider().clone(),
-            ctx.task_executor().clone(),
-            payload_job_config,
-            payload_builder,
-        );
-
-        let (payload_service, payload_builder) =
-            PayloadBuilderService::new(payload_generator, ctx.provider().canonical_state_stream());
-
-        ctx.task_executor()
-            .spawn_critical("custom payload builder service", Box::pin(payload_service));
-
-        Ok(payload_builder)
-    }
-}
+use crate::{
+    payload::MysticetiPayloadBuilderFactory,
+    rpc::{CliTxpoolListener, ConsensusTransactionsHandler, TxpoolListener},
+};
+use reth_extension::{ConsensusTransactionApiServer, TxpoolListenerApiServer};
+use tracing::info;
 
 fn main() {
-    Cli::parse_args()
-        .run(|builder, _| async move {
-            let handle = builder
+    Cli::<EthereumChainSpecParser, CliTxpoolListener>::parse()
+        .run(|builder, args| async move {
+            let mysticeti_payload_builder =
+                BasicPayloadServiceBuilder::<MysticetiPayloadBuilderFactory>::default();
+
+            let NodeHandle {
+                node: _,
+                node_exit_future,
+            } = builder
                 .with_types::<EthereumNode>()
                 // Configure the components of the node
                 // use default ethereum components but use our custom payload builder
-                .with_components(
-                    EthereumNode::components().payload(CustomPayloadBuilder::default()),
-                )
+                .with_components(EthereumNode::components().payload(mysticeti_payload_builder))
                 .with_add_ons(EthereumAddOns::default())
+                .extend_rpc_modules(move |ctx| {
+                    if !args.enable_txpool_listener {
+                        return Ok(());
+                    }
+
+                    // here we get the configured pool.
+                    let pool = ctx.pool().clone();
+                    let task_executor = ctx.node().task_executor.clone();
+                    let listener = TxpoolListener::new(task_executor.clone(), pool.clone());
+                    let consensus_handler = ConsensusTransactionsHandler::new(task_executor, pool);
+                    // now we merge our extension namespace into all configured transports
+                    ctx.modules.merge_configured(listener.into_rpc())?;
+                    ctx.modules.merge_http(consensus_handler.into_rpc())?;
+                    info!("txpool listener enabled");
+
+                    Ok(())
+                })
                 .launch()
                 .await?;
 
-            handle.wait_for_node_exit().await
+            // create a new subscription to pending transactions
+            // let mut pending_transactions = node.pool.new_pending_pool_transactions_listener();
+            // start_transaction_listener(node.clone());
+
+            info!("FastEVM execution client started with transaction listener and RPC server");
+
+            // Wait for node exit
+            node_exit_future.await
+            // handle.wait_for_node_exit().await
         })
         .unwrap();
 }

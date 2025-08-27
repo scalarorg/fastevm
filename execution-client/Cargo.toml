@@ -7,19 +7,50 @@ edition = "2021"
 name = "fastevm-execution"
 path = "src/main.rs"
 
+[[bin]]
+name = "cli"
+path = "src/cli.rs"
+
 [dependencies]
+reth-extension = { workspace = true }
 # Ethereum
-alloy-eips = { version = "1.0.23", default-features = false }
+alloy-primitives = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-eips = { workspace = true }
 
 eyre = {workspace = true}
 futures-util = {workspace = true}
 tracing = { workspace = true }
+clap = { version = "4.0", features = ["derive"] }
+hex = "0.4"
+secp256k1 = "0.30"
 
 # Reth
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-network-peers" }
 reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-payload-builder" }
 reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-basic-payload-builder" }
 reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-payload-builder" }
 reth-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum", features = ["node", "pool", "cli"] }
+reth-evm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm" }
+reth-rpc = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc" }
+reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api" }
+reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-layer" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives" }
+
+# Additional dependencies for RPC and caching
+jsonrpsee = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+lru = "0.12"
+dashmap = "5.5"
+uuid = { workspace = true }
+tokio-stream = "0.1"
 
 [dev-dependencies]
 tokio-test = { workspace = true }
