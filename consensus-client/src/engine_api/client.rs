@@ -1,17 +1,15 @@
 use crate::beacon_chain::BeaconState;
 use crate::NodeConfig;
-use alloy_primitives::{Bytes, B256};
-use alloy_rpc_types_engine::{
-    ExecutionPayloadEnvelopeV3, ExecutionPayloadV3, ForkchoiceState, PayloadAttributes, PayloadId,
-};
+use alloy_primitives::Bytes;
+use alloy_rpc_types_engine::{ExecutionPayloadV3, ForkchoiceState, PayloadAttributes, PayloadId};
 use anyhow::{anyhow, Result};
 use consensus_config::Committee;
 use consensus_core::{BlockAPI, CertifiedBlocksOutput, CommittedSubDag};
 use jsonrpsee::core::client::SubscriptionClientT;
 use mysten_metrics::monitored_mpsc::UnboundedReceiver;
-use reth_ethereum_engine_primitives::EthEngineTypes;
-use reth_extension::{ConsensusTransactionApiClient, TxpoolListenerApiClient};
-use reth_rpc_api::clients::EngineApiClient;
+use reth_extension::{
+    CommittedSubDag as RethCommittedSubDag, ConsensusTransactionApiClient, TxpoolListenerApiClient,
+};
 use reth_rpc_layer::{secret_to_bearer_header, AuthClientLayer, JwtSecret};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -240,9 +238,10 @@ impl ExecutionClient {
                             //     Ok(resp) => info!("newPayload response: {:?}", resp),
                             //     Err(e) => error!("newPayload failed: {:?}", e),
                             // }
-                            let transactions = self.extract_commited_transactions(subdag);
-                            info!("Payload: {:?}", transactions);
-                            let res = ConsensusTransactionApiClient::submit_committed_transactions(&http_client, transactions).await;
+                            // let transactions = self.extract_commited_transactions(subdag);
+                            let reth_subdag = RethCommittedSubDag::from(subdag);
+                            info!("Payload: {:?}", reth_subdag);
+                            let res = ConsensusTransactionApiClient::submit_committed_subdag(&http_client, reth_subdag).await;
                             if res.is_ok() {
                                 info!("submit_committed_transactions successfully");
                             } else {

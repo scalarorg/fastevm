@@ -1,6 +1,6 @@
 //! Payload component configuration for the Ethereum node.
 
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use reth_basic_payload_builder::{
     BuildArguments, BuildOutcome, MissingPayloadBehaviour, PayloadBuilder, PayloadConfig,
@@ -9,8 +9,8 @@ use reth_ethereum::{
     chainspec::EthereumHardforks,
     evm::EthEvmConfig,
     pool::{
-        BestTransactions, BestTransactionsAttributes, PoolTransaction, TransactionOrigin,
-        TransactionPool, ValidPoolTransaction,
+        BestTransactions, BestTransactionsAttributes, PoolTransaction, TransactionPool,
+        ValidPoolTransaction,
     },
     provider::ChainSpecProvider,
     storage::StateProviderFactory,
@@ -19,7 +19,9 @@ use reth_ethereum::{
 
 use reth_ethereum_payload_builder::{default_ethereum_payload, EthereumBuilderConfig};
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
+use reth_extension::CommittedSubDag;
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderError};
+use tokio::sync::Mutex;
 use tracing::debug;
 
 /// Mysticeti payload builder that processes only local transactions.
@@ -40,7 +42,7 @@ use tracing::debug;
 /// * Preserves all standard Ethereum payload building capabilities
 /// * Integrates seamlessly with the existing Reth node architecture
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct MysticetiPayloadBuilder<Pool, Client, EvmConfig = EthEvmConfig> {
     /// Client providing access to node state.
@@ -49,6 +51,8 @@ pub struct MysticetiPayloadBuilder<Pool, Client, EvmConfig = EthEvmConfig> {
     pool: Pool,
     /// The type responsible for creating the evm.
     evm_config: EvmConfig,
+    /// Subdag queue.
+    subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
     /// Payload builder configuration.
     builder_config: EthereumBuilderConfig,
 }
@@ -75,12 +79,14 @@ impl<Pool: Clone, Client: Clone, EvmConfig: Clone>
     pub fn new(
         client: Client,
         pool: Pool,
+        subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
         evm_config: EvmConfig,
         builder_config: EthereumBuilderConfig,
     ) -> Self {
         Self {
             client,
             pool,
+            subdag_queue,
             evm_config,
             builder_config,
         }

@@ -13,17 +13,28 @@ use reth_ethereum::{
 };
 
 use reth_ethereum_payload_builder::EthereumBuilderConfig;
+use reth_extension::CommittedSubDag;
 //use reth_ethereum_payload_builder::EthereumBuilderConfig;
+use crate::payload::MysticetiPayloadBuilder;
 use reth_payload_builder::{
     EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderHandle, PayloadBuilderService,
 };
-
-use crate::payload::MysticetiPayloadBuilder;
+use std::collections::VecDeque;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 // use reth_transaction_pool::{PoolTransaction, TransactionPool};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug)]
 #[non_exhaustive]
-pub struct MysticetiPayloadBuilderFactory;
+pub struct MysticetiPayloadBuilderFactory {
+    subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
+}
+
+impl MysticetiPayloadBuilderFactory {
+    pub fn new(subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>) -> Self {
+        Self { subdag_queue }
+    }
+}
 
 impl<Types, Node, Pool, Evm> PayloadBuilderBuilder<Node, Pool, Evm>
     for MysticetiPayloadBuilderFactory
@@ -62,9 +73,11 @@ where
         //     evm_config,
         //     EthereumBuilderConfig::new().with_gas_limit(gas_limit),
         // ))
+        let MysticetiPayloadBuilderFactory { subdag_queue } = self;
         Ok(MysticetiPayloadBuilder::new(
             ctx.provider().clone(),
             pool,
+            subdag_queue,
             evm_config,
             EthereumBuilderConfig::new().with_gas_limit(gas_limit),
         ))

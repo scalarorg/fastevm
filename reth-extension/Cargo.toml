@@ -4,17 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-eyre = {workspace = true}
+# For Mysticeti types
+consensus-core = { workspace = true }
+consensus-config = { workspace = true }
+fastcrypto = { workspace = true }
 # futures-util = {workspace = true}
-tracing = { workspace = true }
 alloy-primitives = { workspace = true }
-
-
-# Additional dependencies for RPC and caching
+base64 = { workspace = true }
+bytes = { workspace = true }
+eyre = {workspace = true}
 jsonrpsee = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
 # tokio = { workspace = true }
-# serde = { workspace = true }
-# serde_json = { workspace = true }
 # anyhow = { workspace = true }
 # thiserror = { workspace = true }
 # async-stream = { workspace = true }

@@ -11,8 +11,9 @@ path = "src/main.rs"
 [dependencies]
 reth-extension = { workspace = true }
 #Mysticeti
-consensus-core = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-core" }
-consensus-config = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-config" }
+consensus-core = { workspace = true }
+consensus-config = { workspace = true }
+
 mysten-metrics = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "mysten-metrics"}
 sui-protocol-config = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "sui-protocol-config"}
 alloy-primitives = { workspace = true }

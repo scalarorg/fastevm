@@ -1,9 +1,10 @@
-#![warn(unused_crate_dependencies)]
 use alloy_primitives::Bytes;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     proc_macros::rpc,
 };
+
+use crate::CommittedSubDag;
 /// trait interface for a custom rpc namespace: `txpool`
 ///
 /// This defines an additional namespace where all methods are configured as trait functions.
@@ -23,9 +24,9 @@ pub trait TxpoolListenerApi {
 #[rpc(server, client, namespace = "consensus")]
 pub trait ConsensusTransactionApi {
     /// Submit commited transactions
-    #[method(name = "submitCommittedTransactions")]
-    fn submit_committed_transactions(
+    #[method(name = "submitCommittedSubdag")]
+    fn submit_committed_subdag(
         &self,
-        #[argument(rename = "transactions")] transactions: Vec<Bytes>,
+        #[argument(rename = "subdag")] subdag: CommittedSubDag,
     ) -> RpcResult<()>;
 }
