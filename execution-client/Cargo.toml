@@ -24,18 +24,21 @@ tracing = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }
 hex = "0.4"
 secp256k1 = "0.30"
-
+rustc-hash = { workspace = true }
 # Reth
 reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-network-peers" }
 reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-payload-builder" }
 reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-basic-payload-builder" }
-reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-payload-builder" }
 reth-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum", features = ["node", "pool", "cli"] }
+reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-payload-builder" }
+reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-engine-primitives" }
 reth-evm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm" }
 reth-rpc = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc" }
 reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api" }
 reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-layer" }
 reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives" }
+reth-errors = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-errors" }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-transaction-pool" }
 
 # Additional dependencies for RPC and caching
 jsonrpsee = { workspace = true }

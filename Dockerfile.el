@@ -14,7 +14,9 @@ WORKDIR /app
 
 # Copy workspace Cargo.toml first for better caching
 COPY Cargo.toml ./
+COPY consensus-client/Cargo.toml ./consensus-client/
 COPY execution-client ./execution-client
+COPY reth-extension ./reth-extension
 
 # Build execution client
 RUN cargo build --release --bin fastevm-execution

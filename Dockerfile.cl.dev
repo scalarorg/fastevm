@@ -1,17 +1,20 @@
 # Use the official Rust image as a builder
 FROM scalarorg/fastevm-builder:latest AS builder
+# Build profile, release by default
+ARG BUILD_PROFILE=release
+ENV BUILD_PROFILE=$BUILD_PROFILE
 
 # Set working directory
 WORKDIR /app
 
 # Copy the entire workspace
 COPY Cargo.toml Cargo.lock ./
-COPY execution-client/Cargo.toml ./execution-client/
-# Copy the consensus-client package
+COPY execution-client ./execution-client
+COPY reth-extension ./reth-extension
 COPY consensus-client ./consensus-client
 
 # Build all binaries from consensus-client crate
-RUN cargo build --release --bin fastevm-consensus
+RUN cargo build --profile $BUILD_PROFILE --bin fastevm-consensus
 
 # Create a minimal runtime image
 FROM debian:bookworm-slim
@@ -28,8 +31,8 @@ RUN useradd -m -u 1000 mysticeti
 WORKDIR /app
 
 # Copy all binaries from builder
-COPY --from=builder /app/target/release/fastevm-consensus /usr/local/bin/
-
+COPY --from=builder /app/target/$BUILD_PROFILE/fastevm-consensus /usr/local/bin/
+RUN ln -sf /usr/local/bin/fastevm-consensus /usr/local/bin/mysticeti
 # Create data directory
 RUN mkdir -p /app/data && chown -R mysticeti:mysticeti /app
 
@@ -37,5 +40,5 @@ RUN mkdir -p /app/data && chown -R mysticeti:mysticeti /app
 USER mysticeti
 
 # Set default command
-ENTRYPOINT ["fastevm-consensus"]
+ENTRYPOINT ["mysticeti"]
 CMD ["--help"] 

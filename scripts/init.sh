@@ -6,7 +6,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
-CLI=fastevm-execution
+CLI=reth
 # Function to print colored output
 print_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -20,6 +20,24 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Function to read BOOTNODES value from file
+read_bootnodes() {
+    local bootnodes_file="/scripts/bootnodes.env"
+    if [ -f "$bootnodes_file" ]; then
+        source "$bootnodes_file"
+        echo "$BOOTNODES"
+    else
+        print_warning "BOOTNODES file not found: $bootnodes_file"
+        echo ""
+    fi
+}
+
+# Function to test genesis extraction (placeholder)
+test_genesis_extraction() {
+    print_info "Testing genesis block hash extraction..."
+    print_info "This is a placeholder function for testing purposes."
+}
+
 # Function to show usage
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -28,6 +46,7 @@ show_usage() {
     echo "  -h, --help     Show this help message"
     echo "  -c, --consensus Generate committee config for each validator node"
     echo "  -t, --test     Test genesis block hash extraction with sample output"
+    echo "  -b, --bootnodes Show current BOOTNODES value"
     echo
     echo "This script sets up FastEVM nodes by generating JWT secrets and configs"
     echo "for both execution and consensus clients."
@@ -40,7 +59,65 @@ show_usage() {
     echo "  ./scripts/init.sh               # Full setup (default)"
     echo "  ./scripts/init.sh --consensus   # Generate committee config for each validator node"
     echo "  ./scripts/init.sh --test        # Test genesis block hash extraction"
+    echo "  ./scripts/init.sh --bootnodes   # Show current BOOTNODES value"
+}
 
+# Function to generate enode URL from peer ID
+generate_enode_url() {
+    local peer_id=$1
+    local node_index=$2
+    
+    if [ -n "$peer_id" ]; then
+        # Generate enode URL format: enode://{peerid}@execution{index}:30303
+        local enode_url="enode://${peer_id}@execution${node_index}:30303"
+        echo "$enode_url"
+    else
+        echo ""
+    fi
+}
+
+# Function to generate P2P secret key for a specific node
+generate_p2p_secret_key() {
+    node_index=$1
+    data_dir=$2
+    
+    # Create p2p directory if it doesn't exist
+    p2p_dir="${data_dir}/p2p"
+    mkdir -p "$p2p_dir"
+    
+    # Generate a deterministic P2P secret key based on node index
+    # Using a seed that will produce consistent keys for each node
+    seed="fastevm-node-${node_index}-p2p-secret-2025"
+    p2p_secret_file="${p2p_dir}/secret.key"
+    
+    if [ ! -f "$p2p_secret_file" ]; then
+        # Generate a deterministic secret using the seed
+        # This ensures each node gets a unique but predictable P2P secret
+        echo "$seed" | openssl dgst -sha256 -binary | openssl dgst -sha256 -hex | cut -d' ' -f2 | tr -d '\n' > "$p2p_secret_file"
+        
+        if [ $? -eq 0 ]; then
+            print_info "Generated P2P secret key for node $node_index: $p2p_secret_file"
+            
+            # Also create a hex version for easier use
+            hex_file="${p2p_dir}/secret.hex"
+            cli show-peer-id --file "$p2p_secret_file" --output "$hex_file"
+            
+            # Remove 0x prefix from the hex file content
+            if [ -f "$hex_file" ]; then
+                sed -i 's/^0x//' "$hex_file"
+            fi
+            
+            print_info "Created hex version: $hex_file"
+            
+            return 0
+        else
+            print_error "Failed to generate P2P secret key for node $node_index"
+            return 1
+        fi
+    else
+        print_info "P2P secret key already exists for node $node_index: $p2p_secret_file"
+        return 0
+    fi
 }
 
 generate_secret_key() {
@@ -110,6 +187,15 @@ update_consensus_config() {
         return 1
     fi
     
+    # Copy genesis.json to consensus volume for custom chain support
+    if [ -f "/shared/genesis.json" ]; then
+        if cp "/shared/genesis.json" "/consensus${node_index}/genesis.json"; then
+            print_info "Copied genesis.json to consensus volume: /consensus${node_index}/genesis.json"
+        else
+            print_warning "Failed to copy genesis.json to consensus volume"
+        fi
+    fi
+    
     # If config file from template and replace placeholders
      if [ -f "$template_file" ]; then
         print_info "Creating consensus config from template: $config_file"
@@ -148,6 +234,12 @@ prepare_data_dir() {
     success=false
   fi
   
+  # Generate P2P secret key
+  if ! generate_p2p_secret_key "$node_index" "$data_dir"; then
+    print_error "Failed to generate P2P secret key for node $node_index"
+    success=false
+  fi
+  
   # Copy genesis.json from template
   if cp /shared/genesis.json ${data_dir}/genesis.json; then
     print_info "Copied genesis.json to ${data_dir}/genesis.json"      
@@ -167,7 +259,7 @@ prepare_data_dir() {
     print_error "Failed to copy genesis.json to ${data_dir}/genesis.json"
     success=false
   fi
-  
+
   # Read the generated JWT secret
   jwt_secret=""
   if jwt_secret=$(read_jwt_secret "${data_dir}/jwt.hex"); then
@@ -201,6 +293,8 @@ consensus() {
   num_nodes=${1:-4}
   for i in $(seq 1 $num_nodes); do
     echo "Generating committee config for node $i"
+    # Copy parameters.yml to the consensus client directory
+    cp /parameters.yml /consensus${i}/parameters.yml
     fastevm-consensus generate-committee \
       --output "/consensus${i}/committees.yml" \
       --authorities "4" \
@@ -215,18 +309,40 @@ consensus() {
 main() {
     print_info "Starting FastEVM node setup process..."
     print_info "This will generate JWT secrets, genesis files and configs for both execution and consensus clients"
-    
+    apt update && apt install -y openssl
     # Define the number of nodes
     num_nodes=${1:-4}
     
     # Track success/failure for each node
     success_count=0
     failure_count=0
+    
+    # String to store enode URLs
+    enode_urls=""
+    
     # Loop through all nodes
     for i in $(seq 1 $num_nodes); do
         print_info "Processing node $i..."
         if prepare_data_dir $i; then
             success_count=$((success_count + 1))
+            
+            # Generate peer ID and enode URL for this node
+            local data_dir="/execution${i}"
+            local p2p_secret_hex="${data_dir}/p2p/secret.hex"
+            local node_name="execution-node${i}"
+            
+            if [ -f "$p2p_secret_hex" ]; then
+                local peer_id=$(cat "$p2p_secret_hex")
+                if [ -n "$peer_id" ]; then
+                    local enode_url=$(generate_enode_url "$peer_id" "$i")
+                    if [ -n "$enode_url" ]; then
+                        enode_urls="${enode_urls}${enode_url},"
+                        print_info "   ✅ Added enode: $enode_url"
+                    fi
+                fi
+            else
+                print_warning "   ⚠️  P2P secret file not found for node $i"
+            fi
         else
             failure_count=$((failure_count + 1))
         fi
@@ -235,6 +351,38 @@ main() {
     print_info "✅ FastEVM node setup completed!"
     print_info "   - Execution clients: JWT secrets and genesis files generated"
     print_info "   - Consensus clients: Config files updated with JWT secrets"
+    print_info ""
+    
+    # Generate and display BOOTNODES value
+    if [ -n "$enode_urls" ]; then
+        # Remove trailing comma
+        enode_urls="${enode_urls%,}"
+        
+        print_info "🌐 P2P Network Configuration:"
+        print_info "   Generated enode URLs:"
+        
+        # # Split the string and display each enode
+        # IFS=',' read -ra enode_array <<< "$enode_urls"
+        # for enode in "${enode_array[@]}"; do
+        #     print_info "   - $enode"
+        # done
+        
+        # Set BOOTNODES value
+        BOOTNODES="$enode_urls"
+        print_info ""
+        print_info "🔗 BOOTNODES value (comma-separated):"
+        print_info "   $BOOTNODES"
+        print_info ""
+        print_info "💡 You can use this BOOTNODES value in your docker-compose.yml or environment variables"
+        
+        # Export BOOTNODES for use in other scripts
+        export BOOTNODES
+        echo "export BOOTNODES=\"$BOOTNODES\"" > $DIR/bootnodes.env
+        print_info "   📁 BOOTNODES exported to $DIR/bootnodes.env"
+    else
+        print_warning "⚠️  No enode URLs generated - P2P networking may not work properly"
+    fi
+    
     print_info ""
     print_info "Node summary:"
     for i in $(seq 1 $num_nodes); do
@@ -251,7 +399,7 @@ main() {
     
     print_info ""
     print_info "Setup results: $success_count successful, $failure_count failed"
-    
+    # sleep infinity
     # Exit with error if any node failed
     if [ $failure_count -gt 0 ]; then
         print_warning "Some nodes failed to setup properly. Please check the logs above."
@@ -271,6 +419,16 @@ case "${1:-}" in
         ;;
     -t|--test)
         test_genesis_extraction
+        exit 0
+        ;;
+    -b|--bootnodes)
+        print_info "Current BOOTNODES value:"
+        bootnodes_value=$(read_bootnodes)
+        if [ -n "$bootnodes_value" ]; then
+            echo "$bootnodes_value"
+        else
+            print_warning "No BOOTNODES value found. Run the full setup first."
+        fi
         exit 0
         ;;
     "")

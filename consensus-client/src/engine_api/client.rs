@@ -217,7 +217,14 @@ impl ExecutionClient {
                         match may_tx {
                             Some(Ok(tx)) => {
                                 info!("Received transaction: {:?}", tx);
-                                self.send_transaction(tx).await;
+                                match self.send_transaction(tx).await {
+                                    Ok(()) => {
+                                        info!("Transaction sent successfully");
+                                    }
+                                    Err(e) => {
+                                        error!("Transaction sent failed: {:?}", e);
+                                    }
+                                }
                             }
                             Some(Err(err)) => {
                                 error!("Error receiving transaction: {:?}", err);

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use consensus_config::DIGEST_LENGTH;
 use consensus_core::Transaction;
-use fastcrypto::hash::{Digest, HashFunction};
+use fastcrypto::hash::Digest;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -13,8 +13,8 @@ pub type Block = Vec<Transaction>;
 ///
 /// Note: `BlockDigest` is computed over this struct, so any added field (without `#[serde(skip)]`)
 /// will affect the values of `BlockDigest` and `BlockRef`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct SignedBlock {
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SignedBlock {
     inner: Block,
     signature: Bytes,
 }
@@ -26,6 +26,11 @@ impl SignedBlock {
             inner: block,
             signature: Bytes::default(),
         }
+    }
+
+    /// Get a reference to the transactions in this block
+    pub fn transactions(&self) -> &Block {
+        &self.inner
     }
 
     // pub(crate) fn new(block: Block, protocol_keypair: &ProtocolKeyPair) -> ConsensusResult<Self> {

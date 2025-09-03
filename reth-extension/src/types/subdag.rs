@@ -14,7 +14,7 @@ pub struct VerifiedBlock {
     pub block: SignedBlock,
     pub digest: BlockDigest,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CommittedSubDag {
     pub leader: BlockRef,
     pub blocks: Vec<VerifiedBlock>,
@@ -22,7 +22,20 @@ pub struct CommittedSubDag {
     pub commit_ref: CommitRef,
     pub reputation_scores_desc: Vec<(AuthorityIndex, u64)>,
 }
-
+impl CommittedSubDag {
+    pub fn flatten_transactions(&self) -> Vec<Vec<u8>> {
+        self.blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .block
+                    .transactions()
+                    .iter()
+                    .map(|tx| tx.data().to_vec())
+            })
+            .collect()
+    }
+}
 impl From<ConsensusCommittedSubDag> for CommittedSubDag {
     fn from(subdag: ConsensusCommittedSubDag) -> Self {
         // Convert the leader BlockRef (this is already compatible since both use consensus_core::BlockRef)

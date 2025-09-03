@@ -5,23 +5,12 @@ WORKDIR /app
 
 # Copy workspace Cargo.toml first for better caching
 COPY Cargo.toml ./
-COPY fastevm/execution-client/Cargo.toml ./fastevm/execution-client/
-COPY fastevm/consensus-client/Cargo.toml ./fastevm/consensus-client/
-
-# Create dummy main files to cache dependencies
-RUN mkdir -p fastevm/execution-client/src fastevm/consensus-client/src
-RUN echo "fn main() {}" > fastevm/execution-client/src/main.rs
-RUN echo "fn main() {}" > fastevm/consensus-client/src/main.rs
+COPY execution-client/Cargo.toml ./execution-client/
+COPY consensus-client/Cargo.toml ./consensus-client/
+COPY reth-extension ./reth-extension
 
 # Build dependencies
-RUN cargo build --release --bin consensus-client
-
-# Copy actual source code
-COPY fastevm/consensus-client/src ./fastevm/consensus-client/src
-
-# Build the actual binary
-RUN touch fastevm/consensus-client/src/main.rs
-RUN cargo build --release --bin consensus-client
+RUN cargo build --release --bin consensus-client --bin fastevm-execution
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -39,6 +28,7 @@ WORKDIR /app
 
 # Copy binary from builder stage
 COPY --from=builder /app/target/release/consensus-client /app/consensus-client
+COPY --from=builder /app/target/release/fastevm-execution /app/fastevm-execution
 
 # Change ownership
 RUN chown -R fastevm:fastevm /app

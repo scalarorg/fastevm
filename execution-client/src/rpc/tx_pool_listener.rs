@@ -1,27 +1,17 @@
-#![warn(unused_crate_dependencies)]
-
-#[cfg(not(test))]
-use alloy_consensus::Transaction;
-#[cfg(not(test))]
-use alloy_primitives::Bytes;
-#[cfg(not(test))]
 use futures_util::StreamExt;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     PendingSubscriptionSink, SubscriptionMessage,
 };
-#[cfg(not(test))]
+
 use reth_ethereum::{
-    node::builder::{rpc::RpcContext, NodeAdapter},
-    pool::NewTransactionEvent,
+    pool::{NewTransactionEvent, TransactionPool},
+    tasks::TaskExecutor,
 };
-use reth_ethereum::{pool::TransactionPool, tasks::TaskExecutor};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::info;
 
 use reth_extension::TxpoolListenerApiServer;
-
-#[cfg(not(test))]
-use tokio_stream::wrappers::ReceiverStream;
 
 /// Our custom cli args extension that adds one flag to reth default CLI.
 #[derive(Debug, Clone, Copy, Default, clap::Args)]
@@ -46,7 +36,6 @@ impl<Pool> TxpoolListener<Pool> {
     }
 }
 
-#[cfg(not(test))]
 impl<Pool> TxpoolListenerApiServer for TxpoolListener<Pool>
 where
     Pool: TransactionPool + Clone + 'static,
@@ -76,9 +65,10 @@ where
             while let Some(NewTransactionEvent { transaction, .. }) = stream.next().await {
                 info!("Transaction received: {transaction:?}");
                 if transaction.is_local() {
-                    let tx_data = transaction.transaction.input();
+                    // let tx_data = transaction.transaction.input();
+                    let tx_hash = transaction.hash().clone();
                     let msg = SubscriptionMessage::from(
-                        serde_json::value::to_raw_value(&tx_data).expect("serialize"),
+                        serde_json::value::to_raw_value(&tx_hash).expect("serialize"),
                     );
                     let _ = sink.send(msg).await;
                 }
@@ -101,43 +91,43 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
-    #[cfg(test)]
-    impl<Pool> TxpoolListenerApiServer for TxpoolListener<Pool>
-    where
-        Pool: TransactionPool + Clone + 'static,
-    {
-        fn transaction_count(&self) -> RpcResult<usize> {
-            Ok(self.pool.pool_size().total)
-        }
+    // #[cfg(test)]
+    // impl<Pool> TxpoolListenerApiServer for TxpoolListener<Pool>
+    // where
+    //     Pool: TransactionPool + Clone + 'static,
+    // {
+    //     fn transaction_count(&self) -> RpcResult<usize> {
+    //         Ok(self.pool.pool_size().total)
+    //     }
 
-        fn subscribe_transactions(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
-            let delay = 10;
-            let pool = self.pool.clone();
-            tokio::spawn(async move {
-                // Accept the subscription
-                let sink = match pending.accept().await {
-                    Ok(sink) => sink,
-                    Err(err) => {
-                        eprintln!("failed to accept subscription: {err}");
-                        return;
-                    }
-                };
+    //     fn subscribe_transactions(&self, pending: PendingSubscriptionSink) -> SubscriptionResult {
+    //         let delay = 10;
+    //         let pool = self.pool.clone();
+    //         tokio::spawn(async move {
+    //             // Accept the subscription
+    //             let sink = match pending.accept().await {
+    //                 Ok(sink) => sink,
+    //                 Err(err) => {
+    //                     eprintln!("failed to accept subscription: {err}");
+    //                     return;
+    //                 }
+    //             };
 
-                // Send pool size repeatedly, with a 10-second delay
-                loop {
-                    sleep(Duration::from_millis(delay)).await;
-                    let message = SubscriptionMessage::from(
-                        serde_json::value::to_raw_value(&pool.pool_size().total)
-                            .expect("serialize usize"),
-                    );
+    //             // Send pool size repeatedly, with a 10-second delay
+    //             loop {
+    //                 sleep(Duration::from_millis(delay)).await;
+    //                 let message = SubscriptionMessage::from(
+    //                     serde_json::value::to_raw_value(&pool.pool_size().total)
+    //                         .expect("serialize usize"),
+    //                 );
 
-                    // Just ignore errors if a client has dropped
-                    let _ = sink.send(message).await;
-                }
-            });
-            Ok(())
-        }
-    }
+    //                 // Just ignore errors if a client has dropped
+    //                 let _ = sink.send(message).await;
+    //             }
+    //         });
+    //         Ok(())
+    //     }
+    // }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_call_transaction_http() {

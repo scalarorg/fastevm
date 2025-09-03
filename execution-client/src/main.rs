@@ -12,23 +12,18 @@ use clap::Parser;
 use reth_ethereum::{
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
     node::{
-        builder::{
-            components::BasicPayloadServiceBuilder,
-            rpc::{RpcAddOns, RpcHandle},
-            EngineNodeLauncher, FullNode, NodeHandle,
-        },
+        builder::{components::BasicPayloadServiceBuilder, NodeHandle},
         node::EthereumAddOns,
         EthereumNode,
     },
 };
-use std::collections::VecDeque;
 use std::sync::Arc;
+use std::{collections::VecDeque, sync::Mutex};
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::sync::Mutex;
 mod consensus;
 mod payload;
 mod rpc;
-mod transaction_listener;
+// mod transaction_listener;
 
 use crate::{
     consensus::MysticetiConsensus,
@@ -84,10 +79,27 @@ fn main() {
                     Ok(())
                 })
                 .on_node_started(move |node| {
-                    let payload_builder_handle = node.payload_builder_handle.clone();
+                    let payload_builder_handle: reth_payload_builder::PayloadBuilderHandle<
+                        reth_ethereum::node::EthEngineTypes,
+                    > = node.payload_builder_handle.clone();
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
-                    let mut mysticeti_consensus =
-                        MysticetiConsensus::new(subdag_rx, payload_builder_handle, engine_handle);
+                    use reth_ethereum::chainspec::ChainSpecProvider;
+                    node.provider.chain_spec();
+                    let mut mysticeti_consensus: MysticetiConsensus<
+                        reth_ethereum::provider::providers::BlockchainProvider<
+                            reth_ethereum::node::api::NodeTypesWithDBAdapter<
+                                EthereumNode,
+                                Arc<reth_ethereum::provider::db::DatabaseEnv>,
+                            >,
+                        >,
+                        reth_ethereum_engine_primitives::EthEngineTypes,
+                    > = MysticetiConsensus::new(
+                        subdag_rx,
+                        subdag_queue,
+                        node.provider,
+                        payload_builder_handle,
+                        engine_handle,
+                    );
                     node.task_executor.spawn(async move {
                         mysticeti_consensus.start().await;
                     });

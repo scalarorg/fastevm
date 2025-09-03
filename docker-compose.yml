@@ -1,12 +1,25 @@
-services:
-  # ===== INIT CONTAINERS =====
-  
+x-execution-service: &execution-service
+  build:
+    context: .
+    dockerfile: Dockerfile.el.dev
+    # dockerfile: Dockerfile.reth
+  image: scalarorg/fastevm-reth:latest
+  #image: ghcr.io/paradigmxyz/reth:v1.6.0
+  user: root
+  restart: always
+
+x-consensus-service: &consensus-service
+  build:
+    context: .
+    dockerfile: Dockerfile.cl.dev
+  image: scalarorg/fastevm-consensus:latest
+  user: root
+  restart: always
+
+services:  
   # Genesis and JWT setup init container
   genesis-init:
-    build:
-      context: .
-      dockerfile: Dockerfile.el.dev
-    image: scalarorg/fastevm-execution:latest
+    <<: *execution-service
     container_name: fastevm-genesis-init
     working_dir: /scripts
     user: root
@@ -30,10 +43,7 @@ services:
 
   # Committee configuration init container
   consensus-init:
-    build:
-      context: .
-      dockerfile: Dockerfile.cl.dev
-    image: scalarorg/fastevm-consensus:latest
+    <<: *consensus-service
     container_name: fastevm-consensus-init
     user: root
     volumes:
@@ -41,6 +51,7 @@ services:
       - consensus-data2:/consensus2
       - consensus-data3:/consensus3
       - consensus-data4:/consensus4
+      - ./consensus-client/examples/parameters.yml:/parameters.yml
       - ./scripts:/scripts
     entrypoint: ["/bin/sh", "/scripts/init.sh", "--consensus"]
     networks:
@@ -51,37 +62,65 @@ services:
       - genesis-init
 
   # ===== EXECUTION NODES =====
-  
-  # Execution Node 1
+  execution-bootnode:
+    <<: *execution-service
+    container_name: execution-bootnode
+    # entrypoint: ["sleep", "infinity"]
+    command: [
+      "p2p", "bootnode",
+      "--addr", "0.0.0.0:30301",
+      "-vvvv"
+    ]
+    volumes:
+      - ./scripts:/scripts:ro
+    ports:
+      - "30301:30301"
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.19
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  # Execution Node 1 (Reference/Boot Node)
   execution-node1:
-    build:
-      context: .
-      dockerfile: Dockerfile.el.dev
-    image: scalarorg/fastevm-execution:latest
+    <<: *execution-service
     container_name: fastevm-execution1
-    user: root
+    hostname: execution1
     ports:
       - "8551:8551"   # Engine API
       - "8545:8545"   # HTTP RPC
       - "8546:8546"   # WS RPC
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
     volumes:
       - execution-data1:/data:rw
       - ./scripts:/scripts:ro
+    #entrypoint: ["sleep", "infinity"]
     command: [
       "node",
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin,debug",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin,debug",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "-vvvv"
     ]
     networks:
       fastevm-network:
@@ -95,20 +134,21 @@ services:
     depends_on:
       genesis-init:
         condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
     restart: unless-stopped
 
   # Execution Node 2
   execution-node2:
-    build:
-      context: .
-      dockerfile: Dockerfile.el.dev
-    image: scalarorg/fastevm-execution:latest  
+    <<: *execution-service
     container_name: fastevm-execution2
-    user: root
+    hostname: execution2
     ports:
       - "8552:8551"   # Engine API
       - "8547:8545"   # HTTP RPC
       - "8548:8546"   # WS RPC
+      - "30304:30303/tcp"
+      - "30304:30303/udp"
     volumes:
       - execution-data2:/data:rw
       - ./scripts:/scripts:ro
@@ -117,16 +157,25 @@ services:
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "-vvvv"
     ]
     networks:
       fastevm-network:
@@ -140,20 +189,21 @@ services:
     depends_on:
       genesis-init:
         condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
     restart: unless-stopped
 
   # Execution Node 3
   execution-node3:
-    build:
-      context: .
-      dockerfile: Dockerfile.el.dev
-    image: scalarorg/fastevm-execution:latest  
+    <<: *execution-service
     container_name: fastevm-execution3
-    user: root
+    hostname: execution3
     ports:
       - "8553:8551"   # Engine API
       - "8549:8545"   # HTTP RPC
       - "8550:8546"   # WS RPC
+      - "30305:30303/tcp"
+      - "30305:30303/udp"
     volumes:
       - execution-data3:/data:rw
       - ./scripts:/scripts:ro
@@ -162,16 +212,25 @@ services:
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "-vvvv"
     ]
     networks:
       fastevm-network:
@@ -185,20 +244,21 @@ services:
     depends_on:
       genesis-init:
         condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
     restart: unless-stopped
 
   # Execution Node 4
   execution-node4:
-    build:
-      context: .
-      dockerfile: Dockerfile.el.dev
-    image: scalarorg/fastevm-execution:latest 
+    <<: *execution-service
     container_name: fastevm-execution4
-    user: root
+    hostname: execution4
     ports:
       - "8554:8551"   # Engine API
       - "8555:8545"   # HTTP RPC
       - "8556:8546"   # WS RPC
+      - "30306:30303/tcp"
+      - "30306:30303/udp"
     volumes:
       - execution-data4:/data:rw
       - ./scripts:/scripts:ro
@@ -207,16 +267,25 @@ services:
       "--chain", "/data/genesis.json",
       "--datadir", "/data",
       "--http",
-      "--http.api", "eth,net,web3",
+      "--http.api", "eth,net,web3,admin",
       "--http.addr", "0.0.0.0",
       "--http.port", "8545",
+      "--http.corsdomain", "*",
       "--ws",
-      "--ws.api", "eth,net,web3",
+      "--ws.api", "eth,net,web3,admin",
       "--ws.addr", "0.0.0.0",
       "--ws.port", "8546",
+      "--ws.origins", "*",
       "--authrpc.addr", "0.0.0.0",
       "--authrpc.port", "8551",
-      "--authrpc.jwtsecret", "/data/jwt.hex"
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "-vvvv"
     ]
     networks:
       fastevm-network:
@@ -230,25 +299,23 @@ services:
     depends_on:
       genesis-init:
         condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
     restart: unless-stopped
 
   # ===== CONSENSUS NODES =====
   
   # Consensus Node 1
   consensus-node1:
-    build:
-      context: .
-      dockerfile: Dockerfile.cl.dev
-    image: scalarorg/fastevm-consensus:latest
+    <<: *consensus-service
     container_name: fastevm-consensus1
-    user: root
     volumes:
       - consensus-data1:/app/data:rw
     environment:
       - RUST_LOG=info
       - NODE_INDEX=0
       - NODE_IP=172.20.0.10
-   # entrypoint: ["sleep", "infinity"]
+    # entrypoint: ["sleep", "infinity"]
     command: [
       "start",
       "--config", "/app/data/node.yml"
@@ -265,12 +332,8 @@ services:
 
   # Consensus Node 2
   consensus-node2:
-    build:
-      context: ./consensus-client
-      dockerfile: Dockerfile.cl.dev
-    image: scalarorg/fastevm-consensus:latest
+    <<: *consensus-service
     container_name: fastevm-consensus2
-    user: root
     volumes:
       - consensus-data2:/app/data
     environment:
@@ -293,12 +356,8 @@ services:
 
   # Consensus Node 3
   consensus-node3:
-    build:
-      context: .
-      dockerfile: Dockerfile.cl.dev
-    image: scalarorg/fastevm-consensus:latest
+    <<: *consensus-service
     container_name: fastevm-consensus3
-    user: root
     volumes:
       - consensus-data3:/app/data
     environment:
@@ -321,12 +380,8 @@ services:
 
   # Consensus Node 4
   consensus-node4:
-    build:
-      context: .
-      dockerfile: Dockerfile.cl.dev
-    image: scalarorg/fastevm-consensus:latest
+    <<: *consensus-service
     container_name: fastevm-consensus4
-    user: root
     volumes:
       - consensus-data4:/app/data
     environment:
@@ -353,7 +408,7 @@ services:
     image: nginx:alpine
     container_name: fastevm-monitoring
     ports:
-      - "8080:80"
+      - "8088:80"
     volumes:
       - ./monitoring/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./monitoring/index.html:/usr/share/nginx/html/index.html:ro

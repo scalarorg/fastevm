@@ -6,7 +6,6 @@ use reth_ethereum::{
         api::{ConfigureEvm, FullNodeTypes, NodeTypes, PayloadTypes, PrimitivesTy, TxTy},
         builder::{components::PayloadBuilderBuilder, BuilderContext, PayloadBuilderConfig},
         engine::EthPayloadAttributes,
-        EthereumPayloadBuilder,
     },
     pool::{PoolTransaction, TransactionPool},
     EthPrimitives,
@@ -16,12 +15,11 @@ use reth_ethereum_payload_builder::EthereumBuilderConfig;
 use reth_extension::CommittedSubDag;
 //use reth_ethereum_payload_builder::EthereumBuilderConfig;
 use crate::payload::MysticetiPayloadBuilder;
-use reth_payload_builder::{
-    EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderHandle, PayloadBuilderService,
+use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
 };
-use std::collections::VecDeque;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 // use reth_transaction_pool::{PoolTransaction, TransactionPool};
 
 #[derive(Debug)]

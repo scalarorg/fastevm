@@ -15,9 +15,9 @@ WORKDIR /app
 
 # Copy the entire workspace
 COPY Cargo.toml Cargo.lock ./
-COPY execution-client/Cargo.toml ./execution-client/
-# Copy the consensus-client package
-COPY consensus-client ./consensus-client
+COPY consensus-client/Cargo.toml ./consensus-client/
+COPY execution-client ./execution-client
+COPY reth-extension ./reth-extension
 
 # Build all binaries from consensus-client crate
 RUN cargo build --release --bin fastevm-consensus

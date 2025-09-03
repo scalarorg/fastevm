@@ -1,70 +1,189 @@
-use reth_ethereum::node::api::{
-    BeaconConsensusEngineHandle, BeaconForkChoiceUpdateError, EngineApiMessageVersion, PayloadTypes,
+use alloy_primitives::{Address, B256};
+use anyhow::Result;
+use reth_ethereum::{
+    chainspec::{ChainSpecProvider, EthChainSpec},
+    node::{
+        api::{
+            BeaconConsensusEngineHandle, BuiltPayload, EngineApiMessageVersion, ExecutionPayload,
+            PayloadTypes,
+        },
+        engine::EthPayloadAttributes,
+    },
+    rpc::types::engine::{ForkchoiceState, ForkchoiceUpdated},
 };
-use reth_ethereum::rpc::types::engine::{ForkchoiceState, ForkchoiceUpdated, PayloadStatus};
-use reth_ethereum::tasks::TaskExecutor;
+
+use reth_ethereum_engine_primitives::EthEngineTypes;
 use reth_extension::CommittedSubDag;
-use reth_payload_builder::PayloadBuilderHandle;
+use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tracing::info;
 
-pub struct MysticetiConsensus<Payload>
+pub struct MysticetiConsensus<Provider, Payload>
 where
+    Provider: ChainSpecProvider + Unpin + 'static,
     Payload: PayloadTypes,
 {
     subdag_rx: UnboundedReceiver<CommittedSubDag>,
     subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
     payload_builder_handle: PayloadBuilderHandle<Payload>,
     engine_handle: BeaconConsensusEngineHandle<Payload>,
+    provider: Provider,
+    //Keep track of the last payload
+    //This payload is used to build new forkchoice state and next payloadAttribute
+    last_payload: Option<Payload::ExecutionData>,
+    pending_payload_id: Option<PayloadId>,
 }
 
-impl<Payload> MysticetiConsensus<Payload>
+impl<Provider, Payload> MysticetiConsensus<Provider, Payload>
 where
+    Provider: ChainSpecProvider + Unpin + 'static,
     Payload: PayloadTypes,
 {
     pub fn new(
         subdag_rx: UnboundedReceiver<CommittedSubDag>,
+        subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
+        provider: Provider,
         payload_builder_handle: PayloadBuilderHandle<Payload>,
         engine_handle: BeaconConsensusEngineHandle<Payload>,
     ) -> Self {
-        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
-
         Self {
             subdag_rx,
-            subdag_queue: Arc::clone(&subdag_queue),
+            subdag_queue,
             payload_builder_handle,
             engine_handle,
+            provider,
+            last_payload: None,
+            pending_payload_id: None,
         }
     }
 }
 
-impl<Payload> MysticetiConsensus<Payload>
+impl<Provider, Payload> MysticetiConsensus<Provider, Payload>
 where
+    Provider: ChainSpecProvider + Unpin + 'static,
     Payload: PayloadTypes,
+{
+    /// Process a single subdag
+    async fn process_single_subdag(&mut self, subdag: CommittedSubDag) -> Result<()> {
+        //Add subdag to queue
+        let mut queue_guard = self
+            .subdag_queue
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to lock subdag queue"))?;
+        queue_guard.push_back(subdag.clone());
+        info!(
+            "Subdag queued successfully. Queue size: {}",
+            queue_guard.len()
+        );
+        Ok(())
+    }
+
+    /// Get current forkchoice state
+    async fn create_forkchoice_state(&self) -> ForkchoiceState {
+        //Todo: Implement this
+        match &self.last_payload {
+            Some(payload) => {
+                let block_hash = payload.block_hash();
+                ForkchoiceState {
+                    head_block_hash: block_hash,
+                    safe_block_hash: block_hash,
+                    finalized_block_hash: block_hash,
+                }
+            }
+            None => {
+                let chain_spec = self.provider.chain_spec();
+                let head_block_hash = chain_spec.genesis_hash();
+                let safe_block_hash = head_block_hash;
+                let finalized_block_hash = head_block_hash;
+                ForkchoiceState {
+                    head_block_hash,
+                    safe_block_hash,
+                    finalized_block_hash,
+                }
+            }
+        }
+    }
+
+    async fn retrieve_payload(
+        &self,
+        payload_id: PayloadId,
+    ) -> Result<Option<Payload::BuiltPayload>> {
+        self.payload_builder_handle
+            .best_payload(payload_id)
+            .await
+            .transpose()
+            .map_err(anyhow::Error::msg)
+    }
+
+    /// Try to execute the pending payload
+    async fn try_execute_pending_payload(&mut self, payload_id: PayloadId) -> Result<()> {
+        let pending_payload = self.retrieve_payload(payload_id).await?;
+        if let Some(pending_payload) = pending_payload {
+            info!(
+                "Payload built successfully. Update last payload to {:?} and clear pending payload id:",
+                pending_payload
+            );
+            self.pending_payload_id = None;
+            let execution_payload = Payload::block_to_payload(pending_payload.block().clone());
+            self.last_payload = Some(execution_payload.clone());
+            let result = self.engine_handle.new_payload(execution_payload).await;
+            if result.is_err() {
+                info!("New payload failed: {:?}", result);
+            }
+        } else {
+            info!("Payload not found");
+        }
+
+        Ok(())
+    }
+    /// Get the current queue size
+    pub async fn queue_size(&self) -> Result<usize> {
+        let queue_guard = self
+            .subdag_queue
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to lock subdag queue"))?;
+        Ok(queue_guard.len())
+    }
+}
+
+impl<Provider> MysticetiConsensus<Provider, EthEngineTypes>
+where
+    Provider: ChainSpecProvider + Unpin + 'static,
 {
     pub async fn start(&mut self) {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
         loop {
-            // Process subdags from the queue
-            let subdag = {
-                let mut queue_guard = self.subdag_queue.lock().await;
-                queue_guard.pop_front()
-            };
-            //Process subdag from queue
-            if let Some(subdag) = subdag {
-                let result = self.process_single_subdag(subdag).await;
-                if result.is_err() {
-                    info!("Forkchoice update failed: {:?}", result);
+            if self.queue_size().await.unwrap_or_default() > 0 {
+                info!(
+                    "Queue size: {}. Start processing by building next payload or executing pending payload.",
+                    self.queue_size().await.unwrap_or_default()
+                );
+                match &self.pending_payload_id {
+                    //If there is a pending payload id, try to get the payload and execute it in the engine
+                    Some(payload_id) => {
+                        let result = self.try_execute_pending_payload(payload_id.clone()).await;
+                        if result.is_err() {
+                            info!("try execute pending payload failed: {:?}", result);
+                        }
+                    }
+                    //If no pending payload id, build next payload
+                    None => {
+                        let result = self.build_next_payload().await;
+                        if result.is_err() {
+                            info!("Build next payload failed: {:?}", result);
+                        }
+                    }
                 }
             }
 
             //Try get subdag from channel and add to queue
             if let Some(subdag) = self.subdag_rx.recv().await {
-                self.queue_subdag(subdag).await;
+                let result = self.process_single_subdag(subdag).await;
+                if result.is_err() {
+                    info!("Process single subdag failed: {:?}", result);
+                }
             }
 
             //Update forkchoice state and payload attributes
@@ -72,21 +191,25 @@ where
         }
     }
     /// Create next payload attributes
-    async fn create_payload_attributes(&self) -> Option<Payload::PayloadAttributes> {
-        //Todo: Implement this
-        None
-    }
-    /// Get current forkchoice state
-    async fn create_forkchoice_state(&self) -> ForkchoiceState {
-        //Todo: Implement this
-        ForkchoiceState::default()
-    }
-
-    /// Process a single subdag
-    async fn process_single_subdag(
+    async fn create_payload_attributes(
         &self,
-        subdag: CommittedSubDag,
-    ) -> Result<(), BeaconForkChoiceUpdateError> {
+    ) -> Option<<EthEngineTypes as PayloadTypes>::PayloadAttributes> {
+        match &self.last_payload {
+            Some(payload) => {
+                let timestamp = payload.timestamp();
+                let attributes = EthPayloadAttributes {
+                    timestamp,
+                    prev_randao: B256::random(),
+                    suggested_fee_recipient: Address::random(),
+                    withdrawals: Default::default(),
+                    parent_beacon_block_root: Some(payload.block_hash()),
+                };
+                Some(attributes)
+            }
+            None => None,
+        }
+    }
+    pub async fn build_next_payload(&mut self) -> Result<()> {
         let forkchoice_state = self.create_forkchoice_state().await;
         let payload_attributes = self.create_payload_attributes().await;
         let ForkchoiceUpdated {
@@ -99,66 +222,21 @@ where
                 payload_attributes,
                 EngineApiMessageVersion::default(),
             )
-            .await?;
+            .await
+            .map_err(anyhow::Error::msg)?;
         if payload_status.is_valid() {
-            info!("Forkchoice updated successfully: {:?}", payload_id);
             if let Some(payload_id) = payload_id {
-                // 1. Todo: Build next payload
-                match self.payload_builder_handle.best_payload(payload_id).await {
-                    Some(Ok(payload)) => {
-                        info!("Payload built successfully: {:?}", payload);
-                        // self.engine_handle.new_payload(payload.execution_data).await;
-                    }
-                    Some(Err(e)) => {
-                        info!("Payload build failed: {:?}", e);
-                    }
-                    None => info!("Payload not found"),
-                }
-                // 2. Todo: Commit new payload
-                //Self::commit_new_payload(&self.engine_handle).await;
+                info!(
+                    "Forkchoice updated successfully. Update pending payload id to: {:?}.",
+                    payload_id
+                );
+                self.pending_payload_id = Some(payload_id);
+            } else {
+                info!("Forkchoice updated successfully without payload id");
             }
         } else {
             info!("Forkchoice update failed: {:?}", payload_status);
         }
         Ok(())
-    }
-}
-
-impl<Payload> MysticetiConsensus<Payload>
-where
-    Payload: PayloadTypes,
-{
-    /// Add committed subdag to the queue
-    pub async fn queue_subdag(&mut self, subdag: CommittedSubDag) {
-        let mut queue_guard = self.subdag_queue.lock().await;
-        queue_guard.push_back(subdag.clone());
-        info!(
-            "Subdag queued successfully. Queue size: {}",
-            queue_guard.len()
-        );
-    }
-
-    /// Get the current queue size
-    pub async fn queue_size(&self) -> usize {
-        let queue_guard = self.subdag_queue.lock().await;
-        queue_guard.len()
-    }
-}
-
-impl<Payload> MysticetiConsensus<Payload>
-where
-    Payload: PayloadTypes,
-{
-    pub async fn build_next_payload(subdag: &CommittedSubDag) {
-        info!("Building payload for subdag: {:?}", subdag);
-        // 1. Get next committed subdag from the queue
-        // 2. Build a new payload with transactions
-    }
-
-    pub async fn commit_new_payload(_engine_handle: &BeaconConsensusEngineHandle<Payload>) {
-        info!("Committing new payload to engine");
-        // Todo: Get created payload then send to the engine_handle
-        // let payload = Payload::default();
-        // engine_handle.new_payload(payload).await;
     }
 }

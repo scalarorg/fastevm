@@ -15,10 +15,8 @@ WORKDIR /app
 
 # Copy the entire workspace
 COPY Cargo.toml Cargo.lock ./
-# Copy the execution-client package
 COPY execution-client ./execution-client
-# Copy the consensus-client package
 COPY consensus-client ./consensus-client
-
+COPY reth-extension ./reth-extension
 # Build all binaries
 RUN cargo build --release
