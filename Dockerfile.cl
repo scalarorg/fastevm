@@ -18,6 +18,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY consensus-client/Cargo.toml ./consensus-client/
 COPY execution-client ./execution-client
 COPY reth-extension ./reth-extension
+COPY testing ./testing
 
 # Build all binaries from consensus-client crate
 RUN cargo build --release --bin fastevm-consensus

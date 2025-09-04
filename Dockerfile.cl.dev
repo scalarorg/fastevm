@@ -12,9 +12,11 @@ COPY Cargo.toml Cargo.lock ./
 COPY execution-client ./execution-client
 COPY reth-extension ./reth-extension
 COPY consensus-client ./consensus-client
+COPY testing ./testing
 
 # Build all binaries from consensus-client crate
 RUN cargo build --profile $BUILD_PROFILE --bin fastevm-consensus
+RUN cp /app/target/$BUILD_PROFILE/fastevm-consensus /app/fastevm-consensus
 
 # Create a minimal runtime image
 FROM debian:bookworm-slim
@@ -31,7 +33,7 @@ RUN useradd -m -u 1000 mysticeti
 WORKDIR /app
 
 # Copy all binaries from builder
-COPY --from=builder /app/target/$BUILD_PROFILE/fastevm-consensus /usr/local/bin/
+COPY --from=builder /app/fastevm-consensus /usr/local/bin/
 RUN ln -sf /usr/local/bin/fastevm-consensus /usr/local/bin/mysticeti
 # Create data directory
 RUN mkdir -p /app/data && chown -R mysticeti:mysticeti /app

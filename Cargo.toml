@@ -1,10 +1,29 @@
+[workspace.package]
+version = "1.6.0"
+edition = "2021"
+rust-version = "1.86"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/scalarorg/fastevm"
+repository = "https://github.com/scalarorg/fastevm"
+exclude = [".github/"]
+
 [workspace]
 members = [
     "reth-extension",
     "execution-client",
-    "consensus-client"
+    "consensus-client",
+    "testing/integration"
 ]
 resolver = "2"
+
+[workspace.lints]
+rust.missing_debug_implementations = "warn"
+rust.missing_docs = "warn"
+rust.rust_2018_idioms = { level = "deny", priority = -1 }
+rust.unreachable_pub = "warn"
+rust.unused_must_use = "deny"
+rustdoc.all = "warn"
+# rust.unnameable-types = "warn"
 
 [workspace.dependencies]
 # Mysticeti
@@ -19,6 +38,29 @@ alloy-eips = { version = "1.0.23", default-features = false }
 alloy-harkforks = { version = "0.2.12", default-features = false }
 alloy-primitives = { version = "1.3.0", default-features = false, features = ["map-foldhash"] }
 alloy-rpc-types-engine = { version = "1.0.23", default-features = false }
+
+# Reth
+
+# For ef-tests
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-chainspec" }
+reth-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-consensus" }
+reth-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db", features = ["mdbx", "test-utils", "disable-lock"] }
+reth-db-api= { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db-api" }
+reth-db-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db-common" }
+reth-ethereum-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-consensus" }
+reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-primitives" }
+reth-revm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-revm", features = ["std", "witness"] }
+reth-evm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm" }
+reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm-ethereum" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives-traits" }
+reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-provider", features = ["test-utils"] }
+reth-stateless = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-stateless" }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-tracing" }
+reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie" }
+reth-trie-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie-db" }
+revm = { version = "28.0.1", default-features = false }
+walkdir = "2.3.3"
+
 base64 = "0.22.1"
 tokio = { version = "1.0", features = ["full"] }
 
@@ -67,11 +109,15 @@ derive-getters = "0.5.0"
 # Testing dependencies
 tokio-test = "0.4"
 criterion = "0.7"
+alloy-genesis = { version = "1.0.23", default-features = false }
+alloy-rlp = { version = "0.3.10", default-features = false, features = ["core-net"] }
+rayon = "1.7"
 
 # Add execution and consensus client as dependencies for integration tests
 reth-extension = { path = "reth-extension" }
-execution-client = { path = "execution-client" }
-consensus-client = { path = "consensus-client" }
+fastevm-execution = { path = "execution-client" }
+fastevm-consensus = { path = "consensus-client" }
+
 [profile.release]
 opt-level = 3
 lto = true

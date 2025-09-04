@@ -17,6 +17,7 @@ COPY Cargo.toml ./
 COPY consensus-client/Cargo.toml ./consensus-client/
 COPY execution-client ./execution-client
 COPY reth-extension ./reth-extension
+COPY testing ./testing
 
 # Build execution client
 RUN cargo build --release --bin fastevm-execution

@@ -51,6 +51,7 @@ impl ValidatorNode {
     pub async fn start(
         &mut self,
         committee: Committee,
+        parameters: Parameters,
         keypairs: Vec<(NetworkKeyPair, ProtocolKeyPair)>,
         registry_service: RegistryService,
         commit_consumer: CommitConsumer,
@@ -71,8 +72,14 @@ impl ValidatorNode {
         // Create parameters
         let parameters = Parameters {
             db_path,
-            ..Default::default()
+            // Note: The actual Parameters struct from consensus-config may have different fields
+            // This is a placeholder - you may need to map the consensus_params fields
+            // to the actual Parameters struct fields based on the consensus-config crate
+            ..parameters
         };
+
+        // Log the loaded parameters for debugging
+        info!("Loaded consensus parameters: {:?}", parameters);
 
         // Start the consensus authority
         let consensus_authority = ConsensusAuthority::start(
@@ -448,6 +455,7 @@ mod tests {
         let result = validator
             .start(
                 committee,
+                Parameters::default(),
                 keypairs,
                 registry_service,
                 commit_consumer,
@@ -477,6 +485,7 @@ mod tests {
             let _result = validator
                 .start(
                     committee,
+                    Parameters::default(),
                     keypairs,
                     registry_service,
                     commit_consumer,
@@ -504,6 +513,7 @@ mod tests {
         let _result = validator
             .start(
                 committee,
+                Parameters::default(),
                 keypairs,
                 registry_service,
                 commit_consumer,
@@ -538,6 +548,7 @@ mod tests {
             validator
                 .start(
                     committee,
+                    Parameters::default(),
                     keypairs,
                     registry_service,
                     commit_consumer,
@@ -607,6 +618,7 @@ mod tests {
         let _result = validator
             .start(
                 committee,
+                Parameters::default(),
                 keypairs,
                 registry_service,
                 commit_consumer,
@@ -637,6 +649,7 @@ mod tests {
             let _result = validator
                 .start(
                     committee,
+                    Parameters::default(),
                     keypairs,
                     registry_service,
                     commit_consumer,

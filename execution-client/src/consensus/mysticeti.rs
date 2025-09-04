@@ -240,3 +240,85 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reth_ethereum::pool::noop::NoopTransactionPool;
+    use std::sync::Arc;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn test_committed_subdag_default() {
+        let subdag = CommittedSubDag::default();
+        assert!(subdag.blocks.is_empty());
+        assert!(subdag.flatten_transactions().is_empty());
+    }
+
+    #[test]
+    fn test_committed_subdag_flatten_transactions() {
+        let subdag = CommittedSubDag::default();
+        let transactions = subdag.flatten_transactions();
+        assert!(transactions.is_empty());
+    }
+
+    #[test]
+    fn test_payload_id_default() {
+        let payload_id = PayloadId::default();
+        assert_eq!(payload_id, PayloadId::default());
+    }
+
+    #[test]
+    fn test_forkchoice_state_creation() {
+        let head_block_hash = B256::default();
+        let safe_block_hash = B256::default();
+        let finalized_block_hash = B256::default();
+
+        let forkchoice_state = ForkchoiceState {
+            head_block_hash,
+            safe_block_hash,
+            finalized_block_hash,
+        };
+
+        assert_eq!(forkchoice_state.head_block_hash, head_block_hash);
+        assert_eq!(forkchoice_state.safe_block_hash, safe_block_hash);
+        assert_eq!(forkchoice_state.finalized_block_hash, finalized_block_hash);
+    }
+
+    #[test]
+    fn test_subdag_queue_operations() {
+        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
+
+        // Test adding to queue
+        {
+            let mut queue = subdag_queue.lock().unwrap();
+            queue.push_back(CommittedSubDag::default());
+        }
+
+        // Test queue size
+        assert_eq!(subdag_queue.lock().unwrap().len(), 1);
+
+        // Test popping from queue
+        {
+            let mut queue = subdag_queue.lock().unwrap();
+            let subdag = queue.pop_front();
+            assert!(subdag.is_some());
+        }
+
+        // Test empty queue
+        assert_eq!(subdag_queue.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_channel_operations() {
+        let (subdag_tx, mut subdag_rx) = unbounded_channel();
+
+        // Test sending and receiving
+        let test_subdag = CommittedSubDag::default();
+        subdag_tx.send(test_subdag).unwrap();
+
+        // Test that we can receive it
+        let received = subdag_rx.try_recv().unwrap();
+        assert_eq!(received.blocks.len(), 0);
+    }
+}

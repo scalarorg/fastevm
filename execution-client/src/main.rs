@@ -49,11 +49,7 @@ fn main() {
                 BasicPayloadServiceBuilder::<MysticetiPayloadBuilderFactory>::new(
                     MysticetiPayloadBuilderFactory::new(subdag_queue.clone()),
                 );
-
-            let NodeHandle {
-                node: _,
-                node_exit_future,
-            } = builder
+            let handle = builder
                 .with_types::<EthereumNode>()
                 // Configure the components of the node
                 // use default ethereum components but use our custom payload builder
@@ -66,16 +62,12 @@ fn main() {
 
                     // here we get the configured pool.
                     let pool = ctx.pool().clone();
-                    //FullNode
-                    let node_adapter = ctx.node();
-                    let task_executor = node_adapter.task_executor.clone();
-                    let listener = TxpoolListener::new(task_executor.clone(), pool.clone());
+                    let listener = TxpoolListener::new(pool.clone());
                     let consensus_handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
                     // now we merge our extension namespace into all configured transports
                     ctx.modules.merge_configured(listener.into_rpc())?;
                     ctx.modules.merge_http(consensus_handler.into_rpc())?;
-                    info!("txpool listener enabled");
-
+                    info!("successfully extended rpc modules with txpool listener");
                     Ok(())
                 })
                 .on_node_started(move |node| {
@@ -108,6 +100,11 @@ fn main() {
                 })
                 .launch()
                 .await?;
+            let NodeHandle {
+                node: _,
+                node_exit_future,
+            } = handle;
+
             // create a new subscription to pending transactions
             // let mut pending_transactions = node.pool.new_pending_pool_transactions_listener();
             // start_transaction_listener(node.clone());

@@ -12,6 +12,7 @@ use crate::committee::{extract_peer_addresses, generate_committees, load_committ
 use crate::engine_api::ExecutionClient;
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
+use consensus_config::Parameters;
 use consensus_core::CommitConsumer;
 use mysten_metrics::RegistryService;
 use prometheus::Registry;
@@ -25,7 +26,9 @@ use validator::ValidatorNode;
 
 #[derive(Default, Serialize, Deserialize)]
 struct NodeConfig {
+    chain: String, // Can be predefined name (mainnet, sepolia, holesky, hoodi, dev) or path to custom genesis
     committee_path: String,
+    parameters_path: String, // Path to consensus parameters YAML file
     execution_http_url: String,
     execution_ws_url: String,
     jwt_secret: String,
@@ -98,7 +101,8 @@ async fn start_consensus_client(config_path: &PathBuf) -> Result<()> {
     // Load the full configuration
     let config_content = fs::read_to_string(config_path)?;
     let mut node_config: NodeConfig = serde_yaml::from_str(&config_content)?;
-
+    let content = std::fs::read_to_string(&node_config.parameters_path)?;
+    let parameters: Parameters = serde_yaml::from_str(&content)?;
     // Load committee configuration from file
     let committee_path = PathBuf::from(&node_config.committee_path);
     let (committee, keypairs) = load_committees(&committee_path)?;
@@ -143,6 +147,7 @@ async fn start_consensus_client(config_path: &PathBuf) -> Result<()> {
     validator
         .start(
             committee.clone(),
+            parameters,
             keypairs,
             registry_service,
             commit_consumer,
@@ -150,15 +155,6 @@ async fn start_consensus_client(config_path: &PathBuf) -> Result<()> {
         )
         .await
         .map_err(|e| anyhow!("Failed to start validator node: {}", e))?;
-
-    // Create configuration
-    // let config = EngineApiConfig {
-    //     execution_url: node_config.execution_url,
-    //     jwt_secret: node_config.jwt_secret,
-    //     genesis_block_hash: node_config.genesis_block_hash,
-    //     fee_recipient: node_config.fee_recipient,
-    //     poll_interval_ms: node_config.poll_interval,
-    // };
 
     // Create and start the Engine API client
     let mut client = ExecutionClient::new(node_config, committee.clone(), payload_tx)?;
@@ -307,7 +303,9 @@ validity_threshold: 1
     #[test]
     fn test_node_config_serialization() {
         let config = NodeConfig {
+            chain: "dev".to_string(),
             committee_path: "committee.yml".to_string(),
+            parameters_path: "parameters.yml".to_string(),
             execution_http_url: "http://localhost:8080".to_string(),
             execution_ws_url: "ws://localhost:8080".to_string(),
             jwt_secret: "secret123".to_string(),
@@ -561,7 +559,9 @@ log_level: info
     #[test]
     fn test_execution_client_creation_with_invalid_fee_recipient() {
         let config = NodeConfig {
+            chain: "dev".to_string(),
             committee_path: "committee.yml".to_string(),
+            parameters_path: "parameters.yml".to_string(),
             execution_http_url: "http://127.0.0.1:8551".to_string(),
             execution_ws_url: "ws://127.0.0.1:8551".to_string(),
             jwt_secret: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"

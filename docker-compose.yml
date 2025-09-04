@@ -120,6 +120,7 @@ services:
       "--discovery.port", "30303",
       "--p2p-secret-key", "/data/p2p/secret.key",
       "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
       "-vvvv"
     ]
     networks:
@@ -175,6 +176,7 @@ services:
       "--discovery.port", "30303",
       "--p2p-secret-key", "/data/p2p/secret.key",
       "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
       "-vvvv"
     ]
     networks:
@@ -230,6 +232,7 @@ services:
       "--discovery.port", "30303",
       "--p2p-secret-key", "/data/p2p/secret.key",
       "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
       "-vvvv"
     ]
     networks:
@@ -285,6 +288,7 @@ services:
       "--discovery.port", "30303",
       "--p2p-secret-key", "/data/p2p/secret.key",
       "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
       "-vvvv"
     ]
     networks:

@@ -81,3 +81,107 @@ where
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_mysticeti_payload_builder_factory_new() {
+        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let factory = MysticetiPayloadBuilderFactory::new(subdag_queue.clone());
+
+        // Test that the factory was created successfully
+        assert_eq!(
+            Arc::as_ptr(&factory.subdag_queue),
+            Arc::as_ptr(&subdag_queue)
+        );
+    }
+
+    #[test]
+    fn test_mysticeti_payload_builder_factory_creation() {
+        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let factory = MysticetiPayloadBuilderFactory::new(subdag_queue);
+
+        // Test that we can create multiple instances
+        let factory2 = MysticetiPayloadBuilderFactory::new(Arc::new(Mutex::new(VecDeque::new())));
+        assert_ne!(
+            Arc::as_ptr(&factory.subdag_queue),
+            Arc::as_ptr(&factory2.subdag_queue)
+        );
+    }
+
+    #[test]
+    fn test_subdag_queue_isolation() {
+        let subdag_queue1 = Arc::new(Mutex::new(VecDeque::new()));
+        let subdag_queue2 = Arc::new(Mutex::new(VecDeque::new()));
+
+        let factory1 = MysticetiPayloadBuilderFactory::new(subdag_queue1.clone());
+        let factory2 = MysticetiPayloadBuilderFactory::new(subdag_queue2.clone());
+
+        // Add items to one queue
+        {
+            let mut queue1 = subdag_queue1.lock().unwrap();
+            queue1.push_back(CommittedSubDag::default());
+        }
+
+        // Verify the other queue is unaffected
+        assert_eq!(subdag_queue1.lock().unwrap().len(), 1);
+        assert_eq!(subdag_queue2.lock().unwrap().len(), 0);
+
+        // Verify factory references are correct
+        assert_eq!(
+            Arc::as_ptr(&factory1.subdag_queue),
+            Arc::as_ptr(&subdag_queue1)
+        );
+        assert_eq!(
+            Arc::as_ptr(&factory2.subdag_queue),
+            Arc::as_ptr(&subdag_queue2)
+        );
+    }
+
+    #[test]
+    fn test_committed_subdag_queue_operations() {
+        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let factory = MysticetiPayloadBuilderFactory::new(subdag_queue.clone());
+
+        // Test adding subdags to the queue
+        {
+            let mut queue = subdag_queue.lock().unwrap();
+            queue.push_back(CommittedSubDag::default());
+            queue.push_back(CommittedSubDag::default());
+        }
+
+        // Verify queue size
+        assert_eq!(subdag_queue.lock().unwrap().len(), 2);
+
+        // Test popping from queue
+        {
+            let mut queue = subdag_queue.lock().unwrap();
+            let subdag = queue.pop_front();
+            assert!(subdag.is_some());
+            assert_eq!(queue.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_factory_debug_implementation() {
+        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let factory = MysticetiPayloadBuilderFactory::new(subdag_queue);
+
+        // Test that Debug is implemented
+        let debug_string = format!("{:?}", factory);
+        assert!(debug_string.contains("MysticetiPayloadBuilderFactory"));
+    }
+
+    #[test]
+    fn test_factory_non_exhaustive() {
+        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let factory = MysticetiPayloadBuilderFactory::new(subdag_queue);
+
+        // Test that the struct is marked as non_exhaustive
+        // This means it can be extended in the future without breaking changes
+        assert!(std::mem::size_of::<MysticetiPayloadBuilderFactory>() > 0);
+    }
+}

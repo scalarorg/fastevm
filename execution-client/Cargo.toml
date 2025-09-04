@@ -14,7 +14,7 @@ path = "src/cli.rs"
 [dependencies]
 reth-extension = { workspace = true }
 # Ethereum
-alloy-primitives = { workspace = true }
+alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 
@@ -57,3 +57,7 @@ tokio-stream = "0.1"
 
 [dev-dependencies]
 tokio-test = { workspace = true }
+tempfile = "3"
+alloy = "1.0.30"
+alloy-signer-local = "1.0.30"
+http = { workspace = true }

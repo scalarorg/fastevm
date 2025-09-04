@@ -216,3 +216,58 @@ where
         .ok_or_else(|| PayloadBuilderError::MissingPayload)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reth_ethereum::pool::noop::NoopTransactionPool;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_payload_builder_creation() {
+        // Test that we can create basic components
+        let pool = NoopTransactionPool::default();
+        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
+
+        // Test queue operations
+        {
+            let mut queue = subdag_queue.lock().unwrap();
+            queue.push_back(CommittedSubDag::default());
+        }
+
+        assert_eq!(subdag_queue.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_committed_subdag_operations() {
+        let mut subdag = CommittedSubDag::default();
+
+        // Test that we can add blocks (even if empty)
+        assert!(subdag.blocks.is_empty());
+        assert!(subdag.flatten_transactions().is_empty());
+
+        // Test flatten_transactions
+        let transactions = subdag.flatten_transactions();
+        assert!(transactions.is_empty());
+    }
+
+    #[test]
+    fn test_payload_builder_error_types() {
+        // Test that error types can be created
+        let error = PayloadBuilderError::MissingPayload;
+        match error {
+            PayloadBuilderError::MissingPayload => assert!(true),
+            _ => assert!(false),
+        }
+    }
+
+    #[test]
+    fn test_missing_payload_behaviour() {
+        // Test that we can create MissingPayloadBehaviour
+        let behavior: MissingPayloadBehaviour<()> = MissingPayloadBehaviour::AwaitInProgress;
+        match behavior {
+            MissingPayloadBehaviour::AwaitInProgress => assert!(true),
+            _ => assert!(false),
+        }
+    }
+}

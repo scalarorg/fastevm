@@ -42,12 +42,11 @@ impl ExecutionClient {
     }
 
     pub fn jwt_secret(&self) -> JwtSecret {
+        debug!("JWT secret: {:?}", self.config.jwt_secret);
         match JwtSecret::from_hex(&self.config.jwt_secret) {
             Ok(jwt_secret) => jwt_secret,
             Err(err) => {
-                error!("Invalid JWT secret format: {:?}", err);
-                error!("JWT secret should be a 32-byte hex string starting with 0x");
-                error!("Current JWT secret: {}...", &self.config.jwt_secret[..10]);
+                error!("Invalid JWT secret format: {:?}.JWT secret should be a 32-byte hex string starting with 0x", err);
                 panic!("JWT secret parsing failed: {:?}", err);
             }
         }
@@ -83,12 +82,18 @@ impl ExecutionClient {
         let mut auth_header = secret_to_bearer_header(&self.jwt_secret());
         // The header value should not be visible in logs for security.
         auth_header.set_sensitive(true);
-
+        let url = self.ws_url();
+        debug!(
+            "Creating ws client with url: {} and auth header: {:?}",
+            url,
+            auth_header.to_str().unwrap()
+        );
         let mut headers = http::HeaderMap::new();
         headers.insert(http::header::AUTHORIZATION, auth_header);
+
         jsonrpsee::ws_client::WsClientBuilder::default()
             .set_headers(headers)
-            .build(self.ws_url())
+            .build(url)
             .await
             .expect("Failed to create ws client")
     }
@@ -119,9 +124,14 @@ impl ExecutionClient {
     // }
     async fn send_transaction(&self, tx: Bytes) -> Result<()> {
         let payload_item = vec![tx];
-        self.payload_tx
+        let res = self
+            .payload_tx
             .send(payload_item)
             .map_err(|e| anyhow!("Error sending transaction: {:?}", e));
+        if res.is_err() {
+            error!("Error sending transaction: {:?}", res);
+            return Err(anyhow!("Error sending transaction: {:?}", res));
+        }
         Ok(())
     }
     pub async fn start(
@@ -310,6 +320,7 @@ mod tests {
     // Helper function to create test config
     fn create_test_config() -> NodeConfig {
         NodeConfig {
+            chain: "dev".to_string(),
             execution_http_url: "http://127.0.0.1:8551".to_string(),
             execution_ws_url: "ws://127.0.0.1:8551".to_string(),
             jwt_secret: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
@@ -326,6 +337,7 @@ mod tests {
             node_index: 0,
             log_level: "info".to_string(),
             committee_path: "committee.yml".to_string(),
+            parameters_path: "parameters.yml".to_string(),
         }
     }
 
