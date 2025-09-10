@@ -1,7 +1,6 @@
 // Copyright (c) Scalar Org, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use alloy_rpc_types_engine::{ExecutionPayloadFieldV2, ExecutionPayloadV3};
 use anyhow::Result;
 use consensus_config::{AuthorityIndex, Committee, NetworkKeyPair, Parameters, ProtocolKeyPair};
 use consensus_core::{
@@ -153,41 +152,14 @@ impl ValidatorNode {
     // }
 }
 
-fn extract_transaction_from_payload_v3(payloadv3: ExecutionPayloadV3) -> Vec<Vec<u8>> {
-    let payload_v2 = payloadv3.payload_inner;
-    let payload_v1 = payload_v2.payload_inner;
-    let tx_data = payload_v1
-        .transactions
-        .into_iter()
-        .map(|tx| tx.0.into())
-        .collect();
-    tx_data
-}
-
-fn extract_transaction_from_payload_field_v2(payload: ExecutionPayloadFieldV2) -> Vec<Vec<u8>> {
-    let payload_v1 = match payload {
-        ExecutionPayloadFieldV2::V1(execution_payload_v1) => execution_payload_v1,
-        ExecutionPayloadFieldV2::V2(execution_payload_v2) => execution_payload_v2.payload_inner,
-    };
-    let tx_data = payload_v1
-        .transactions
-        .into_iter()
-        .map(|tx| tx.0.into())
-        .collect();
-    tx_data
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::{Address, Bloom, Bytes, B256, U256};
-    use alloy_rpc_types_engine::{ExecutionPayloadV1, ExecutionPayloadV2, ExecutionPayloadV3};
     use consensus_config::{
         Authority, AuthorityKeyPair, Committee, NetworkKeyPair, ProtocolKeyPair, Stake,
     };
     use prometheus::Registry;
     use std::path::PathBuf;
-    use std::time::Duration;
     use tempfile::tempdir;
 
     // Helper function to create test committee
@@ -313,131 +285,6 @@ mod tests {
         assert_eq!(transaction_indices.len(), 0);
     }
 
-    #[test]
-    fn test_extract_transaction_v1() {
-        let payload = ExecutionPayloadFieldV2::V1(ExecutionPayloadV1 {
-            parent_hash: B256::default(),
-            fee_recipient: Address::default(),
-            state_root: [0u8; 32].into(),
-            receipts_root: [0u8; 32].into(),
-            logs_bloom: Bloom::default(),
-            prev_randao: [0u8; 32].into(),
-            block_number: 1,
-            gas_limit: 0,
-            gas_used: 0,
-            timestamp: 0,
-            extra_data: Bytes::default(),
-            base_fee_per_gas: U256::default(),
-            block_hash: [0u8; 32].into(),
-            transactions: vec![Bytes::from(vec![1, 2, 3]), Bytes::from(vec![4, 5, 6])],
-        });
-
-        let tx_data = extract_transaction_from_payload_field_v2(payload);
-        assert_eq!(tx_data.len(), 2);
-        assert_eq!(tx_data[0], vec![1, 2, 3]);
-        assert_eq!(tx_data[1], vec![4, 5, 6]);
-    }
-
-    #[test]
-    fn test_extract_transaction_v2() {
-        let payload = ExecutionPayloadFieldV2::V2(ExecutionPayloadV2 {
-            payload_inner: ExecutionPayloadV1 {
-                parent_hash: B256::default(),
-                fee_recipient: Address::default(),
-                state_root: [0u8; 32].into(),
-                receipts_root: [0u8; 32].into(),
-                logs_bloom: Bloom::default(),
-                prev_randao: [0u8; 32].into(),
-                block_number: 1,
-                gas_limit: 0,
-                gas_used: 0,
-                timestamp: 0,
-                extra_data: Bytes::default(),
-                base_fee_per_gas: U256::default(),
-                block_hash: [0u8; 32].into(),
-                transactions: vec![Bytes::from(vec![7, 8, 9]), Bytes::from(vec![10, 11, 12])],
-            },
-            withdrawals: vec![],
-        });
-
-        let tx_data = extract_transaction_from_payload_field_v2(payload);
-        assert_eq!(tx_data.len(), 2);
-        assert_eq!(tx_data[0], vec![7, 8, 9]);
-        assert_eq!(tx_data[1], vec![10, 11, 12]);
-    }
-
-    #[test]
-    fn test_extract_transaction_empty() {
-        let payload = ExecutionPayloadFieldV2::V1(ExecutionPayloadV1 {
-            parent_hash: B256::default(),
-            fee_recipient: Address::default(),
-            state_root: [0u8; 32].into(),
-            receipts_root: [0u8; 32].into(),
-            logs_bloom: Bloom::default(),
-            prev_randao: [0u8; 32].into(),
-            block_number: 1,
-            gas_limit: 0,
-            gas_used: 0,
-            timestamp: 0,
-            extra_data: Bytes::default(),
-            base_fee_per_gas: U256::default(),
-            block_hash: [0u8; 32].into(),
-            transactions: vec![],
-        });
-
-        let tx_data = extract_transaction_from_payload_field_v2(payload);
-        assert_eq!(tx_data.len(), 0);
-    }
-
-    #[test]
-    fn test_extract_transaction_single() {
-        let payload = ExecutionPayloadFieldV2::V1(ExecutionPayloadV1 {
-            parent_hash: B256::default(),
-            fee_recipient: Address::default(),
-            state_root: [0u8; 32].into(),
-            receipts_root: [0u8; 32].into(),
-            logs_bloom: Bloom::default(),
-            prev_randao: [0u8; 32].into(),
-            block_number: 1,
-            gas_limit: 0,
-            gas_used: 0,
-            timestamp: 0,
-            extra_data: Bytes::default(),
-            base_fee_per_gas: U256::default(),
-            block_hash: [0u8; 32].into(),
-            transactions: vec![Bytes::from(vec![42])],
-        });
-
-        let tx_data = extract_transaction_from_payload_field_v2(payload);
-        assert_eq!(tx_data.len(), 1);
-        assert_eq!(tx_data[0], vec![42]);
-    }
-
-    #[test]
-    fn test_extract_transaction_large() {
-        let large_tx = vec![0u8; 10000];
-        let payload = ExecutionPayloadFieldV2::V1(ExecutionPayloadV1 {
-            parent_hash: B256::default(),
-            fee_recipient: Address::default(),
-            state_root: [0u8; 32].into(),
-            receipts_root: [0u8; 32].into(),
-            logs_bloom: Bloom::default(),
-            prev_randao: [0u8; 32].into(),
-            block_number: 1,
-            gas_limit: 0,
-            gas_used: 0,
-            timestamp: 0,
-            extra_data: Bytes::default(),
-            base_fee_per_gas: U256::default(),
-            block_hash: [0u8; 32].into(),
-            transactions: vec![Bytes::from(large_tx.clone())],
-        });
-
-        let tx_data = extract_transaction_from_payload_field_v2(payload);
-        assert_eq!(tx_data.len(), 1);
-        assert_eq!(tx_data[0], large_tx);
-    }
-
     #[tokio::test]
     async fn test_validator_node_start_basic() {
         let temp_dir = tempdir().unwrap();
@@ -529,76 +376,6 @@ mod tests {
         // Check that the consensus database file was created
         let db_path = node_dir.join("consensus.db");
         assert!(db_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_validator_node_start_transaction_processing() {
-        let temp_dir = tempdir().unwrap();
-        let working_directory = temp_dir.path().to_path_buf();
-        let mut validator = ValidatorNode::new(0, working_directory);
-
-        let committee = create_test_committee();
-        let keypairs = create_test_keypairs();
-        let registry_service = RegistryService::new(Registry::new());
-        let (commit_consumer, _, _) = CommitConsumer::new(0);
-        let (input_payload_tx, input_payload_rx) = mpsc::unbounded_channel();
-
-        // Start the validator in a separate task
-        let validator_handle = tokio::spawn(async move {
-            validator
-                .start(
-                    committee,
-                    Parameters::default(),
-                    keypairs,
-                    registry_service,
-                    commit_consumer,
-                    input_payload_rx,
-                )
-                .await
-        });
-
-        // Give it a moment to start
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Send a test payload
-        let test_payload = ExecutionPayloadV3 {
-            payload_inner: ExecutionPayloadV2 {
-                payload_inner: ExecutionPayloadV1 {
-                    parent_hash: B256::default(),
-                    fee_recipient: Address::default(),
-                    state_root: [0u8; 32].into(),
-                    receipts_root: [0u8; 32].into(),
-                    logs_bloom: Bloom::default(),
-                    prev_randao: [0u8; 32].into(),
-                    block_number: 1,
-                    gas_limit: 0,
-                    gas_used: 0,
-                    timestamp: 0,
-                    extra_data: Bytes::default(),
-                    base_fee_per_gas: U256::default(),
-                    block_hash: [0u8; 32].into(),
-                    transactions: vec![Bytes::from(vec![1, 2, 3])],
-                },
-                withdrawals: Vec::new(),
-            },
-            blob_gas_used: 0,
-            excess_blob_gas: 0,
-        };
-
-        let tx_data = extract_transaction_from_payload_v3(test_payload)
-            .into_iter()
-            .map(|tx| tx.into())
-            .collect();
-        let _ = input_payload_tx.send(tx_data);
-
-        // Give it a moment to process
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Cancel the task
-        validator_handle.abort();
-
-        // Test passes if we can start transaction processing without panicking
-        assert!(true);
     }
 
     #[tokio::test]

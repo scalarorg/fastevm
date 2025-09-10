@@ -9,6 +9,12 @@
 
 #![warn(unused_crate_dependencies)]
 use clap::Parser;
+
+// Suppress warnings for dependencies used by CLI binary
+use reth_network_peers as _;
+use reth_rpc_layer as _;
+use secp256k1 as _;
+
 use reth_ethereum::{
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
     node::{
@@ -62,8 +68,8 @@ fn main() {
 
                     // here we get the configured pool.
                     let pool = ctx.pool().clone();
-                    let listener = TxpoolListener::new(pool.clone());
-                    let consensus_handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+                    let listener = TxpoolListener::new(pool);
+                    let consensus_handler = ConsensusTransactionsHandler::new(subdag_tx);
                     // now we merge our extension namespace into all configured transports
                     ctx.modules.merge_configured(listener.into_rpc())?;
                     ctx.modules.merge_http(consensus_handler.into_rpc())?;

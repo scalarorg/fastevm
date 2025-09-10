@@ -1,44 +1,26 @@
-use crate::beacon_chain::BeaconState;
+// use crate::beacon_chain::BeaconState;
 use crate::NodeConfig;
 use alloy_primitives::Bytes;
-use alloy_rpc_types_engine::{ExecutionPayloadV3, ForkchoiceState, PayloadAttributes, PayloadId};
 use anyhow::{anyhow, Result};
-use consensus_config::Committee;
-use consensus_core::{BlockAPI, CertifiedBlocksOutput, CommittedSubDag};
+use consensus_core::{CertifiedBlocksOutput, CommittedSubDag};
 use jsonrpsee::core::client::SubscriptionClientT;
 use mysten_metrics::monitored_mpsc::UnboundedReceiver;
 use reth_extension::{
     CommittedSubDag as RethCommittedSubDag, ConsensusTransactionApiClient, TxpoolListenerApiClient,
 };
 use reth_rpc_layer::{secret_to_bearer_header, AuthClientLayer, JwtSecret};
-use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use tokio::time::{self, Duration};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 pub type PayloadItem = Vec<Bytes>;
 pub struct ExecutionClient {
     config: NodeConfig,
-    committee: Committee,
-    consensus_state: Arc<RwLock<BeaconState>>,
-    //metrics: Arc<Mutex<ConsensusMetrics>>,
     payload_tx: mpsc::UnboundedSender<PayloadItem>,
 }
 
 impl ExecutionClient {
-    pub fn new(
-        config: NodeConfig,
-        committee: Committee,
-        payload_tx: mpsc::UnboundedSender<PayloadItem>,
-    ) -> Result<Self> {
-        //Genesis state
-        let consensus_state = BeaconState::from_config(&config)?;
-        Ok(Self {
-            config,
-            committee,
-            consensus_state: Arc::new(RwLock::new(consensus_state)),
-            payload_tx,
-        })
+    pub fn new(config: NodeConfig, payload_tx: mpsc::UnboundedSender<PayloadItem>) -> Result<Self> {
+        Ok(Self { config, payload_tx })
     }
 
     pub fn jwt_secret(&self) -> JwtSecret {
@@ -57,14 +39,14 @@ impl ExecutionClient {
     pub fn ws_url(&self) -> String {
         self.config.execution_ws_url.clone()
     }
-    pub async fn get_forcechoice_state(&self) -> ForkchoiceState {
-        let state = self.consensus_state.read().await;
-        state.get_fork_choice_state()
-    }
-    async fn get_payload_attributes(&self) -> Option<PayloadAttributes> {
-        let state = self.consensus_state.read().await;
-        state.get_payload_attributes()
-    }
+    // pub async fn get_forcechoice_state(&self) -> ForkchoiceState {
+    //     let state = self.consensus_state.read().await;
+    //     state.get_fork_choice_state()
+    // }
+    // async fn get_payload_attributes(&self) -> Option<PayloadAttributes> {
+    //     let state = self.consensus_state.read().await;
+    //     state.get_payload_attributes()
+    // }
     /// Returns a http client connected to the server.
     ///
     /// This client uses the JWT token to authenticate requests.
@@ -171,10 +153,10 @@ impl ExecutionClient {
         //         }
         //     };
 
-        let mut interval = time::interval(Duration::from_secs(self.config.poll_interval));
-        let mut payload_id: Option<PayloadId> = None;
-        let mut consecutive_errors = 0;
-        const MAX_CONSECUTIVE_ERRORS: u32 = 5;
+        // let mut interval = time::interval(Duration::from_secs(self.config.poll_interval));
+        // let mut payload_id: Option<PayloadId> = None;
+        // let mut consecutive_errors = 0;
+        // const MAX_CONSECUTIVE_ERRORS: u32 = 5;
 
         info!(
             "Engine API client started successfully. Polling every {}ms",
@@ -277,46 +259,25 @@ impl ExecutionClient {
         info!("Engine API client stopped");
         Ok(())
     }
-    fn extract_commited_transactions(&self, committed_subdag: CommittedSubDag) -> Vec<Bytes> {
-        let mut flattened_txs: Vec<Bytes> = Vec::new();
-        for vb in committed_subdag.blocks {
-            // --- IMPORTANT: replace the code below with the real one ---
-            // Possible valid variants (adapt to your VerifiedBlock API):
-            // 1) if VerifiedBlock has .transactions() -> &[TxType]:
-            //    for tx in vb.transactions().iter() { flattened_txs.push(tx.to_raw_bytes()); total_gas_used += tx.gas_used(); }
-            //
-            // 2) if VerifiedBlock stores raw bytes: for raw in vb.raw_transactions() { flattened_txs.push(raw.clone()); }
-            //
-            //Extract transactions from verified block
-            for tx in vb.transactions() {
-                let raw_data = Bytes::from(tx.data().to_vec());
-                flattened_txs.push(raw_data);
-            }
-        }
-        flattened_txs
-    }
-    async fn process_subdag(&self, committed_subdag: CommittedSubDag) -> ExecutionPayloadV3 {
-        let mut consensus_state = self.consensus_state.write().await;
-        let payload = consensus_state.process_subdag(committed_subdag);
-        payload
-    }
+    // async fn process_subdag(&self, committed_subdag: CommittedSubDag) -> ExecutionPayloadV3 {
+    //     let mut consensus_state = self.consensus_state.write().await;
+    //     let payload = consensus_state.process_subdag(committed_subdag);
+    //     payload
+    // }
 }
 
 #[cfg(test)]
 mod tests {
-
+    const GENESIS_TIME: u64 = 1755000000;
     use std::str::FromStr;
+    use tokio::time::Duration;
 
-    use crate::beacon_chain::{beacon_block::ChainSpec, GENESIS_TIME};
+    // use crate::beacon_chain::{beacon_block::ChainSpec, GENESIS_TIME};
 
     use super::*;
-    use alloy_primitives::{Address, Bloom, Bytes, B256, U256};
-    use alloy_rpc_types_engine::ExecutionPayloadV1;
     use consensus_core::{BlockRef, CommitConsumer, CommitDigest, CommitRef, CommittedSubDag};
     use tokio::sync::mpsc;
-    fn create_test_committee() -> Committee {
-        Committee::new(1, vec![])
-    }
+
     // Helper function to create test config
     fn create_test_config() -> NodeConfig {
         NodeConfig {
@@ -345,8 +306,7 @@ mod tests {
     async fn test_execution_client_new_success() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let result = ExecutionClient::new(config, committee, payload_tx);
+        let result = ExecutionClient::new(config, payload_tx);
         assert!(result.is_ok());
 
         let client = result.unwrap();
@@ -359,8 +319,7 @@ mod tests {
         let mut config = create_test_config();
         config.fee_recipient = "invalid_address".to_string();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let result = ExecutionClient::new(config, committee, payload_tx);
+        let result = ExecutionClient::new(config, payload_tx);
         assert!(result.is_err());
     }
 
@@ -368,8 +327,7 @@ mod tests {
     async fn test_jwt_secret_success() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let client = ExecutionClient::new(config, payload_tx).unwrap();
 
         let jwt_secret = client.jwt_secret();
         assert!(jwt_secret.as_bytes().len() == 32);
@@ -381,8 +339,7 @@ mod tests {
         let mut config = create_test_config();
         config.jwt_secret = "invalid_hex".to_string();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let client = ExecutionClient::new(config, payload_tx).unwrap();
 
         // This should panic
         let _ = client.jwt_secret();
@@ -392,79 +349,20 @@ mod tests {
     async fn test_http_url() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let client = ExecutionClient::new(config, payload_tx).unwrap();
 
         let url = client.http_url();
         assert_eq!(url, "http://127.0.0.1:8551");
     }
 
     #[tokio::test]
-    async fn test_get_forcechoice_state() {
-        let config = create_test_config();
-        let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
-
-        let fc_state = client.get_forcechoice_state().await;
-        assert_eq!(fc_state.head_block_hash, B256::default());
-        assert_eq!(fc_state.safe_block_hash, B256::default());
-        assert_eq!(fc_state.finalized_block_hash, B256::default());
-    }
-
-    #[tokio::test]
-    async fn test_get_payload_attributes() {
-        let config = create_test_config();
-        let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
-
-        let attributes = client.get_payload_attributes().await;
-        assert!(attributes.is_some());
-
-        let attributes = attributes.unwrap();
-        // Timestamp should be current time, not 0
-        assert!(attributes.timestamp > 0);
-        assert_eq!(attributes.prev_randao, B256::default());
-        // Fee recipient should be from config, not default
-        assert_eq!(
-            attributes.suggested_fee_recipient,
-            Address::from_str("0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6").unwrap()
-        );
-        // Withdrawals should be Some(vec![]) for post-Shanghai blocks
-        assert!(attributes.withdrawals.is_some());
-        assert_eq!(attributes.withdrawals.unwrap().len(), 0);
-        assert!(attributes.parent_beacon_block_root.is_none());
-    }
-
-    #[tokio::test]
     async fn test_http_client_creation() {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let client = ExecutionClient::new(config, payload_tx).unwrap();
 
         let http_client = client.http_client();
         // Test that we can create the client without panicking
-        assert!(true);
-    }
-
-    #[tokio::test]
-    async fn test_process_subdag() {
-        let config = create_test_config();
-        let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
-
-        let leader = BlockRef::MIN;
-        let blocks = vec![];
-        let commit_ref = CommitRef::new(1, CommitDigest::default());
-        let subdag = CommittedSubDag::new(leader, blocks, vec![], 1000, commit_ref, vec![]);
-
-        // Convert MockCommittedSubDag to real CommittedSubDag
-        // This is a simplified test - in real implementation you'd need proper conversion
-        let result = client.process_subdag(subdag).await;
-        // Test that the function doesn't panic
         assert!(true);
     }
 
@@ -474,8 +372,7 @@ mod tests {
         config.poll_interval = 100; // Use shorter interval for testing
 
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let mut client = ExecutionClient::new(config, payload_tx).unwrap();
 
         // Create mock receivers
         let (_, commit_receiver, block_receiver) = CommitConsumer::new(0);
@@ -500,8 +397,7 @@ mod tests {
         config.poll_interval = 100; // Use shorter interval for testing
 
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let mut client = ExecutionClient::new(config, payload_tx).unwrap();
 
         // Create mock receivers
         let (commit_consumer, commit_receiver, block_receiver) = CommitConsumer::new(0);
@@ -539,8 +435,7 @@ mod tests {
         config.poll_interval = 100; // Use shorter interval for testing
 
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let mut client = ExecutionClient::new(config, payload_tx).unwrap();
 
         // Create mock receivers and immediately close them
         let (_, commit_receiver, block_receiver) = CommitConsumer::new(0);
@@ -562,8 +457,7 @@ mod tests {
         config.poll_interval = 100;
 
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let mut client = ExecutionClient::new(config, committee, payload_tx).unwrap();
+        let mut client = ExecutionClient::new(config, payload_tx).unwrap();
 
         // Create mock receivers
         let (_, commit_receiver, block_receiver) = CommitConsumer::new(0);
@@ -580,50 +474,5 @@ mod tests {
 
         // Test passes if we can handle errors gracefully without panicking
         assert!(true);
-    }
-
-    // Test boundary conditions
-    #[tokio::test]
-    async fn test_boundary_conditions() {
-        let config = create_test_config();
-        let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = ExecutionClient::new(config, committee, payload_tx).unwrap();
-
-        // Test with zero values
-        let fc_state = client.get_forcechoice_state().await;
-        assert_eq!(fc_state.head_block_hash, B256::default());
-
-        // Test with default values
-        let attributes = client.get_payload_attributes().await;
-        assert!(attributes.is_some());
-        let attributes = attributes.unwrap();
-        // Timestamp should be current time, not 0
-        assert!(attributes.timestamp > 0);
-        assert_eq!(attributes.prev_randao, B256::default());
-    }
-
-    // Test concurrent access
-    #[tokio::test]
-    async fn test_concurrent_access() {
-        let config = create_test_config();
-        let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
-        let committee = create_test_committee();
-        let client = Arc::new(ExecutionClient::new(config, committee, payload_tx).unwrap());
-
-        let client_clone1 = Arc::clone(&client);
-        let client_clone2 = Arc::clone(&client);
-
-        let handle1 = tokio::spawn(async move {
-            let _ = client_clone1.get_forcechoice_state().await;
-        });
-
-        let handle2 = tokio::spawn(async move {
-            let _ = client_clone2.get_forcechoice_state().await;
-        });
-
-        let (result1, result2) = tokio::join!(handle1, handle2);
-        assert!(result1.is_ok());
-        assert!(result2.is_ok());
     }
 }

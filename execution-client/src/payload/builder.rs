@@ -24,7 +24,7 @@ use reth_ethereum_payload_builder::{default_ethereum_payload, EthereumBuilderCon
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
 use reth_extension::CommittedSubDag;
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderError};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Mysticeti payload builder that processes transactions from the subdag instead of the pool.
 /// Modified reth_ethereum_payload_builder::EthereumPayloadBuilder to use subdag transactions
@@ -174,17 +174,23 @@ where
             queue_guard.pop_front()
         };
         match subdag {
-            Some(subdag) => default_ethereum_payload(
-                self.evm_config.clone(),
-                self.client.clone(),
-                self.pool.clone(),
-                self.builder_config.clone(),
-                args,
-                |attributes| get_best_transactions(&self.pool, subdag, attributes),
-            ),
-            None => Err(PayloadBuilderError::Internal(RethError::msg(
-                "No subdag found in queue",
-            ))),
+            Some(subdag) => {
+                let payload = default_ethereum_payload(
+                    self.evm_config.clone(),
+                    self.client.clone(),
+                    self.pool.clone(),
+                    self.builder_config.clone(),
+                    args,
+                    |attributes| get_best_transactions(&self.pool, subdag, attributes),
+                );
+                payload
+            }
+            None => {
+                //Ok(BuildOutcome::Cancelled) -- don not work
+                Err(PayloadBuilderError::Internal(RethError::msg(
+                    "No subdag found in queue",
+                )))
+            }
         }
     }
 

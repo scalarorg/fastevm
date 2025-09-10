@@ -33,40 +33,6 @@ impl SignedBlock {
         &self.inner
     }
 
-    // pub(crate) fn new(block: Block, protocol_keypair: &ProtocolKeyPair) -> ConsensusResult<Self> {
-    //     let signature = compute_block_signature(&block, protocol_keypair)?;
-    //     Ok(Self {
-    //         inner: block,
-    //         signature: Bytes::copy_from_slice(signature.to_bytes()),
-    //     })
-    // }
-
-    pub(crate) fn signature(&self) -> &Bytes {
-        &self.signature
-    }
-
-    // /// This method only verifies this block's signature. Verification of the full block
-    // /// should be done via BlockVerifier.
-    // pub(crate) fn verify_signature(&self, context: &Context) -> ConsensusResult<()> {
-    //     let block = &self.inner;
-    //     let committee = &context.committee;
-    //     ensure!(
-    //         committee.is_valid_index(block.author()),
-    //         ConsensusError::InvalidAuthorityIndex {
-    //             index: block.author(),
-    //             max: committee.size() - 1
-    //         }
-    //     );
-    //     let authority = committee.authority(block.author());
-    //     verify_block_signature(block, self.signature(), &authority.protocol_key)
-    // }
-
-    /// Serialises the block using the bcs serializer
-    // pub(crate) fn serialize(&self) -> Result<Bytes, bcs::Error> {
-    //     let bytes = bcs::to_bytes(self)?;
-    //     Ok(bytes.into())
-    // }
-
     /// Clears signature for testing.
     #[cfg(test)]
     pub(crate) fn clear_signature(&mut self) {

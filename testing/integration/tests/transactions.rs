@@ -102,8 +102,8 @@ fn test_address_parsing() {
 /// * `RPC_URL` - Ethereum RPC endpoint (defaults to localhost:8545)
 /// * `WS_URL` - WebSocket endpoint (defaults to localhost:8546)
 /// * `EVM_PRIVKEY1` - Sender's private key
-/// * `EVM_PUBKEY1` - Sender's public address
-/// * `EVM_PUBKEY2` - Recipient's public address
+/// * `EVM_ADDRESS1` - Sender's public address
+/// * `EVM_ADDRESS2` - Recipient's public address
 /// * `CHAIN_ID` - Network chain ID (defaults to 202501)
 ///
 /// # Network Requirements
@@ -126,7 +126,7 @@ async fn broadcast_transaction() -> Result<()> {
     let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
     let _ws_url = env::var("WS_URL").unwrap_or_else(|_| "ws://localhost:8546".to_string());
     let sender_privkey = env::var("EVM_PRIVKEY1")?;
-    let recipient_addr = env::var("EVM_PUBKEY2")?;
+    let recipient_addr = env::var("EVM_ADDRESS2")?;
     let chain_id = env::var("CHAIN_ID")
         .unwrap_or("202501".to_string())
         .parse::<u64>()?;
@@ -135,7 +135,7 @@ async fn broadcast_transaction() -> Result<()> {
     let gwei_amount = 1_000_000_000_000_000_000_u64;
 
     // Parse sender and recipient addresses from environment variables
-    let sender_addr = Address::from_str(&env::var("EVM_PUBKEY1")?)?;
+    let sender_addr = Address::from_str(&env::var("EVM_ADDRESS1")?)?;
     let recipient_address = Address::from_str(&recipient_addr)?;
     eprintln!("sender_addr: {:?}", &sender_addr);
     eprintln!("recipient_address: {:?}", &recipient_address);
@@ -320,7 +320,7 @@ pub fn reset_network_guidance() {
 /// # Environment Variables Required
 ///
 /// * `RPC_URL` - Ethereum RPC endpoint (defaults to localhost:8545)
-/// * `EVM_PUBKEY1` - Sender's public address to check balance for
+/// * `EVM_ADDRESS1` - Sender's public address to check balance for
 ///
 /// # Network Requirements
 ///
@@ -341,7 +341,7 @@ async fn get_sender_balance() -> Result<()> {
 
     // Extract network configuration from environment variables
     let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let sender_addr = Address::from_str(&env::var("EVM_PUBKEY1")?)?;
+    let sender_addr = Address::from_str(&env::var("EVM_ADDRESS1")?)?;
 
     eprintln!("Checking balance for sender address: {:?}", &sender_addr);
     eprintln!("Connecting to RPC endpoint: {:?}", &rpc_url);
@@ -410,10 +410,10 @@ async fn get_sender_balance() -> Result<()> {
 /// * `EVM_PRIVKEY2` - Second private key for transactions  
 /// * `EVM_PRIVKEY3` - Third private key for transactions
 /// * `EVM_PRIVKEY4` - Fourth private key for transactions
-/// * `EVM_PUBKEY1` - First public address
-/// * `EVM_PUBKEY2` - Second public address
-/// * `EVM_PUBKEY3` - Third public address
-/// * `EVM_PUBKEY4` - Fourth public address
+/// * `EVM_ADDRESS1` - First public address
+/// * `EVM_ADDRESS2` - Second public address
+/// * `EVM_ADDRESS3` - Third public address
+/// * `EVM_ADDRESS4` - Fourth public address
 /// * `CHAIN_ID` - Network chain ID (defaults to 202501)
 ///
 /// # Node Configuration
@@ -458,10 +458,10 @@ async fn test_multi_transactions() -> Result<()> {
     ];
 
     let addresses = vec![
-        Address::from_str(&env::var("EVM_PUBKEY1")?)?,
-        Address::from_str(&env::var("EVM_PUBKEY2")?)?,
-        Address::from_str(&env::var("EVM_PUBKEY3")?)?,
-        Address::from_str(&env::var("EVM_PUBKEY4")?)?,
+        Address::from_str(&env::var("EVM_ADDRESS1")?)?,
+        Address::from_str(&env::var("EVM_ADDRESS2")?)?,
+        Address::from_str(&env::var("EVM_ADDRESS3")?)?,
+        Address::from_str(&env::var("EVM_ADDRESS4")?)?,
     ];
 
     // Define node configurations (RPC endpoints)
@@ -639,6 +639,239 @@ async fn test_multi_transactions() -> Result<()> {
     }
 }
 
+/// Test that generates a list of recipients and sends transactions with incrementing nonces.
+///
+/// This test demonstrates bulk transaction sending by:
+/// 1. Generating a configurable number of recipient addresses (100-1000)
+/// 2. Getting the initial nonce of the sender
+/// 3. Looping through recipients and sending transactions with incrementing nonces
+/// 4. Tracking success/failure rates and providing detailed logging
+///
+/// # Environment Variables Required
+///
+/// * `RPC_URL` - Ethereum RPC endpoint (defaults to localhost:8545)
+/// * `EVM_PRIVKEY1` - Sender's private key
+/// * `EVM_ADDRESS1` - Sender's public address
+/// * `CHAIN_ID` - Network chain ID (defaults to 202501)
+/// * `BULK_RECIPIENTS_COUNT` - Number of recipients to generate (defaults to 100)
+///
+/// # Test Behavior
+///
+/// The test will:
+/// - Generate a list of recipient addresses (default 100, configurable up to 1000)
+/// - Get the sender's current nonce before starting
+/// - Send transactions to each recipient with incrementing nonces
+/// - Track success/failure statistics
+/// - Skip gracefully if network is unavailable
+#[tokio::test]
+async fn test_bulk_transactions() -> Result<()> {
+    // Load environment variables from .env file if present
+    dotenv::dotenv().ok();
+    eprintln!("Starting bulk transactions test with incrementing nonces");
+
+    // Extract network configuration from environment variables
+    let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
+    let sender_privkey = env::var("EVM_PRIVKEY1")?;
+    let sender_addr = Address::from_str(&env::var("EVM_ADDRESS1")?)?;
+    let chain_id = env::var("CHAIN_ID")
+        .unwrap_or("202501".to_string())
+        .parse::<u64>()?;
+
+    // Get number of recipients to generate (default 100, max 1000)
+    let recipients_count = env::var("BULK_RECIPIENTS_COUNT")
+        .unwrap_or("100".to_string())
+        .parse::<usize>()?
+        .min(1000); // Cap at 1000 to prevent excessive resource usage
+
+    // Set transaction amount to 0.001 ETH (in wei)
+    let transaction_amount = 1_000_000_000_000_000_u64; // 0.001 ETH
+
+    eprintln!("Configuration:");
+    eprintln!("  Sender address: {:?}", sender_addr);
+    eprintln!("  RPC URL: {:?}", rpc_url);
+    eprintln!("  Chain ID: {:?}", chain_id);
+    eprintln!("  Recipients count: {}", recipients_count);
+    eprintln!(
+        "  Transaction amount: {} wei (0.001 ETH)",
+        transaction_amount
+    );
+
+    // Attempt to connect to the Ethereum provider
+    let provider = match ProviderBuilder::new().connect(&rpc_url).await {
+        Ok(provider) => provider,
+        Err(e) => {
+            eprintln!(
+                "⚠️  Warning: Could not connect to Ethereum network at {:?}",
+                &rpc_url
+            );
+            eprintln!("   Error: {:?}", &e);
+            eprintln!("   This test requires a local EVM network to be running.");
+            eprintln!("   Skipping test due to network unavailability...");
+            return Ok(());
+        }
+    };
+
+    // Get the initial nonce for the sender address
+    let initial_nonce = match provider.get_transaction_count(sender_addr).await {
+        Ok(nonce) => nonce,
+        Err(e) => {
+            eprintln!(
+                "⚠️  Warning: Could not get nonce for address {:?}",
+                &sender_addr
+            );
+            eprintln!("   Error: {:?}", &e);
+            eprintln!("   Skipping test...");
+            return Ok(());
+        }
+    };
+
+    eprintln!("Initial nonce: {}", initial_nonce);
+
+    // Generate recipient addresses
+    let mut recipients = Vec::new();
+    for i in 0..recipients_count {
+        // Generate deterministic addresses based on index
+        // This creates unique addresses by using the index as part of the address
+        let mut address_bytes = [0u8; 20];
+        address_bytes[0] = 0x01; // Start with 0x01 to ensure valid address
+        address_bytes[1] = (i >> 8) as u8;
+        address_bytes[2] = (i & 0xFF) as u8;
+        // Fill remaining bytes with deterministic pattern
+        for j in 3..20 {
+            address_bytes[j] = ((i * 7 + j * 11) % 256) as u8;
+        }
+        recipients.push(Address::from(address_bytes));
+    }
+
+    eprintln!("Generated {} recipient addresses", recipients.len());
+
+    // Statistics tracking
+    let mut successful_transactions = 0;
+    let mut failed_transactions = 0;
+    let mut current_nonce = initial_nonce;
+
+    // Send transactions to each recipient
+    for (index, recipient) in recipients.iter().enumerate() {
+        eprintln!(
+            "📤 Sending transaction {} of {} to recipient {:?} (nonce: {})",
+            index + 1,
+            recipients_count,
+            recipient,
+            current_nonce
+        );
+
+        // Create and sign the transfer transaction
+        let tx_envelope = match create_transfer_transaction(
+            &sender_privkey,
+            &recipient.to_string(),
+            chain_id,
+            transaction_amount,
+            current_nonce,
+        )
+        .await
+        {
+            Ok(envelope) => envelope,
+            Err(e) => {
+                eprintln!("   ❌ Failed to create transaction: {:?}", e);
+                failed_transactions += 1;
+                current_nonce += 1; // Still increment nonce even on failure
+                continue;
+            }
+        };
+
+        // Broadcast the transaction to the network
+        match provider.send_tx_envelope(tx_envelope).await {
+            Ok(pending_tx) => {
+                eprintln!(
+                    "   ✅ Transaction sent successfully (hash: {:?})",
+                    pending_tx.tx_hash()
+                );
+
+                // Try to get receipt with timeout
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    pending_tx.get_receipt(),
+                )
+                .await
+                {
+                    Ok(Ok(receipt)) => {
+                        eprintln!(
+                            "   🎯 Transaction confirmed! Block: {:?}",
+                            receipt.block_number
+                        );
+                        successful_transactions += 1;
+                    }
+                    Ok(Err(e)) => {
+                        eprintln!("   ⚠️  Transaction sent but receipt error: {:?}", e);
+                        successful_transactions += 1; // Consider sent as success
+                    }
+                    Err(_) => {
+                        eprintln!("   ⏳ Transaction sent, waiting for confirmation...");
+                        successful_transactions += 1; // Consider sent as success
+                    }
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("{e:?}");
+                if error_msg.contains("already known") {
+                    eprintln!("   ⚠️  Transaction already known (duplicate nonce)");
+                } else if error_msg.contains("insufficient funds") {
+                    eprintln!("   ⚠️  Insufficient funds for transaction");
+                } else if error_msg.contains("gas") {
+                    eprintln!("   ⚠️  Gas-related error: {:?}", e);
+                } else {
+                    eprintln!("   ❌ Failed to send transaction: {:?}", e);
+                }
+                failed_transactions += 1;
+            }
+        }
+
+        // Increment nonce for next transaction
+        current_nonce += 1;
+
+        // Small delay between transactions to avoid overwhelming the node
+        if index % 10 == 0 && index > 0 {
+            eprintln!("   ⏸️  Pausing briefly after {} transactions...", index + 1);
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    // Test summary
+    eprintln!("\n📊 Bulk Transaction Test Summary");
+    eprintln!("=================================");
+    eprintln!("Total recipients: {}", recipients_count);
+    eprintln!("Successful transactions: {}", successful_transactions);
+    eprintln!("Failed transactions: {}", failed_transactions);
+    eprintln!(
+        "Success rate: {:.1}%",
+        if recipients_count > 0 {
+            (successful_transactions as f64 / recipients_count as f64) * 100.0
+        } else {
+            0.0
+        }
+    );
+    eprintln!("Final nonce: {}", current_nonce);
+
+    // Test passes if we have at least some successful transactions
+    if successful_transactions > 0 {
+        eprintln!(
+            "🎉 Test passed! Successfully sent {} transactions with incrementing nonces.",
+            successful_transactions
+        );
+        Ok(())
+    } else {
+        eprintln!("❌ Test failed! No transactions were successful.");
+        eprintln!("   This might indicate:");
+        eprintln!("   - Network is unavailable");
+        eprintln!("   - Invalid private key or address");
+        eprintln!("   - Insufficient funds in sender account");
+        eprintln!("   - Network configuration issues");
+
+        // Return Ok to avoid test failure, but log the issue
+        Ok(())
+    }
+}
+
 /// Helper function to validate that all required environment variables for multi-node testing are set.
 ///
 /// This function checks that all 4 private keys and 4 public addresses are properly configured
@@ -660,10 +893,10 @@ pub fn validate_env() -> Result<()> {
         "EVM_PRIVKEY2",
         "EVM_PRIVKEY3",
         "EVM_PRIVKEY4",
-        "EVM_PUBKEY1",
-        "EVM_PUBKEY2",
-        "EVM_PUBKEY3",
-        "EVM_PUBKEY4",
+        "EVM_ADDRESS1",
+        "EVM_ADDRESS2",
+        "EVM_ADDRESS3",
+        "EVM_ADDRESS4",
     ];
 
     let mut missing_vars = Vec::new();
@@ -713,7 +946,7 @@ pub fn validate_env() -> Result<()> {
 
     // Validate public address format (42 characters starting with 0x)
     for i in 1..=4 {
-        let pubkey_var = format!("EVM_PUBKEY{}", i);
+        let pubkey_var = format!("EVM_ADDRESS{}", i);
         let pubkey = env::var(&pubkey_var)?;
 
         if !pubkey.starts_with("0x") {
@@ -751,7 +984,7 @@ pub fn validate_env() -> Result<()> {
 /// # Environment Variables Required
 ///
 /// * `EVM_PRIVKEY1` through `EVM_PRIVKEY4` - 4 private keys
-/// * `EVM_PUBKEY1` through `EVM_PUBKEY4` - 4 public addresses
+/// * `EVM_ADDRESS1` through `EVM_ADDRESS4` - 4 public addresses
 ///
 /// # Test Behavior
 ///

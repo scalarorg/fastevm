@@ -15,44 +15,31 @@ path = "src/cli.rs"
 reth-extension = { workspace = true }
 # Ethereum
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
-alloy-consensus = { workspace = true }
-alloy-eips = { workspace = true }
 
 eyre = {workspace = true}
 futures-util = {workspace = true}
 tracing = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }
 hex = "0.4"
-secp256k1 = "0.30"
+secp256k1 = { workspace = true }
 rustc-hash = { workspace = true }
 # Reth
-reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-network-peers" }
-reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-payload-builder" }
-reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-basic-payload-builder" }
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum", features = ["node", "pool", "cli"] }
-reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-payload-builder" }
-reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-engine-primitives" }
-reth-evm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm" }
-reth-rpc = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc" }
-reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api" }
-reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-layer" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives" }
-reth-errors = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-errors" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-transaction-pool" }
+reth-network-peers = { workspace = true }
+reth-payload-builder = { workspace = true }
+reth-basic-payload-builder = { workspace = true }
+reth-ethereum = { workspace = true }
+reth-ethereum-payload-builder = { workspace = true }
+reth-ethereum-engine-primitives = { workspace = true }
+reth-evm = { workspace = true }
+reth-rpc-layer = { workspace = true }
+reth-errors = { workspace = true }
+reth-transaction-pool = { workspace = true }
 
 # Additional dependencies for RPC and caching
 jsonrpsee = { workspace = true }
 tokio = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
-async-stream = { workspace = true }
-async-trait = { workspace = true }
-futures = { workspace = true }
-lru = "0.12"
-dashmap = "5.5"
-uuid = { workspace = true }
 tokio-stream = "0.1"
 
 [dev-dependencies]

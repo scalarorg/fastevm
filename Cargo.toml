@@ -41,23 +41,35 @@ alloy-rpc-types-engine = { version = "1.0.23", default-features = false }
 
 # Reth
 
-# For ef-tests
+reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-basic-payload-builder" }
+reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-payload-builder" }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-chainspec" }
 reth-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-consensus" }
 reth-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db", features = ["mdbx", "test-utils", "disable-lock"] }
 reth-db-api= { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db-api" }
 reth-db-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db-common" }
+reth-errors = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-errors" }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum", features = ["node", "pool", "cli"] }
 reth-ethereum-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-consensus" }
+reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-engine-primitives" }
 reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-primitives" }
+reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-payload-builder" }
 reth-revm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-revm", features = ["std", "witness"] }
 reth-evm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm" }
 reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm-ethereum" }
 reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives-traits" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-provider", features = ["test-utils"] }
+reth-rpc = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc" }
+reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api" }
+reth-rpc-layer = { git = "https://github.com/scalarorg/reth.git", branch = "debug", package = "reth-rpc-layer" }
 reth-stateless = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-stateless" }
 reth-tracing = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-tracing" }
 reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie" }
 reth-trie-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie-db" }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-network-peers" }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-transaction-pool" }
+
 revm = { version = "28.0.1", default-features = false }
 walkdir = "2.3.3"
 
@@ -92,7 +104,7 @@ hyper-util = "0.1.5"
 # Crypto and hashing
 sha2 = "0.10"
 sha3 = "0.10"
-secp256k1 = "0.31"
+secp256k1 = "0.30"
 hex = "0.4"
 rustc-hash = { version = "2.0", default-features = false }
 

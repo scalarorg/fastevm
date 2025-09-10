@@ -17,8 +17,8 @@ use reth_extension::CommittedSubDag;
 use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::info;
+use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver};
+use tracing::{debug, error, info, trace, warn};
 
 pub struct MysticetiConsensus<Provider, Payload>
 where
@@ -71,7 +71,7 @@ where
         let mut queue_guard = self
             .subdag_queue
             .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to lock subdag queue"))?;
+            .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
         queue_guard.push_back(subdag.clone());
         info!(
             "Subdag queued successfully. Queue size: {}",
@@ -121,19 +121,41 @@ where
     async fn try_execute_pending_payload(&mut self, payload_id: PayloadId) -> Result<()> {
         let pending_payload = self.retrieve_payload(payload_id).await?;
         if let Some(pending_payload) = pending_payload {
-            info!(
+            debug!(
                 "Payload built successfully. Update last payload to {:?} and clear pending payload id:",
                 pending_payload
             );
-            self.pending_payload_id = None;
             let execution_payload = Payload::block_to_payload(pending_payload.block().clone());
-            self.last_payload = Some(execution_payload.clone());
-            let result = self.engine_handle.new_payload(execution_payload).await;
-            if result.is_err() {
-                info!("New payload failed: {:?}", result);
+            match self
+                .engine_handle
+                .new_payload(execution_payload.clone())
+                .await
+            {
+                Ok(payload_status) => {
+                    if payload_status.is_valid() {
+                        info!("New payload sent successfully");
+                        self.pending_payload_id = None;
+                        self.last_payload = Some(execution_payload.clone());
+                        //Update
+                        let forkchoice_state = self.create_forkchoice_state().await;
+                        self.engine_handle
+                            .fork_choice_updated(
+                                forkchoice_state,
+                                None,
+                                EngineApiMessageVersion::default(),
+                            )
+                            .await
+                            .map_err(anyhow::Error::msg)?;
+                    } else {
+                        error!("New payload failed: {:?}", payload_status);
+                    }
+                }
+                Err(e) => {
+                    error!("New payload failed: {:?}", e);
+                }
             }
         } else {
-            info!("Payload not found");
+            error!("Payload not found");
         }
 
         Ok(())
@@ -143,7 +165,7 @@ where
         let queue_guard = self
             .subdag_queue
             .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to lock subdag queue"))?;
+            .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
         Ok(queue_guard.len())
     }
 }
@@ -155,37 +177,68 @@ where
     pub async fn start(&mut self) {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
         loop {
-            if self.queue_size().await.unwrap_or_default() > 0 {
-                info!(
-                    "Queue size: {}. Start processing by building next payload or executing pending payload.",
-                    self.queue_size().await.unwrap_or_default()
-                );
-                match &self.pending_payload_id {
-                    //If there is a pending payload id, try to get the payload and execute it in the engine
-                    Some(payload_id) => {
-                        let result = self.try_execute_pending_payload(payload_id.clone()).await;
-                        if result.is_err() {
-                            info!("try execute pending payload failed: {:?}", result);
+            match &self.pending_payload_id {
+                //If there is a pending payload id, try to get the payload and execute it in the engine
+                Some(payload_id) => {
+                    trace!("Try to execute pending payload: {:?}", payload_id);
+                    let result = self.try_execute_pending_payload(payload_id.clone()).await;
+                    match result {
+                        Ok(()) => {
+                            debug!("Try to execute pending payload successfully");
+                        }
+                        Err(e) => {
+                            error!("try execute pending payload failed: {:?}", e);
                         }
                     }
-                    //If no pending payload id, build next payload
-                    None => {
-                        let result = self.build_next_payload().await;
-                        if result.is_err() {
-                            info!("Build next payload failed: {:?}", result);
+                }
+                //If no pending payload id, build next payload
+                None => {
+                    trace!("No pending payload id. Build next payload.");
+                    let queue_size = self.queue_size().await.unwrap_or_default();
+                    if queue_size > 0 {
+                        debug!(
+                            "Queue size: {}. Start processing by building next payload or executing pending payload.",
+                            queue_size
+                        );
+                        match self.build_next_payload().await {
+                            Ok(Some(payload_id)) => {
+                                debug!(
+                                    "Build next payload successfully. Pending payload id: {:?}",
+                                    payload_id
+                                );
+                                self.pending_payload_id.replace(payload_id);
+                            }
+                            Ok(None) => {
+                                debug!("Build next payload successfully without payload id");
+                            }
+                            Err(e) => {
+                                error!("Build next payload failed: {:?}", e);
+                            }
                         }
+                    } else {
+                        trace!("Queue is empty. Waiting for subdag.");
                     }
                 }
             }
 
             //Try get subdag from channel and add to queue
-            if let Some(subdag) = self.subdag_rx.recv().await {
-                let result = self.process_single_subdag(subdag).await;
-                if result.is_err() {
-                    info!("Process single subdag failed: {:?}", result);
+            match self.subdag_rx.try_recv() {
+                Ok(subdag) => {
+                    let result = self.process_single_subdag(subdag).await;
+                    if result.is_err() {
+                        error!("Process single subdag failed: {:?}", result);
+                    }
                 }
+                Err(e) => match e {
+                    TryRecvError::Disconnected => {
+                        error!("Subdag channel closed, stopping consensus loop");
+                        break;
+                    }
+                    TryRecvError::Empty => {
+                        trace!("No subdag received from channel: {:?}", e);
+                    }
+                },
             }
-
             //Update forkchoice state and payload attributes
             interval.tick().await;
         }
@@ -194,9 +247,16 @@ where
     async fn create_payload_attributes(
         &self,
     ) -> Option<<EthEngineTypes as PayloadTypes>::PayloadAttributes> {
-        match &self.last_payload {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let attributes = match &self.last_payload {
             Some(payload) => {
-                let timestamp = payload.timestamp();
+                if timestamp < payload.timestamp() {
+                    warn!("Timestamp is less than last payload timestamp. Waiting for next iteration.");
+                    return None;
+                }
                 let attributes = EthPayloadAttributes {
                     timestamp,
                     prev_randao: B256::random(),
@@ -206,10 +266,21 @@ where
                 };
                 Some(attributes)
             }
-            None => None,
-        }
+            None => {
+                let chain_spec = self.provider.chain_spec();
+                let attributes = EthPayloadAttributes {
+                    timestamp,
+                    prev_randao: B256::random(),
+                    suggested_fee_recipient: Address::random(),
+                    withdrawals: Default::default(),
+                    parent_beacon_block_root: Some(chain_spec.genesis_hash()),
+                };
+                Some(attributes)
+            }
+        };
+        attributes
     }
-    pub async fn build_next_payload(&mut self) -> Result<()> {
+    pub async fn build_next_payload(&mut self) -> Result<Option<PayloadId>> {
         let forkchoice_state = self.create_forkchoice_state().await;
         let payload_attributes = self.create_payload_attributes().await;
         let ForkchoiceUpdated {
@@ -224,27 +295,30 @@ where
             )
             .await
             .map_err(anyhow::Error::msg)?;
+        info!(
+            "Forkchoice updated: Payload status: {:?}; Payload id: {:?}",
+            payload_status, payload_id
+        );
         if payload_status.is_valid() {
             if let Some(payload_id) = payload_id {
                 info!(
                     "Forkchoice updated successfully. Update pending payload id to: {:?}.",
                     payload_id
                 );
-                self.pending_payload_id = Some(payload_id);
+                return Ok(Some(payload_id));
             } else {
                 info!("Forkchoice updated successfully without payload id");
             }
         } else {
             info!("Forkchoice update failed: {:?}", payload_status);
         }
-        Ok(())
+        Ok(None)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reth_ethereum::pool::noop::NoopTransactionPool;
     use std::sync::Arc;
     use tokio::sync::mpsc::unbounded_channel;
 

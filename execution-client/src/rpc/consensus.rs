@@ -1,8 +1,6 @@
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::error::CALL_EXECUTION_FAILED_CODE;
 use jsonrpsee::types::ErrorObject;
-use reth_ethereum::pool::noop::NoopTransactionPool;
-use reth_ethereum::pool::TransactionPool;
 use reth_extension::CommittedSubDag;
 use reth_extension::ConsensusTransactionApiServer;
 use tokio::sync::mpsc::UnboundedSender;
@@ -10,20 +8,16 @@ use tracing::debug;
 use tracing::info;
 /// The type that implements the `txpool` rpc namespace trait
 #[derive(Debug)]
-pub struct ConsensusTransactionsHandler<Pool> {
+pub struct ConsensusTransactionsHandler {
     subdag_tx: UnboundedSender<CommittedSubDag>,
-    pool: Pool,
 }
-impl<Pool> ConsensusTransactionsHandler<Pool> {
-    pub fn new(subdag_tx: UnboundedSender<CommittedSubDag>, pool: Pool) -> Self {
-        Self { subdag_tx, pool }
+impl ConsensusTransactionsHandler {
+    pub fn new(subdag_tx: UnboundedSender<CommittedSubDag>) -> Self {
+        Self { subdag_tx }
     }
 }
 
-impl<Pool> ConsensusTransactionApiServer for ConsensusTransactionsHandler<Pool>
-where
-    Pool: TransactionPool + Clone + 'static,
-{
+impl ConsensusTransactionApiServer for ConsensusTransactionsHandler {
     #[doc = " Submit commited subdag"]
     fn submit_committed_subdag(&self, subdag: CommittedSubDag) -> RpcResult<()> {
         info!("submit_committed_subdag: {:?}", subdag);
@@ -56,8 +50,7 @@ mod tests {
     #[test]
     fn test_consensus_transactions_handler_new() {
         let (subdag_tx, _subdag_rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = NoopTransactionPool::default();
-        let handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+        let handler = ConsensusTransactionsHandler::new(subdag_tx);
 
         // Test that the handler was created successfully
         // We can't directly test the fields as they're private, but we can test the methods
@@ -70,11 +63,9 @@ mod tests {
     fn test_consensus_transactions_handler_with_different_pools() {
         let (subdag_tx1, _subdag_rx1) = tokio::sync::mpsc::unbounded_channel();
         let (subdag_tx2, _subdag_rx2) = tokio::sync::mpsc::unbounded_channel();
-        let pool1 = NoopTransactionPool::default();
-        let pool2 = NoopTransactionPool::default();
 
-        let handler1 = ConsensusTransactionsHandler::new(subdag_tx1, pool1);
-        let handler2 = ConsensusTransactionsHandler::new(subdag_tx2, pool2);
+        let handler1 = ConsensusTransactionsHandler::new(subdag_tx1);
+        let handler2 = ConsensusTransactionsHandler::new(subdag_tx2);
 
         // Both should work the same way
         let subdag = CommittedSubDag::default();
@@ -85,8 +76,7 @@ mod tests {
     #[test]
     fn test_submit_committed_subdag_success() {
         let (subdag_tx, _subdag_rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = NoopTransactionPool::default();
-        let handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+        let handler = ConsensusTransactionsHandler::new(subdag_tx);
         let subdag = CommittedSubDag::default();
         let result = handler.submit_committed_subdag(subdag);
         assert!(result.is_ok());
@@ -95,8 +85,7 @@ mod tests {
     #[test]
     fn test_submit_committed_subdag_with_blocks() {
         let (subdag_tx, _subdag_rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = NoopTransactionPool::default();
-        let handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+        let handler = ConsensusTransactionsHandler::new(subdag_tx);
 
         // Create a subdag with some blocks
         let subdag = CommittedSubDag::default();
@@ -109,8 +98,7 @@ mod tests {
     #[test]
     fn test_submit_committed_subdag_multiple_times() {
         let (subdag_tx, _subdag_rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = NoopTransactionPool::default();
-        let handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+        let handler = ConsensusTransactionsHandler::new(subdag_tx);
 
         // Submit multiple subdags
         for i in 0..5 {
@@ -123,8 +111,7 @@ mod tests {
     #[test]
     fn test_consensus_transactions_handler_debug() {
         let (subdag_tx, _subdag_rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = NoopTransactionPool::default();
-        let handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+        let handler = ConsensusTransactionsHandler::new(subdag_tx);
 
         // Test that we can format the handler for debugging
         let debug_str = format!("{:?}", handler);
@@ -181,8 +168,7 @@ mod tests {
     #[tokio::test]
     async fn test_submit_committed_subdag_async() {
         let (subdag_tx, mut subdag_rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = NoopTransactionPool::default();
-        let handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+        let handler = ConsensusTransactionsHandler::new(subdag_tx);
         let subdag = CommittedSubDag::default();
 
         // Submit the subdag
@@ -199,8 +185,7 @@ mod tests {
     #[tokio::test]
     async fn test_submit_committed_subdag_channel_closed() {
         let (subdag_tx, subdag_rx) = tokio::sync::mpsc::unbounded_channel();
-        let pool = NoopTransactionPool::default();
-        let handler = ConsensusTransactionsHandler::new(subdag_tx, pool);
+        let handler = ConsensusTransactionsHandler::new(subdag_tx);
 
         // Close the receiver
         drop(subdag_rx);

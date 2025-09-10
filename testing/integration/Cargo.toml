@@ -16,8 +16,6 @@ ef-tests = []
 asm-keccak = ["alloy-primitives/asm-keccak", "revm/asm-keccak"]
 
 [dependencies]
-fastevm-execution.workspace = true
-fastevm-consensus.workspace = true
 
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-chainspec" }
 
