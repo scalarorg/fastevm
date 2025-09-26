@@ -1,14 +1,22 @@
 use futures_util::StreamExt;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
-    PendingSubscriptionSink, SubscriptionMessage,
+    PendingSubscriptionSink,
 };
 
 use reth_ethereum::pool::{NewTransactionEvent, TransactionPool};
+use reth_transaction_pool::ValidPoolTransaction;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::interval;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::info;
 
-use reth_extension::TxpoolListenerApiServer;
+use reth_extension::{encode_transactions, TxpoolListenerApiServer};
+
+// Configuration constants for transaction batching
+const BATCH_SIZE_THRESHOLD: usize = 10; // Send batch when we have 10 transactions
+const BATCH_TIMEOUT_MS: u64 = 1000; // Send batch after 1 second even if not full
 
 /// Our custom cli args extension that adds one flag to reth default CLI.
 #[derive(Debug, Clone, Copy, Default, clap::Args)]
@@ -55,16 +63,41 @@ where
                     return;
                 }
             };
+
+            // Transaction buffer for batching
+            let mut buffer: Vec<Arc<ValidPoolTransaction<<Pool as TransactionPool>::Transaction>>> =
+                Vec::new();
+
+            // Create a periodic timer for batch timeout
+            let mut batch_timer = interval(Duration::from_millis(BATCH_TIMEOUT_MS));
+
             // Waiting for new transactions
-            while let Some(NewTransactionEvent { transaction, .. }) = stream.next().await {
-                info!("Transaction received: {transaction:?}");
-                if transaction.is_local() {
-                    // let tx_data = transaction.transaction.input();
-                    let tx_hash = transaction.hash().clone();
-                    let msg = SubscriptionMessage::from(
-                        serde_json::value::to_raw_value(&tx_hash).expect("serialize"),
-                    );
-                    let _ = sink.send(msg).await;
+            loop {
+                tokio::select! {
+                    // Handle new transaction events
+                    Some(NewTransactionEvent { transaction, .. }) = stream.next() => {
+                        info!("Transaction received: {transaction:?}");
+                        if transaction.is_local() {
+                            // because of this push, buffer has at least 1 transaction
+                            buffer.push(transaction);
+                            // Send batch if threshold is reached
+                            if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                                info!("Sending batch of {} transactions", buffer.len());
+                                let batch = std::mem::take(&mut buffer);
+                                let msg = encode_transactions(batch);
+                                let _ = sink.send(msg).await;
+                            }
+                        }
+                    }
+                    // Handle batch timeout
+                    _ = batch_timer.tick() => {
+                        if !buffer.is_empty() {
+                            info!("Sending batch of {} transactions", buffer.len());
+                            let batch = std::mem::take(&mut buffer);
+                            let msg = encode_transactions(batch);
+                            let _ = sink.send(msg).await;
+                        }
+                    }
                 }
             }
         }));
@@ -75,21 +108,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::{
-        network::{Ethereum, Network, TransactionBuilder},
-        primitives::{Address, U256},
-        rpc::types::TransactionRequest,
-    };
-    use alloy_primitives::ChainId;
-    use alloy_signer_local::PrivateKeySigner;
-    use eyre::Result;
     use jsonrpsee::http_client::HttpClientBuilder;
     use jsonrpsee::server::ServerBuilder;
     use jsonrpsee::ws_client::WsClientBuilder;
     use reth_ethereum::pool::noop::NoopTransactionPool;
     use reth_extension::TxpoolListenerApiClient;
     use reth_rpc_layer::{secret_to_bearer_header, JwtSecret};
-    use std::str::FromStr;
     #[test]
     fn test_cli_txpool_listener_default() {
         let cli = CliTxpoolListener::default();
@@ -275,44 +299,44 @@ mod tests {
         addr
     }
 
-    pub async fn create_transfer_transaction(
-        signer_privkey: &str,
-        recipient: &str,
-        chain_id: ChainId,
-        gwei_amount: u64,
-        nonce: u64,
-    ) -> Result<<Ethereum as Network>::TxEnvelope> {
-        // Parse the recipient address from string to Address type
-        let recipient_addr = Address::from_str(recipient)
-            .map_err(|e| eyre::eyre!("Invalid recipient address: {}", e))?;
+    // pub async fn create_transfer_transaction(
+    //     signer_privkey: &str,
+    //     recipient: &str,
+    //     chain_id: ChainId,
+    //     gwei_amount: u64,
+    //     nonce: u64,
+    // ) -> Result<<Ethereum as Network>::TxEnvelope> {
+    //     // Parse the recipient address from string to Address type
+    //     let recipient_addr = Address::from_str(recipient)
+    //         .map_err(|e| eyre::eyre!("Invalid recipient address: {}", e))?;
 
-        // Create a wallet signer from the provided private key
-        let wallet = PrivateKeySigner::from_str(signer_privkey)
-            .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
+    //     // Create a wallet signer from the provided private key
+    //     let wallet = PrivateKeySigner::from_str(signer_privkey)
+    //         .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
 
-        // Get the sender's address from the wallet
-        let sender_addr = wallet.address();
+    //     // Get the sender's address from the wallet
+    //     let sender_addr = wallet.address();
 
-        // Build a transaction request with standard ETH transfer parameters
-        let tx = TransactionRequest::default()
-            .with_from(sender_addr)
-            .with_to(recipient_addr)
-            .with_nonce(nonce)
-            .with_chain_id(chain_id)
-            .with_value(U256::from(gwei_amount))
-            .with_gas_limit(21_000) // Standard gas limit for ETH transfers
-            .with_max_priority_fee_per_gas(1_000_000_000) // 1 Gwei
-            .with_max_fee_per_gas(20_000_000_000); // 20 Gwei
+    //     // Build a transaction request with standard ETH transfer parameters
+    //     let tx = TransactionRequest::default()
+    //         .with_from(sender_addr)
+    //         .with_to(recipient_addr)
+    //         .with_nonce(nonce)
+    //         .with_chain_id(chain_id)
+    //         .with_value(U256::from(gwei_amount))
+    //         .with_gas_limit(21_000) // Standard gas limit for ETH transfers
+    //         .with_max_priority_fee_per_gas(1_000_000_000) // 1 Gwei
+    //         .with_max_fee_per_gas(20_000_000_000); // 20 Gwei
 
-        // Convert the LocalSigner to an EthereumWallet to satisfy the NetworkWallet trait bound
-        let ethereum_wallet = alloy::network::EthereumWallet::from(wallet);
+    //     // Convert the LocalSigner to an EthereumWallet to satisfy the NetworkWallet trait bound
+    //     let ethereum_wallet = alloy::network::EthereumWallet::from(wallet);
 
-        // Build and sign the transaction using the ethereum wallet
-        let tx_envelope = tx
-            .build(&ethereum_wallet)
-            .await
-            .map_err(|e| eyre::eyre!("Failed to build transaction: {}", e))?;
+    //     // Build and sign the transaction using the ethereum wallet
+    //     let tx_envelope = tx
+    //         .build(&ethereum_wallet)
+    //         .await
+    //         .map_err(|e| eyre::eyre!("Failed to build transaction: {}", e))?;
 
-        Ok(tx_envelope)
-    }
+    //     Ok(tx_envelope)
+    // }
 }

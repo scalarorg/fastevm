@@ -9,17 +9,19 @@
 //! Note: Some tests require a local EVM network (like Anvil, Hardhat, or Ganache)
 //! to be running and properly configured with test accounts.
 
-use alloy::{
-    hex::ToHexExt,
-    primitives::Address,
-    providers::{Provider, ProviderBuilder},
-};
-
+use alloy::hex::ToHexExt;
+use alloy_primitives::Address;
+use alloy_provider::{Provider, ProviderBuilder};
 use eyre::Result;
+use rand::Rng;
 use std::env;
 use std::str::FromStr;
-use testing::transactions::create_transfer_transaction;
+use testing::{
+    address::derive_eth_address, rpc::get_nonces, transactions::create_transfer_transaction,
+};
 
+const TEST_MNEMONIC: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 /// Configuration for connecting to an Ethereum network for testing purposes.
 ///
 /// This struct holds all the necessary connection parameters to interact with
@@ -121,7 +123,7 @@ fn test_address_parsing() {
 async fn broadcast_transaction() -> Result<()> {
     // Load environment variables from .env file if present
     dotenv::dotenv().ok();
-    eprintln!("Starting broadcast_transaction test");
+    println!("Starting broadcast_transaction test");
     // Extract network configuration from environment variables
     let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
     let _ws_url = env::var("WS_URL").unwrap_or_else(|_| "ws://localhost:8546".to_string());
@@ -137,31 +139,31 @@ async fn broadcast_transaction() -> Result<()> {
     // Parse sender and recipient addresses from environment variables
     let sender_addr = Address::from_str(&env::var("EVM_ADDRESS1")?)?;
     let recipient_address = Address::from_str(&recipient_addr)?;
-    eprintln!("sender_addr: {:?}", &sender_addr);
-    eprintln!("recipient_address: {:?}", &recipient_address);
-    eprintln!("chain_id: {:?}", &chain_id);
-    eprintln!("gwei_amount: {:?}", &gwei_amount);
-    eprintln!("rpc_url: {:?}", &rpc_url);
-    eprintln!("ws_url: {:?}", &_ws_url);
-    eprintln!("sender_privkey: {:?}", &sender_privkey);
+    println!("sender_addr: {:?}", &sender_addr);
+    println!("recipient_address: {:?}", &recipient_address);
+    println!("chain_id: {:?}", &chain_id);
+    println!("gwei_amount: {:?}", &gwei_amount);
+    println!("rpc_url: {:?}", &rpc_url);
+    println!("ws_url: {:?}", &_ws_url);
+    println!("sender_privkey: {:?}", &sender_privkey);
     // Attempt to connect to the Ethereum provider
     let provider = match ProviderBuilder::new().connect(&rpc_url).await {
         Ok(provider) => provider,
         Err(e) => {
-            eprintln!(
+            println!(
                 "⚠️  Warning: Could not connect to Ethereum network at {:?}",
                 &rpc_url
             );
-            eprintln!("   Error: {:?}", &e);
-            eprintln!("   This test requires a local EVM network to be running.");
-            eprintln!("   To run this test:");
-            eprintln!("   1. Start your local EVM network (e.g., Anvil, Hardhat, or Ganache)");
-            eprintln!("   2. Ensure it's accessible at {:?}", &rpc_url);
-            eprintln!("   3. Set up your .env file with proper private keys and addresses");
-            eprintln!("   4. Run: cargo test broadcast_transaction");
+            println!("   Error: {:?}", &e);
+            println!("   This test requires a local EVM network to be running.");
+            println!("   To run this test:");
+            println!("   1. Start your local EVM network (e.g., Anvil, Hardhat, or Ganache)");
+            println!("   2. Ensure it's accessible at {:?}", &rpc_url);
+            println!("   3. Set up your .env file with proper private keys and addresses");
+            println!("   4. Run: cargo test broadcast_transaction");
 
             // Skip the test instead of failing
-            eprintln!("   Skipping test due to network unavailability...");
+            println!("   Skipping test due to network unavailability...");
             return Ok(());
         }
     };
@@ -170,18 +172,18 @@ async fn broadcast_transaction() -> Result<()> {
     let nonce = match provider.get_transaction_count(sender_addr).await {
         Ok(nonce) => nonce,
         Err(e) => {
-            eprintln!(
+            println!(
                 "⚠️  Warning: Could not get nonce for address {:?}",
                 &sender_addr
             );
-            eprintln!("   Error: {:?}", &e);
-            eprintln!("   This might indicate the address has no transaction history or insufficient permissions.");
-            eprintln!("   Skipping test...");
+            println!("   Error: {:?}", &e);
+            println!("   This might indicate the address has no transaction history or insufficient permissions.");
+            println!("   Skipping test...");
             return Ok(());
         }
     };
 
-    eprintln!("nonce: {:?}", &nonce);
+    println!("nonce: {:?}", &nonce);
     // Create and sign the transfer transaction
     // In evm network nonce start from 0
     let tx_envelope = match create_transfer_transaction(
@@ -195,17 +197,17 @@ async fn broadcast_transaction() -> Result<()> {
     {
         Ok(envelope) => envelope,
         Err(e) => {
-            eprintln!("⚠️  Warning: Could not create transaction");
-            eprintln!("   Error: {:?}", &e);
-            eprintln!(
+            println!("⚠️  Warning: Could not create transaction");
+            println!("   Error: {:?}", &e);
+            println!(
                 "   This might indicate issues with the private key or transaction parameters."
             );
-            eprintln!("   Skipping test...");
+            println!("   Skipping test...");
             return Ok(());
         }
     };
-    eprintln!("tx_envelope: {:?}", &tx_envelope);
-    eprintln!("tx_envelope hash: {:?}", &tx_envelope.hash().encode_hex());
+    println!("tx_envelope: {:?}", &tx_envelope);
+    println!("tx_envelope hash: {:?}", &tx_envelope.hash().encode_hex());
     // Broadcast the transaction to the network
     match provider.send_tx_envelope(tx_envelope).await {
         Ok(pending_tx) => {
@@ -215,53 +217,53 @@ async fn broadcast_transaction() -> Result<()> {
                     // Verify the transaction receipt details
                     assert_eq!(receipt.from, sender_addr);
                     assert_eq!(receipt.to, Some(recipient_address));
-                    eprintln!("✅ Transaction successfully broadcast and confirmed!");
-                    eprintln!("   Transaction hash: {:?}", receipt.transaction_hash);
-                    eprintln!("   Block number: {:?}", receipt.block_number);
+                    println!("✅ Transaction successfully broadcast and confirmed!");
+                    println!("   Transaction hash: {:?}", receipt.transaction_hash);
+                    println!("   Block number: {:?}", receipt.block_number);
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Warning: Transaction sent but could not get receipt");
-                    eprintln!("   Error: {:?}", &e);
-                    eprintln!("   The transaction might still be pending or failed.");
-                    eprintln!("   This is not a test failure, but indicates the transaction status is unclear.");
+                    println!("⚠️  Warning: Transaction sent but could not get receipt");
+                    println!("   Error: {:?}", &e);
+                    println!("   The transaction might still be pending or failed.");
+                    println!("   This is not a test failure, but indicates the transaction status is unclear.");
                 }
             }
         }
         Err(e) => {
             let error_msg = format!("{e:?}");
             if error_msg.contains("already known") {
-                eprintln!("⚠️  Warning: Transaction rejected - 'already known'");
-                eprintln!("   This usually means:");
-                eprintln!("   1. The transaction was already sent in a previous test run");
-                eprintln!("   2. The nonce is being reused");
-                eprintln!("   3. The transaction is still in the mempool");
-                eprintln!("   ");
-                eprintln!("   To resolve this:");
-                eprintln!("   1. Wait for the previous transaction to be mined");
-                eprintln!("   2. Restart your local EVM network to clear the mempool");
-                eprintln!("   3. Use a different account for testing");
-                eprintln!("   ");
-                eprintln!("   Skipping test due to duplicate transaction...");
-                eprintln!("   ");
+                println!("⚠️  Warning: Transaction rejected - 'already known'");
+                println!("   This usually means:");
+                println!("   1. The transaction was already sent in a previous test run");
+                println!("   2. The nonce is being reused");
+                println!("   3. The transaction is still in the mempool");
+                println!("   ");
+                println!("   To resolve this:");
+                println!("   1. Wait for the previous transaction to be mined");
+                println!("   2. Restart your local EVM network to clear the mempool");
+                println!("   3. Use a different account for testing");
+                println!("   ");
+                println!("   Skipping test due to duplicate transaction...");
+                println!("   ");
                 // Provide immediate guidance
                 reset_network_guidance();
             } else if error_msg.contains("insufficient funds") {
-                eprintln!("⚠️  Warning: Transaction rejected - insufficient funds");
-                eprintln!("   The sender account doesn't have enough balance for the transaction.");
-                eprintln!("   Skipping test...");
+                println!("⚠️  Warning: Transaction rejected - insufficient funds");
+                println!("   The sender account doesn't have enough balance for the transaction.");
+                println!("   Skipping test...");
             } else if error_msg.contains("gas") {
-                eprintln!("⚠️  Warning: Transaction rejected - gas-related issue");
-                eprintln!(
+                println!("⚠️  Warning: Transaction rejected - gas-related issue");
+                println!(
                     "   This might be due to gas price, gas limit, or gas estimation problems."
                 );
-                eprintln!("   Skipping test...");
+                println!("   Skipping test...");
             } else {
-                eprintln!("⚠️  Warning: Could not send transaction");
-                eprintln!("   Error: {:?}", &e);
-                eprintln!(
+                println!("⚠️  Warning: Could not send transaction");
+                println!("   Error: {:?}", &e);
+                println!(
                     "   This might indicate insufficient balance, gas issues, or network problems."
                 );
-                eprintln!("   Skipping test...");
+                println!("   Skipping test...");
             }
             return Ok(());
         }
@@ -282,33 +284,33 @@ async fn broadcast_transaction() -> Result<()> {
 /// reset_network_guidance();
 /// ```
 pub fn reset_network_guidance() {
-    eprintln!("🔄 Network Reset Guidance for Testing");
-    eprintln!("=====================================");
+    println!("🔄 Network Reset Guidance for Testing");
+    println!("=====================================");
 
-    eprintln!("If you're encountering transaction conflicts or other issues:");
+    println!("If you're encountering transaction conflicts or other issues:");
 
-    eprintln!("1. **Restart your local EVM network:**");
-    eprintln!("   - Stop your Anvil/Hardhat/Ganache instance");
-    eprintln!("   - Clear any persistent state files");
-    eprintln!("   - Restart with fresh genesis state");
+    println!("1. **Restart your local EVM network:**");
+    println!("   - Stop your Anvil/Hardhat/Ganache instance");
+    println!("   - Clear any persistent state files");
+    println!("   - Restart with fresh genesis state");
 
-    eprintln!("2. **For Anvil (recommended for testing):**");
-    eprintln!("   anvil --chain-id 202501 --accounts 10 --balance 1000000");
+    println!("2. **For Anvil (recommended for testing):**");
+    println!("   anvil --chain-id 202501 --accounts 10 --balance 1000000");
 
-    eprintln!("3. **For Hardhat:**");
-    eprintln!("   npx hardhat node --reset");
+    println!("3. **For Hardhat:**");
+    println!("   npx hardhat node --reset");
 
-    eprintln!("4. **For Ganache:**");
-    eprintln!("   ganache --chain.chainId 202501 --wallet.totalAccounts 10");
+    println!("4. **For Ganache:**");
+    println!("   ganache --chain.chainId 202501 --wallet.totalAccounts 10");
 
-    eprintln!("5. **Alternative: Use different accounts**");
-    eprintln!("   - Generate new private keys for each test run");
-    eprintln!("   - Update your .env file with new keys");
+    println!("5. **Alternative: Use different accounts**");
+    println!("   - Generate new private keys for each test run");
+    println!("   - Update your .env file with new keys");
 
-    eprintln!("6. **Check network status:**");
-    eprintln!("   - Verify RPC endpoint is accessible");
-    eprintln!("   - Check account balances");
-    eprintln!("   - Verify chain ID matches your configuration");
+    println!("6. **Check network status:**");
+    println!("   - Verify RPC endpoint is accessible");
+    println!("   - Check account balances");
+    println!("   - Verify chain ID matches your configuration");
 }
 
 /// Test that retrieves and displays the current balance of the sender address.
@@ -343,27 +345,27 @@ async fn get_sender_balance() -> Result<()> {
     let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
     let sender_addr = Address::from_str(&env::var("EVM_ADDRESS1")?)?;
 
-    eprintln!("Checking balance for sender address: {:?}", &sender_addr);
-    eprintln!("Connecting to RPC endpoint: {:?}", &rpc_url);
+    println!("Checking balance for sender address: {:?}", &sender_addr);
+    println!("Connecting to RPC endpoint: {:?}", &rpc_url);
 
     // Attempt to connect to the Ethereum provider
     let provider = match ProviderBuilder::new().connect(&rpc_url).await {
         Ok(provider) => provider,
         Err(e) => {
-            eprintln!(
+            println!(
                 "⚠️  Warning: Could not connect to Ethereum network at {:?}",
                 &rpc_url
             );
-            eprintln!("   Error: {:?}", &e);
-            eprintln!("   This test requires a local EVM network to be running.");
-            eprintln!("   To run this test:");
-            eprintln!("   1. Start your local EVM network (e.g., Anvil, Hardhat, or Ganache)");
-            eprintln!("   2. Ensure it's accessible at {:?}", &rpc_url);
-            eprintln!("   3. Set up your .env file with proper addresses");
-            eprintln!("   4. Run: cargo test get_sender_balance");
+            println!("   Error: {:?}", &e);
+            println!("   This test requires a local EVM network to be running.");
+            println!("   To run this test:");
+            println!("   1. Start your local EVM network (e.g., Anvil, Hardhat, or Ganache)");
+            println!("   2. Ensure it's accessible at {:?}", &rpc_url);
+            println!("   3. Set up your .env file with proper addresses");
+            println!("   4. Run: cargo test get_sender_balance");
 
             // Skip the test instead of failing
-            eprintln!("   Skipping test due to network unavailability...");
+            println!("   Skipping test due to network unavailability...");
             return Ok(());
         }
     };
@@ -372,15 +374,15 @@ async fn get_sender_balance() -> Result<()> {
     let balance = match provider.get_balance(sender_addr).await {
         Ok(balance) => balance,
         Err(e) => {
-            eprintln!(
+            println!(
                 "⚠️  Warning: Could not get balance for address {:?}",
                 &sender_addr
             );
-            eprintln!("   Error: {:?}", &e);
-            eprintln!(
+            println!("   Error: {:?}", &e);
+            println!(
                 "   This might indicate the address doesn't exist or insufficient permissions."
             );
-            eprintln!("   Skipping test...");
+            println!("   Skipping test...");
             return Ok(());
         }
     };
@@ -389,9 +391,9 @@ async fn get_sender_balance() -> Result<()> {
     let balance_wei = balance.try_into().unwrap_or(0u128);
     let balance_eth = balance_wei / 1_000_000_000_000_000_000;
     assert_eq!(balance_eth, 1_000_000_u128); //1M ETH
-    eprintln!("✅ Successfully retrieved balance for {:?}", &sender_addr);
-    eprintln!("   Balance: {:?} wei", &balance_wei);
-    eprintln!("   Balance: {:?} ETH", &balance_eth);
+    println!("✅ Successfully retrieved balance for {:?}", &sender_addr);
+    println!("   Balance: {:?} wei", &balance_wei);
+    println!("   Balance: {:?} ETH", &balance_eth);
 
     Ok(())
 }
@@ -435,12 +437,12 @@ async fn get_sender_balance() -> Result<()> {
 async fn test_multi_transactions() -> Result<()> {
     // Load environment variables from .env file if present
     dotenv::dotenv().ok();
-    eprintln!("Starting test_multi_node_transactions test");
+    println!("Starting test_multi_node_transactions test");
 
     // Validate environment configuration first
     if let Err(e) = validate_env() {
-        eprintln!("❌ Environment validation failed: {}", e);
-        eprintln!("   Skipping multi-node test due to configuration issues...");
+        println!("❌ Environment validation failed: {}", e);
+        println!("   Skipping multi-node test due to configuration issues...");
         return Ok(());
     }
 
@@ -472,10 +474,10 @@ async fn test_multi_transactions() -> Result<()> {
         ("Node 4", "http://localhost:8555"),
     ];
 
-    eprintln!("Chain ID: {}", chain_id);
-    eprintln!("Number of private keys: {}", private_keys.len());
-    eprintln!("Number of addresses: {}", addresses.len());
-    eprintln!("Number of nodes: {}", node_configs.len());
+    println!("Chain ID: {}", chain_id);
+    println!("Number of private keys: {}", private_keys.len());
+    println!("Number of addresses: {}", addresses.len());
+    println!("Number of nodes: {}", node_configs.len());
 
     // Test transaction amounts (in wei)
     let transaction_amounts = vec![
@@ -488,18 +490,18 @@ async fn test_multi_transactions() -> Result<()> {
 
     // Iterate through each node and send transactions
     for (_node_idx, (node_name, rpc_url)) in node_configs.iter().enumerate() {
-        eprintln!("🔄 Testing {} at {}", node_name, rpc_url);
+        println!("🔄 Testing {} at {}", node_name, rpc_url);
 
         // Attempt to connect to the node
         let provider = match ProviderBuilder::new().connect(rpc_url).await {
             Ok(provider) => provider,
             Err(e) => {
-                eprintln!(
+                println!(
                     "⚠️  Warning: Could not connect to {} at {}",
                     node_name, rpc_url
                 );
-                eprintln!("   Error: {:?}", e);
-                eprintln!("   Skipping this node...");
+                println!("   Error: {:?}", e);
+                println!("   Skipping this node...");
                 continue;
             }
         };
@@ -521,7 +523,7 @@ async fn test_multi_transactions() -> Result<()> {
             for (amount_idx, amount) in transaction_amounts.iter().enumerate() {
                 total_transactions += 1;
 
-                eprintln!(
+                println!(
                     "   📤 Sending transaction {} from key {} to {} (amount: {} wei)",
                     amount_idx + 1,
                     key_idx + 1,
@@ -533,11 +535,11 @@ async fn test_multi_transactions() -> Result<()> {
                 let nonce = match provider.get_transaction_count(*from_address).await {
                     Ok(nonce) => nonce,
                     Err(e) => {
-                        eprintln!(
+                        println!(
                             "   ⚠️  Warning: Could not get nonce for address {:?}",
                             from_address
                         );
-                        eprintln!("   Error: {:?}", e);
+                        println!("   Error: {:?}", e);
                         continue;
                     }
                 };
@@ -554,8 +556,8 @@ async fn test_multi_transactions() -> Result<()> {
                 {
                     Ok(envelope) => envelope,
                     Err(e) => {
-                        eprintln!("   ⚠️  Warning: Could not create transaction");
-                        eprintln!("   Error: {:?}", e);
+                        println!("   ⚠️  Warning: Could not create transaction");
+                        println!("   Error: {:?}", e);
                         continue;
                     }
                 };
@@ -563,7 +565,7 @@ async fn test_multi_transactions() -> Result<()> {
                 // Send the transaction
                 match provider.send_tx_envelope(tx_envelope).await {
                     Ok(pending_tx) => {
-                        eprintln!("   ✅ Transaction sent successfully to {}", node_name);
+                        println!("   ✅ Transaction sent successfully to {}", node_name);
 
                         // Try to get receipt (non-blocking)
                         match tokio::time::timeout(
@@ -573,16 +575,16 @@ async fn test_multi_transactions() -> Result<()> {
                         .await
                         {
                             Ok(Ok(receipt)) => {
-                                eprintln!("   🎯 Transaction confirmed on {}!", node_name);
-                                eprintln!("     Hash: {:?}", receipt.transaction_hash);
-                                eprintln!("     Block: {:?}", receipt.block_number);
+                                println!("   🎯 Transaction confirmed on {}!", node_name);
+                                println!("     Hash: {:?}", receipt.transaction_hash);
+                                println!("     Block: {:?}", receipt.block_number);
                                 successful_transactions += 1;
                             }
                             Ok(Err(e)) => {
-                                eprintln!("   ⚠️  Transaction sent but receipt error: {:?}", e);
+                                println!("   ⚠️  Transaction sent but receipt error: {:?}", e);
                             }
                             Err(_) => {
-                                eprintln!("   ⏳ Transaction sent, waiting for confirmation...");
+                                println!("   ⏳ Transaction sent, waiting for confirmation...");
                                 // Consider it successful if sent
                                 successful_transactions += 1;
                             }
@@ -591,11 +593,11 @@ async fn test_multi_transactions() -> Result<()> {
                     Err(e) => {
                         let error_msg = format!("{e:?}");
                         if error_msg.contains("already known") {
-                            eprintln!("   ⚠️  Transaction already known (duplicate nonce)");
+                            println!("   ⚠️  Transaction already known (duplicate nonce)");
                         } else if error_msg.contains("insufficient funds") {
-                            eprintln!("   ⚠️  Insufficient funds for transaction");
+                            println!("   ⚠️  Insufficient funds for transaction");
                         } else {
-                            eprintln!("   ❌ Failed to send transaction: {:?}", e);
+                            println!("   ❌ Failed to send transaction: {:?}", e);
                         }
                     }
                 }
@@ -605,15 +607,15 @@ async fn test_multi_transactions() -> Result<()> {
             }
         }
 
-        eprintln!("✅ Completed testing {}", node_name);
+        println!("✅ Completed testing {}", node_name);
     }
 
     // Test summary
-    eprintln!("\n📊 Test Summary");
-    eprintln!("===============");
-    eprintln!("Total transactions attempted: {}", total_transactions);
-    eprintln!("Successful transactions: {}", successful_transactions);
-    eprintln!(
+    println!("\n📊 Test Summary");
+    println!("===============");
+    println!("Total transactions attempted: {}", total_transactions);
+    println!("Successful transactions: {}", successful_transactions);
+    println!(
         "Success rate: {:.1}%",
         if total_transactions > 0 {
             (successful_transactions as f64 / total_transactions as f64) * 100.0
@@ -624,15 +626,15 @@ async fn test_multi_transactions() -> Result<()> {
 
     // Test passes if we have at least some successful transactions
     if successful_transactions > 0 {
-        eprintln!("🎉 Test passed! Successfully sent transactions to multiple nodes.");
+        println!("🎉 Test passed! Successfully sent transactions to multiple nodes.");
         Ok(())
     } else {
-        eprintln!("❌ Test failed! No transactions were successful.");
-        eprintln!("   This might indicate:");
-        eprintln!("   - All nodes are unavailable");
-        eprintln!("   - Invalid private keys or addresses");
-        eprintln!("   - Network configuration issues");
-        eprintln!("   - Insufficient funds in test accounts");
+        println!("❌ Test failed! No transactions were successful.");
+        println!("   This might indicate:");
+        println!("   - All nodes are unavailable");
+        println!("   - Invalid private keys or addresses");
+        println!("   - Network configuration issues");
+        println!("   - Insufficient funds in test accounts");
 
         // Return Ok to avoid test failure, but log the issue
         Ok(())
@@ -653,7 +655,7 @@ async fn test_multi_transactions() -> Result<()> {
 /// * `EVM_PRIVKEY1` - Sender's private key
 /// * `EVM_ADDRESS1` - Sender's public address
 /// * `CHAIN_ID` - Network chain ID (defaults to 202501)
-/// * `BULK_RECIPIENTS_COUNT` - Number of recipients to generate (defaults to 100)
+/// * `RECIPIENTS_COUNT` - Number of recipients to generate (defaults to 100)
 ///
 /// # Test Behavior
 ///
@@ -667,18 +669,36 @@ async fn test_multi_transactions() -> Result<()> {
 async fn test_bulk_transactions() -> Result<()> {
     // Load environment variables from .env file if present
     dotenv::dotenv().ok();
-    eprintln!("Starting bulk transactions test with incrementing nonces");
+    println!("Starting bulk transactions test with incrementing nonces");
 
     // Extract network configuration from environment variables
-    let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let sender_privkey = env::var("EVM_PRIVKEY1")?;
-    let sender_addr = Address::from_str(&env::var("EVM_ADDRESS1")?)?;
     let chain_id = env::var("CHAIN_ID")
         .unwrap_or("202501".to_string())
         .parse::<u64>()?;
+    let private_keys = vec![
+        env::var("EVM_PRIVKEY1")?,
+        env::var("EVM_PRIVKEY2")?,
+        env::var("EVM_PRIVKEY3")?,
+        env::var("EVM_PRIVKEY4")?,
+    ];
+
+    let addresses = vec![
+        Address::from_str(&env::var("EVM_ADDRESS1")?)?,
+        Address::from_str(&env::var("EVM_ADDRESS2")?)?,
+        Address::from_str(&env::var("EVM_ADDRESS3")?)?,
+        Address::from_str(&env::var("EVM_ADDRESS4")?)?,
+    ];
+
+    // Define node configurations (RPC endpoints)
+    let node_urls = vec![
+        "http://localhost:8545",
+        "http://localhost:8547",
+        "http://localhost:8549",
+        "http://localhost:8555",
+    ];
 
     // Get number of recipients to generate (default 100, max 1000)
-    let recipients_count = env::var("BULK_RECIPIENTS_COUNT")
+    let recipients_count = env::var("RECIPIENTS_COUNT")
         .unwrap_or("100".to_string())
         .parse::<usize>()?
         .min(1000); // Cap at 1000 to prevent excessive resource usage
@@ -686,80 +706,71 @@ async fn test_bulk_transactions() -> Result<()> {
     // Set transaction amount to 0.001 ETH (in wei)
     let transaction_amount = 1_000_000_000_000_000_u64; // 0.001 ETH
 
-    eprintln!("Configuration:");
-    eprintln!("  Sender address: {:?}", sender_addr);
-    eprintln!("  RPC URL: {:?}", rpc_url);
-    eprintln!("  Chain ID: {:?}", chain_id);
-    eprintln!("  Recipients count: {}", recipients_count);
-    eprintln!(
+    println!("Configuration:");
+    println!("  Chain ID: {:?}", chain_id);
+    println!("  Recipients count: {}", recipients_count);
+    println!(
         "  Transaction amount: {} wei (0.001 ETH)",
         transaction_amount
     );
 
-    // Attempt to connect to the Ethereum provider
-    let provider = match ProviderBuilder::new().connect(&rpc_url).await {
-        Ok(provider) => provider,
-        Err(e) => {
-            eprintln!(
-                "⚠️  Warning: Could not connect to Ethereum network at {:?}",
-                &rpc_url
-            );
-            eprintln!("   Error: {:?}", &e);
-            eprintln!("   This test requires a local EVM network to be running.");
-            eprintln!("   Skipping test due to network unavailability...");
-            return Ok(());
-        }
-    };
+    let mut providers = Vec::new();
+    for (node_idx, rpc_url) in node_urls.iter().enumerate() {
+        // Attempt to connect to the Ethereum provider
+        let provider = match ProviderBuilder::new().connect(&rpc_url).await {
+            Ok(provider) => provider,
+            Err(e) => {
+                println!(
+                    "⚠️  Warning: Could not connect to Ethereum network at {:?}",
+                    &rpc_url
+                );
+                println!("   Error: {:?}", &e);
+                println!("   This test requires a local EVM network to be running.");
+                println!("   Skipping test due to network unavailability...");
+                return Ok(());
+            }
+        };
+        providers.push(provider);
+    }
+    let mut address_nonces = get_nonces(&addresses, &node_urls).await;
+    println!("Initial nonces: {:?}", address_nonces);
 
-    // Get the initial nonce for the sender address
-    let initial_nonce = match provider.get_transaction_count(sender_addr).await {
-        Ok(nonce) => nonce,
-        Err(e) => {
-            eprintln!(
-                "⚠️  Warning: Could not get nonce for address {:?}",
-                &sender_addr
-            );
-            eprintln!("   Error: {:?}", &e);
-            eprintln!("   Skipping test...");
-            return Ok(());
-        }
-    };
-
-    eprintln!("Initial nonce: {}", initial_nonce);
-
-    // Generate recipient addresses
+    // Generate recipient addresses from mnemonic
     let mut recipients = Vec::new();
+
     for i in 0..recipients_count {
-        // Generate deterministic addresses based on index
-        // This creates unique addresses by using the index as part of the address
-        let mut address_bytes = [0u8; 20];
-        address_bytes[0] = 0x01; // Start with 0x01 to ensure valid address
-        address_bytes[1] = (i >> 8) as u8;
-        address_bytes[2] = (i & 0xFF) as u8;
-        // Fill remaining bytes with deterministic pattern
-        for j in 3..20 {
-            address_bytes[j] = ((i * 7 + j * 11) % 256) as u8;
-        }
-        recipients.push(Address::from(address_bytes));
+        // Generate deterministic addresses from mnemonic using different derivation paths
+        // Using the index as part of the derivation path to create unique addresses
+        let derivation_path = format!("m/44'/60'/0'/0/{}", i);
+        let address = derive_eth_address(TEST_MNEMONIC, &derivation_path).unwrap();
+
+        recipients.push(address);
     }
 
-    eprintln!("Generated {} recipient addresses", recipients.len());
+    println!("Generated {} recipient addresses", recipients.len());
 
     // Statistics tracking
     let mut successful_transactions = 0;
     let mut failed_transactions = 0;
-    let mut current_nonce = initial_nonce;
 
     // Send transactions to each recipient
     for (index, recipient) in recipients.iter().enumerate() {
-        eprintln!(
+        // Randomly select a sender address
+        let rand_idx = rand::thread_rng().gen_range(0..addresses.len());
+        assert!(rand_idx < providers.len());
+        assert!(rand_idx < addresses.len());
+        assert!(rand_idx < address_nonces.len());
+        let provider = &providers[rand_idx];
+        let sender_addr = addresses[rand_idx];
+        let sender_privkey = &private_keys[rand_idx];
+        let current_nonce = address_nonces[&sender_addr];
+        println!(
             "📤 Sending transaction {} of {} to recipient {:?} (nonce: {})",
             index + 1,
             recipients_count,
             recipient,
             current_nonce
         );
-
         // Create and sign the transfer transaction
         let tx_envelope = match create_transfer_transaction(
             &sender_privkey,
@@ -772,77 +783,73 @@ async fn test_bulk_transactions() -> Result<()> {
         {
             Ok(envelope) => envelope,
             Err(e) => {
-                eprintln!("   ❌ Failed to create transaction: {:?}", e);
+                println!("   ❌ Failed to create transaction: {:?}", e);
                 failed_transactions += 1;
-                current_nonce += 1; // Still increment nonce even on failure
                 continue;
             }
         };
-
+        address_nonces.insert(sender_addr, current_nonce + 1);
         // Broadcast the transaction to the network
         match provider.send_tx_envelope(tx_envelope).await {
             Ok(pending_tx) => {
-                eprintln!(
+                println!(
                     "   ✅ Transaction sent successfully (hash: {:?})",
                     pending_tx.tx_hash()
                 );
-
+                successful_transactions += 1;
                 // Try to get receipt with timeout
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    pending_tx.get_receipt(),
-                )
-                .await
-                {
-                    Ok(Ok(receipt)) => {
-                        eprintln!(
-                            "   🎯 Transaction confirmed! Block: {:?}",
-                            receipt.block_number
-                        );
-                        successful_transactions += 1;
-                    }
-                    Ok(Err(e)) => {
-                        eprintln!("   ⚠️  Transaction sent but receipt error: {:?}", e);
-                        successful_transactions += 1; // Consider sent as success
-                    }
-                    Err(_) => {
-                        eprintln!("   ⏳ Transaction sent, waiting for confirmation...");
-                        successful_transactions += 1; // Consider sent as success
-                    }
-                }
+                // match tokio::time::timeout(
+                //     std::time::Duration::from_secs(5),
+                //     pending_tx.get_receipt(),
+                // )
+                // .await
+                // {
+                //     Ok(Ok(receipt)) => {
+                //         println!(
+                //             "   🎯 Transaction confirmed! Block: {:?}",
+                //             receipt.block_number
+                //         );
+                //         successful_transactions += 1;
+                //     }
+                //     Ok(Err(e)) => {
+                //         println!("   ⚠️  Transaction sent but receipt error: {:?}", e);
+                //         successful_transactions += 1; // Consider sent as success
+                //     }
+                //     Err(_) => {
+                //         println!("   ⏳ Transaction sent, waiting for confirmation...");
+                //         successful_transactions += 1; // Consider sent as success
+                //     }
+                // }
             }
             Err(e) => {
                 let error_msg = format!("{e:?}");
                 if error_msg.contains("already known") {
-                    eprintln!("   ⚠️  Transaction already known (duplicate nonce)");
+                    println!("   ⚠️  Transaction already known (duplicate nonce)");
                 } else if error_msg.contains("insufficient funds") {
-                    eprintln!("   ⚠️  Insufficient funds for transaction");
+                    println!("   ⚠️  Insufficient funds for transaction");
                 } else if error_msg.contains("gas") {
-                    eprintln!("   ⚠️  Gas-related error: {:?}", e);
+                    println!("   ⚠️  Gas-related error: {:?}", e);
                 } else {
-                    eprintln!("   ❌ Failed to send transaction: {:?}", e);
+                    println!("   ❌ Failed to send transaction: {:?}", e);
                 }
                 failed_transactions += 1;
             }
         }
 
-        // Increment nonce for next transaction
-        current_nonce += 1;
-
         // Small delay between transactions to avoid overwhelming the node
         if index % 10 == 0 && index > 0 {
-            eprintln!("   ⏸️  Pausing briefly after {} transactions...", index + 1);
+            println!("   ⏸️  Pausing briefly after {} transactions...", index + 1);
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
 
     // Test summary
-    eprintln!("\n📊 Bulk Transaction Test Summary");
-    eprintln!("=================================");
-    eprintln!("Total recipients: {}", recipients_count);
-    eprintln!("Successful transactions: {}", successful_transactions);
-    eprintln!("Failed transactions: {}", failed_transactions);
-    eprintln!(
+    println!("\n📊 Bulk Transaction Test Summary");
+    println!("=================================");
+    println!("Total recipients: {}", recipients_count);
+    println!("Successful transactions: {}", successful_transactions);
+    println!("Failed transactions: {}", failed_transactions);
+    println!(
         "Success rate: {:.1}%",
         if recipients_count > 0 {
             (successful_transactions as f64 / recipients_count as f64) * 100.0
@@ -850,22 +857,25 @@ async fn test_bulk_transactions() -> Result<()> {
             0.0
         }
     );
-    eprintln!("Final nonce: {}", current_nonce);
-
+    println!("Final nonces: {:?}", address_nonces);
+    println!("Sleeping for 30 seconds");
+    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+    let address_nonces = get_nonces(&addresses, &node_urls).await;
+    println!("Address nonces from network: {:?}", address_nonces);
     // Test passes if we have at least some successful transactions
     if successful_transactions > 0 {
-        eprintln!(
+        println!(
             "🎉 Test passed! Successfully sent {} transactions with incrementing nonces.",
             successful_transactions
         );
         Ok(())
     } else {
-        eprintln!("❌ Test failed! No transactions were successful.");
-        eprintln!("   This might indicate:");
-        eprintln!("   - Network is unavailable");
-        eprintln!("   - Invalid private key or address");
-        eprintln!("   - Insufficient funds in sender account");
-        eprintln!("   - Network configuration issues");
+        println!("❌ Test failed! No transactions were successful.");
+        println!("   This might indicate:");
+        println!("   - Network is unavailable");
+        println!("   - Invalid private key or address");
+        println!("   - Insufficient funds in sender account");
+        println!("   - Network configuration issues");
 
         // Return Ok to avoid test failure, but log the issue
         Ok(())
@@ -972,7 +982,7 @@ pub fn validate_env() -> Result<()> {
         }
     }
 
-    eprintln!("✅ All multi-node environment variables are properly configured");
+    println!("✅ All multi-node environment variables are properly configured");
     Ok(())
 }
 
@@ -1000,19 +1010,19 @@ fn test_validate_env() {
 
     match validate_env() {
         Ok(()) => {
-            eprintln!("✅ Multi-node environment validation passed");
+            println!("✅ Multi-node environment validation passed");
         }
         Err(e) => {
-            eprintln!("❌ Multi-node environment validation failed:");
-            eprintln!("   {}", e);
-            eprintln!("\n   To fix this:");
-            eprintln!("   1. Create a .env file in the ef-tests directory");
-            eprintln!("   2. Add all required environment variables");
-            eprintln!("   3. See MULTI_NODE_TEST_SETUP.md for detailed instructions");
-            eprintln!("   4. Ensure your FastEVM network is running");
+            println!("❌ Multi-node environment validation failed:");
+            println!("   {}", e);
+            println!("\n   To fix this:");
+            println!("   1. Create a .env file in the ef-tests directory");
+            println!("   2. Add all required environment variables");
+            println!("   3. See MULTI_NODE_TEST_SETUP.md for detailed instructions");
+            println!("   4. Ensure your FastEVM network is running");
 
             // Don't fail the test, just log the issue
-            eprintln!("   Skipping multi-node test due to configuration issues...");
+            println!("   Skipping multi-node test due to configuration issues...");
         }
     }
 }

@@ -18,5 +18,6 @@ COPY Cargo.toml Cargo.lock ./
 COPY execution-client ./execution-client
 COPY consensus-client ./consensus-client
 COPY reth-extension ./reth-extension
+COPY testing ./testing
 # Build all binaries
 RUN cargo build --release

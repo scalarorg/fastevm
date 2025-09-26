@@ -4,12 +4,9 @@
 //! for transferring ETH between addresses. It handles transaction building,
 //! signing with private keys, and preparing transactions for network broadcast.
 
-use alloy::{
-    network::{Ethereum, Network, TransactionBuilder},
-    primitives::{Address, U256},
-    rpc::types::TransactionRequest,
-};
-use alloy_primitives::ChainId;
+use alloy_network::{Ethereum, EthereumWallet, Network, TransactionBuilder};
+use alloy_primitives::{Address, ChainId, U256};
+use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
 use std::str::FromStr;
@@ -97,7 +94,7 @@ pub async fn create_transfer_transaction(
         .with_max_fee_per_gas(20_000_000_000); // 20 Gwei
 
     // Convert the LocalSigner to an EthereumWallet to satisfy the NetworkWallet trait bound
-    let ethereum_wallet = alloy::network::EthereumWallet::from(wallet);
+    let ethereum_wallet = EthereumWallet::from(wallet);
 
     // Build and sign the transaction using the ethereum wallet
     let tx_envelope = tx

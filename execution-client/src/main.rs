@@ -8,13 +8,19 @@
 //! This launches a regular reth node with transaction listener and custom RPC server.
 
 #![warn(unused_crate_dependencies)]
+// alloy_consensus is used in transaction_listener.rs
+use alloy_consensus as _;
+mod consensus;
+mod payload;
+mod rpc;
+
 use clap::Parser;
-
 // Suppress warnings for dependencies used by CLI binary
-use reth_network_peers as _;
-use reth_rpc_layer as _;
-use secp256k1 as _;
-
+use crate::{
+    consensus::{ConsensusPool, MysticetiConsensus},
+    payload::MysticetiPayloadBuilderFactory,
+    rpc::{CliTxpoolListener, ConsensusTransactionsHandler, TxpoolListener},
+};
 use reth_ethereum::{
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
     node::{
@@ -23,21 +29,15 @@ use reth_ethereum::{
         EthereumNode,
     },
 };
-use std::sync::Arc;
-use std::{collections::VecDeque, sync::Mutex};
-use tokio::sync::mpsc::unbounded_channel;
-mod consensus;
-mod payload;
-mod rpc;
-// mod transaction_listener;
-
-use crate::{
-    consensus::MysticetiConsensus,
-    payload::MysticetiPayloadBuilderFactory,
-    rpc::{CliTxpoolListener, ConsensusTransactionsHandler, TxpoolListener},
-};
 use reth_extension::{ConsensusTransactionApiServer, TxpoolListenerApiServer};
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::unbounded_channel;
 use tracing::info;
+
+use hex as _;
+use reth_network_peers as _;
+use reth_rpc_layer as _;
+use secp256k1 as _;
 
 /// Flow hook execution:
 /// on_component_initialized
@@ -50,11 +50,10 @@ fn main() {
         .run(|builder, args| async move {
             //Create a channel for sending subdag received from rpc server to BeaconConsensusEngineHandle
             let (subdag_tx, subdag_rx) = unbounded_channel();
-            let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
-            let mysticeti_payload_builder =
-                BasicPayloadServiceBuilder::<MysticetiPayloadBuilderFactory>::new(
-                    MysticetiPayloadBuilderFactory::new(subdag_queue.clone()),
-                );
+            let consensus_pool = Arc::new(Mutex::new(ConsensusPool::new()));
+            let mysticeti_payload_builder = BasicPayloadServiceBuilder::new(
+                MysticetiPayloadBuilderFactory::new(consensus_pool.clone()),
+            );
             let handle = builder
                 .with_types::<EthereumNode>()
                 // Configure the components of the node
@@ -68,7 +67,7 @@ fn main() {
 
                     // here we get the configured pool.
                     let pool = ctx.pool().clone();
-                    let listener = TxpoolListener::new(pool);
+                    let listener = TxpoolListener::new(pool.clone());
                     let consensus_handler = ConsensusTransactionsHandler::new(subdag_tx);
                     // now we merge our extension namespace into all configured transports
                     ctx.modules.merge_configured(listener.into_rpc())?;
@@ -81,19 +80,13 @@ fn main() {
                         reth_ethereum::node::EthEngineTypes,
                     > = node.payload_builder_handle.clone();
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
-                    use reth_ethereum::chainspec::ChainSpecProvider;
-                    node.provider.chain_spec();
-                    let mut mysticeti_consensus: MysticetiConsensus<
-                        reth_ethereum::provider::providers::BlockchainProvider<
-                            reth_ethereum::node::api::NodeTypesWithDBAdapter<
-                                EthereumNode,
-                                Arc<reth_ethereum::provider::db::DatabaseEnv>,
-                            >,
-                        >,
-                        reth_ethereum_engine_primitives::EthEngineTypes,
-                    > = MysticetiConsensus::new(
+                    //use reth_ethereum::chainspec::ChainSpecProvider;
+                    //node.provider.chain_spec();
+                    let transaction_pool = node.pool.clone();
+                    let mut mysticeti_consensus = MysticetiConsensus::new(
                         subdag_rx,
-                        subdag_queue,
+                        consensus_pool,
+                        transaction_pool,
                         node.provider,
                         payload_builder_handle,
                         engine_handle,

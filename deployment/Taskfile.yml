@@ -1,0 +1,572 @@
+# FastEVM Remote Deployment Taskfile (Working Version)
+# Based on Taskfile.dev - https://taskfile.dev/
+
+version: '3'
+
+# Load environment variables from nodes.env file
+dotenv: ['config/nodes.env']
+
+vars:
+  PROJECT_NAME: "fastevm"
+  CONFIG_DIR: "config"
+  LOGS_DIR: "logs"
+  
+  # Node configuration (can be overridden by environment variables)
+  NODE1_HOST: "{{.NODE1_HOST | default \"192.168.1.100\"}}"
+  NODE1_USER: "{{.NODE1_USER | default \"ubuntu\"}}"
+  NODE1_PORT: "{{.NODE1_PORT | default \"22\"}}"
+  
+  NODE2_HOST: "{{.NODE2_HOST | default \"192.168.1.101\"}}"
+  NODE2_USER: "{{.NODE2_USER | default \"ubuntu\"}}"
+  NODE2_PORT: "{{.NODE2_PORT | default \"22\"}}"
+  
+  NODE3_HOST: "{{.NODE3_HOST | default \"192.168.1.102\"}}"
+  NODE3_USER: "{{.NODE3_USER | default \"ubuntu\"}}"
+  NODE3_PORT: "{{.NODE3_PORT | default \"22\"}}"
+  
+  NODE4_HOST: "{{.NODE4_HOST | default \"192.168.1.103\"}}"
+  NODE4_USER: "{{.NODE4_USER | default \"ubuntu\"}}"
+  NODE4_PORT: "{{.NODE4_PORT | default \"22\"}}"
+  
+  # Node Builder configuration
+  BUILDER_HOST: "{{.BUILDER_HOST | default \"192.168.1.200\"}}"
+  BUILDER_USER: "{{.BUILDER_USER | default \"ubuntu\"}}"
+  BUILDER_PORT: "{{.BUILDER_PORT | default \"22\"}}"
+  BUILDER_KEY_PATH: "{{.BUILDER_KEY_PATH | default \"~/.ssh/id_rsa\"}}"
+  
+  # Project paths
+  REMOTE_PROJECT_PATH: "{{.REMOTE_PROJECT_PATH | default \"/opt/fastevm\"}}"
+  
+  # Docker configuration
+  DOCKER_NETWORK: "fastevm-network"
+  DOCKER_SUBNET: "172.20.0.0/16"
+  
+  # SSH options
+  SSH_OPTS: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+  RSYNC_OPTS: "-avz --progress --delete"
+  
+  # SSH key paths (loaded from nodes.env)
+  NODE1_KEY_PATH: "{{.NODE1_KEY_PATH | default \"~/.ssh/id_rsa\"}}"
+  NODE2_KEY_PATH: "{{.NODE2_KEY_PATH | default \"~/.ssh/id_rsa\"}}"
+  NODE3_KEY_PATH: "{{.NODE3_KEY_PATH | default \"~/.ssh/id_rsa\"}}"
+  NODE4_KEY_PATH: "{{.NODE4_KEY_PATH | default \"~/.ssh/id_rsa\"}}"
+
+  SYNC_FILES: '--include Cargo.* --include="docker-compose.yml" --include="Dockerfile*" --include="scripts/" --include="scripts/**" --include="monitoring/" --include="monitoring/**" --include="execution-client/" --include="execution-client/**" --include="consensus-client/" --include="consensus-client/**" --include="reth-extension/" --include="reth-extension/**" --include="testing/" --include="testing/**" --exclude="target/" --exclude="target/**" --exclude=".git/" --exclude=".git/**" --exclude="*"'        
+
+tasks:
+  # Main deployment workflow
+  deploy:
+    desc: "Deploy FastEVM to all 4 remote nodes using builder approach"
+    cmds:
+      - echo "🚀 Starting FastEVM deployment..."
+      - task: setup
+      - task: test-connections
+      - task: test-builder-connection
+      - task: create-network
+      - task: upload-to-builder
+      - task: build-on-builder
+      - task: load-images-local
+      - task: distribute-images
+      - task: start-services
+      - task: check-status
+      - echo "🎉 FastEVM deployment completed successfully!"
+
+  # Legacy deployment workflow (build on each node)
+  deploy-legacy:
+    desc: "Deploy FastEVM using legacy approach (build on each node)"
+    cmds:
+      - echo "🚀 Starting FastEVM deployment (legacy approach)..."
+      - task: setup
+      - task: test-connections
+      - task: create-network
+      - task: upload-files
+      - task: build-images
+      - task: start-services
+      - task: check-status
+      - echo "🎉 FastEVM deployment completed successfully!"
+
+  # Setup and configuration
+  setup:
+    desc: "Setup deployment environment"
+    cmds:
+      - echo "🔧 Setting up deployment environment..."
+      - mkdir -p "{{.LOGS_DIR}}"
+      - mkdir -p "{{.CONFIG_DIR}}"
+      - echo "✅ Setup completed"
+
+  # Test SSH connections
+  test-connections:
+    desc: "Test SSH connections to all nodes"
+    cmds:
+      - echo "🔌 Testing SSH connections to all nodes..."
+      - |
+        # Test node1
+        echo "Testing node1..."
+        if ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "echo 'Connection successful'" 2>/dev/null; then
+          echo "✅ node1 connection successful"
+        else
+          echo "❌ node1 connection failed"
+          exit 1
+        fi
+      - |
+        # Test node2
+        echo "Testing node2..."
+        if ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "echo 'Connection successful'" 2>/dev/null; then
+          echo "✅ node2 connection successful"
+        else
+          echo "❌ node2 connection failed"
+          exit 1
+        fi
+      - |
+        # Test node3
+        echo "Testing node3..."
+        if ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "echo 'Connection successful'" 2>/dev/null; then
+          echo "✅ node3 connection successful"
+        else
+          echo "❌ node3 connection failed"
+          exit 1
+        fi
+      - |
+        # Test node4
+        echo "Testing node4..."
+        if ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "echo 'Connection successful'" 2>/dev/null; then
+          echo "✅ node4 connection successful"
+        else
+          echo "❌ node4 connection failed"
+          exit 1
+        fi
+      - echo "✅ All SSH connections tested successfully"
+
+  # Test builder connection
+  test-builder-connection:
+    desc: "Test SSH connection to builder node"
+    cmds:
+      - echo "🔌 Testing SSH connection to builder node..."
+      - |
+        echo "Testing builder connection..."
+        if ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "echo 'Builder connection successful'" 2>/dev/null; then
+          echo "✅ Builder connection successful"
+        else
+          echo "❌ Builder connection failed"
+          exit 1
+        fi
+      - echo "✅ Builder connection tested successfully"
+
+  # Create Docker network
+  create-network:
+    desc: "Create Docker network on all nodes"
+    cmds:
+      - echo "🌐 Creating Docker network on all nodes..."
+      - |
+        # Create network on node1
+        echo "Creating network on node1..."
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "
+          if ! docker network ls | grep -q {{.DOCKER_NETWORK}}; then
+            docker network create --driver bridge --subnet {{.DOCKER_SUBNET}} --gateway 172.20.0.1 {{.DOCKER_NETWORK}}
+            echo 'Docker network {{.DOCKER_NETWORK}} created on node1'
+          else
+            echo 'Docker network {{.DOCKER_NETWORK}} already exists on node1'
+          fi
+        "
+      - |
+        # Create network on node2
+        echo "Creating network on node2..."
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "
+          if ! docker network ls | grep -q {{.DOCKER_NETWORK}}; then
+            docker network create --driver bridge --subnet {{.DOCKER_SUBNET}} --gateway 172.20.0.1 {{.DOCKER_NETWORK}}
+            echo 'Docker network {{.DOCKER_NETWORK}} created on node2'
+          else
+            echo 'Docker network {{.DOCKER_NETWORK}} already exists on node2'
+          fi
+        "
+      - |
+        # Create network on node3
+        echo "Creating network on node3..."
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "
+          if ! docker network ls | grep -q {{.DOCKER_NETWORK}}; then
+            docker network create --driver bridge --subnet {{.DOCKER_SUBNET}} --gateway 172.20.0.1 {{.DOCKER_NETWORK}}
+            echo 'Docker network {{.DOCKER_NETWORK}} created on node3'
+          else
+            echo 'Docker network {{.DOCKER_NETWORK}} already exists on node3'
+          fi
+        "
+      - |
+        # Create network on node4
+        echo "Creating network on node4..."
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "
+          if ! docker network ls | grep -q {{.DOCKER_NETWORK}}; then
+            docker network create --driver bridge --subnet {{.DOCKER_SUBNET}} --gateway 172.20.0.1 {{.DOCKER_NETWORK}}
+            echo 'Docker network {{.DOCKER_NETWORK}} created on node4'
+          else
+            echo 'Docker network {{.DOCKER_NETWORK}} already exists on node4'
+          fi
+        "
+      - echo "✅ Docker network created on all nodes"
+
+  # Upload files to builder
+  upload-to-builder:
+    desc: "Upload source code to builder node"
+    cmds:
+      - echo "📤 Uploading source code to builder node..."
+      - |
+        echo "Uploading to builder node..."
+        ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "mkdir -p {{.BUILDER_PROJECT_PATH}}"
+        rsync {{.RSYNC_OPTS}} -e "ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}}" \
+          {{.SYNC_FILES}} \
+          "../" {{.BUILDER_USER}}@{{.BUILDER_HOST}}:{{.BUILDER_PROJECT_PATH}}/
+        ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "chmod +x {{.BUILDER_PROJECT_PATH}}/scripts/*.sh"
+      - echo "✅ Source code uploaded to builder node"
+
+  # Build images on builder
+  build-on-builder:
+    desc: "Build all Docker images on builder node"
+    cmds:
+      - echo "🔨 Building Docker images on builder node..."
+      - | 
+        echo "Preparing builder node..."
+        ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "cd {{.BUILDER_PROJECT_PATH}} && docker build -f Dockerfile.builder -t scalarorg/fastevm-builder:latest --no-cache . && echo 'Base builder images built successfully on builder node'"
+      - |
+        echo "Building images on builder node..."
+        ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "cd {{.BUILDER_PROJECT_PATH}} && docker compose build --no-cache && echo 'Images built successfully on builder node'"
+      - echo "✅ Docker images built on builder node"
+
+  # Load images to local
+  load-images-local:
+    desc: "Load built images from builder to local machine"
+    cmds:
+      - echo "📥 Loading Docker images from builder to local..."
+      - |
+        echo "Loading images from builder to local..."
+        # Create a temporary directory for image files
+        mkdir -p ./temp-images
+        
+        # Get list of images from builder
+        echo "Getting list of images from builder..."
+        ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "
+          cd {{.BUILDER_PROJECT_PATH}}
+          docker images --format 'table {{.Repository}}:{{.Tag}}' | grep fastevm > /tmp/fastevm-images.txt
+          cat /tmp/fastevm-images.txt
+        "
+        
+        # Save images from builder
+        echo "Saving images from builder..."
+        ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "
+          cd {{.BUILDER_PROJECT_PATH}}
+          docker save \$(docker images --format '{{.Repository}}:{{.Tag}}' | grep fastevm) | gzip > /tmp/fastevm-images.tar.gz
+        "
+        
+        # Download images to local
+        echo "Downloading images to local..."
+        scp {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -P {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}}:/tmp/fastevm-images.tar.gz ./temp-images/
+        
+        # Load images locally
+        echo "Loading images locally..."
+        docker load < ./temp-images/fastevm-images.tar.gz
+        
+        # Cleanup
+        rm -rf ./temp-images
+        ssh {{.SSH_OPTS}} -i {{.BUILDER_KEY_PATH}} -p {{.BUILDER_PORT}} {{.BUILDER_USER}}@{{.BUILDER_HOST}} "rm -f /tmp/fastevm-images.tar.gz /tmp/fastevm-images.txt"
+        
+      - echo "✅ Docker images loaded to local machine"
+
+  # Distribute images to all nodes
+  distribute-images:
+    desc: "Copy built images to all nodes"
+    cmds:
+      - echo "📤 Distributing Docker images to all nodes..."
+      - |
+        echo "Distributing images to all nodes..."
+        # Create a temporary directory for image files
+        mkdir -p ./temp-images
+        
+        # Save images locally
+        echo "Saving images locally..."
+        docker save $(docker images --format '{{.Repository}}:{{.Tag}}' | grep fastevm) | gzip > ./temp-images/fastevm-images.tar.gz
+        
+        # Upload to node1
+        echo "Uploading images to node1..."
+        scp {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -P {{.NODE1_PORT}} ./temp-images/fastevm-images.tar.gz {{.NODE1_USER}}@{{.NODE1_HOST}}:/tmp/
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "
+          docker load < /tmp/fastevm-images.tar.gz
+          rm -f /tmp/fastevm-images.tar.gz
+        "
+        
+        # Upload to node2
+        echo "Uploading images to node2..."
+        scp {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -P {{.NODE2_PORT}} ./temp-images/fastevm-images.tar.gz {{.NODE2_USER}}@{{.NODE2_HOST}}:/tmp/
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "
+          docker load < /tmp/fastevm-images.tar.gz
+          rm -f /tmp/fastevm-images.tar.gz
+        "
+        
+        # Upload to node3
+        echo "Uploading images to node3..."
+        scp {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -P {{.NODE3_PORT}} ./temp-images/fastevm-images.tar.gz {{.NODE3_USER}}@{{.NODE3_HOST}}:/tmp/
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "
+          docker load < /tmp/fastevm-images.tar.gz
+          rm -f /tmp/fastevm-images.tar.gz
+        "
+        
+        # Upload to node4
+        echo "Uploading images to node4..."
+        scp {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -P {{.NODE4_PORT}} ./temp-images/fastevm-images.tar.gz {{.NODE4_USER}}@{{.NODE4_HOST}}:/tmp/
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "
+          docker load < /tmp/fastevm-images.tar.gz
+          rm -f /tmp/fastevm-images.tar.gz
+        "
+        
+        # Cleanup
+        rm -rf ./temp-images
+        
+      - echo "✅ Docker images distributed to all nodes"
+
+  # Upload files
+  upload-files:
+    desc: "Upload files to all nodes"
+    cmds:
+      - echo "📤 Uploading files to all nodes..."
+      - |
+        # Upload to node1
+        echo "Uploading to node1..."
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "mkdir -p {{.REMOTE_PROJECT_PATH}}"
+        rsync {{.RSYNC_OPTS}} -e "ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}}" \
+          {{.SYNC_FILES}} \
+          "../" {{.NODE1_USER}}@{{.NODE1_HOST}}:{{.REMOTE_PROJECT_PATH}}/
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "chmod +x {{.REMOTE_PROJECT_PATH}}/scripts/*.sh"
+      - |
+        # Upload to node2
+        echo "Uploading to node2..."
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "mkdir -p {{.REMOTE_PROJECT_PATH}}"
+        rsync {{.RSYNC_OPTS}} -e "ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}}" \
+          {{.SYNC_FILES}} \
+          "../" {{.NODE2_USER}}@{{.NODE2_HOST}}:{{.REMOTE_PROJECT_PATH}}/
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "chmod +x {{.REMOTE_PROJECT_PATH}}/scripts/*.sh"
+      - |
+        # Upload to node3
+        echo "Uploading to node3..."
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "mkdir -p {{.REMOTE_PROJECT_PATH}}"
+        rsync {{.RSYNC_OPTS}} -e "ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}}" \
+          {{.SYNC_FILES}} \
+          "../" {{.NODE3_USER}}@{{.NODE3_HOST}}:{{.REMOTE_PROJECT_PATH}}/
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "chmod +x {{.REMOTE_PROJECT_PATH}}/scripts/*.sh"
+      - |
+        # Upload to node4
+        echo "Uploading to node4..."
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "mkdir -p {{.REMOTE_PROJECT_PATH}}"
+        rsync {{.RSYNC_OPTS}} -e "ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}}" \
+          {{.SYNC_FILES}} \
+          "../" {{.NODE4_USER}}@{{.NODE4_HOST}}:{{.REMOTE_PROJECT_PATH}}/
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "chmod +x {{.REMOTE_PROJECT_PATH}}/scripts/*.sh"
+      - echo "✅ Files uploaded to all nodes"
+
+  # Build Docker images
+  build-images:
+    desc: "Build Docker images on all nodes"
+    cmds:
+      - echo "🔨 Building Docker images on all nodes..."
+      - |
+        # Build on node1
+        echo "Building images on node1..."
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          docker compose build
+        "
+      - |
+        # Build on node2
+        echo "Building images on node2..."
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}} && docker compose build
+        "
+      - |
+        # Build on node3
+        echo "Building images on node3..."
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}} && docker compose build
+        "
+      - |
+        # Build on node4
+        echo "Building images on node4..."
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}} && docker compose build
+          docker compose build
+        "
+      - echo "✅ Docker images built on all nodes"
+
+  # Start services
+  start-services:
+    desc: "Start Docker services on all nodes"
+    cmds:
+      - echo "🚀 Starting Docker services on all nodes..."
+      - |
+        # Start on node1
+        echo "Starting services on node1..."
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}} && docker compose up -d
+        "
+      - |
+        # Start on node2
+        echo "Starting services on node2..."
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}} && docker compose up -d
+        "
+      - |
+        # Start on node3
+        echo "Starting services on node3..."
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}} && docker compose up -d
+        "
+      - |
+        # Start on node4
+        echo "Starting services on node4..."
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}} && docker compose up -d
+        "
+      - echo "✅ Docker services started on all nodes"
+
+  # Check status
+  check-status:
+    desc: "Check status of all nodes"
+    cmds:
+      - echo "📊 Checking status of all nodes..."
+      - |
+        # Check node1
+        echo "Checking status of node1..."
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo '=== Docker Services Status ==='
+          docker compose ps
+          echo ''
+          echo '=== Docker Images ==='
+          docker images | grep fastevm
+          echo ''
+          echo '=== Docker Networks ==='
+          docker network ls | grep {{.DOCKER_NETWORK}}
+        "
+      - |
+        # Check node2
+        echo "Checking status of node2..."
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo '=== Docker Services Status ==='
+          docker compose ps
+          echo ''
+          echo '=== Docker Images ==='
+          docker images | grep fastevm
+          echo ''
+          echo '=== Docker Networks ==='
+          docker network ls | grep {{.DOCKER_NETWORK}}
+        "
+      - |
+        # Check node3
+        echo "Checking status of node3..."
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo '=== Docker Services Status ==='
+          docker compose ps
+          echo ''
+          echo '=== Docker Images ==='
+          docker images | grep fastevm
+          echo ''
+          echo '=== Docker Networks ==='
+          docker network ls | grep {{.DOCKER_NETWORK}}
+        "
+      - |
+        # Check node4
+        echo "Checking status of node4..."
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo '=== Docker Services Status ==='
+          docker compose ps
+          echo ''
+          echo '=== Docker Images ==='
+          docker images | grep fastevm
+          echo ''
+          echo '=== Docker Networks ==='
+          docker network ls | grep {{.DOCKER_NETWORK}}
+        "
+      - echo "✅ Status check completed for all nodes"
+
+  # Stop services
+  stop:
+    desc: "Stop all FastEVM services"
+    cmds:
+      - echo "🛑 Stopping all FastEVM services..."
+      - |
+        # Stop on node1
+        echo "Stopping services on node1..."
+        ssh {{.SSH_OPTS}} -i {{.NODE1_KEY_PATH}} -p {{.NODE1_PORT}} {{.NODE1_USER}}@{{.NODE1_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo 'Stopping FastEVM services...'
+          docker compose down
+          echo 'Services stopped on node1'
+        "
+      - |
+        # Stop on node2
+        echo "Stopping services on node2..."
+        ssh {{.SSH_OPTS}} -i {{.NODE2_KEY_PATH}} -p {{.NODE2_PORT}} {{.NODE2_USER}}@{{.NODE2_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo 'Stopping FastEVM services...'
+          docker compose down
+          echo 'Services stopped on node2'
+        "
+      - |
+        # Stop on node3
+        echo "Stopping services on node3..."
+        ssh {{.SSH_OPTS}} -i {{.NODE3_KEY_PATH}} -p {{.NODE3_PORT}} {{.NODE3_USER}}@{{.NODE3_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo 'Stopping FastEVM services...'
+          docker compose down
+          echo 'Services stopped on node3'
+        "
+      - |
+        # Stop on node4
+        echo "Stopping services on node4..."
+        ssh {{.SSH_OPTS}} -i {{.NODE4_KEY_PATH}} -p {{.NODE4_PORT}} {{.NODE4_USER}}@{{.NODE4_HOST}} "
+          cd {{.REMOTE_PROJECT_PATH}}
+          echo 'Stopping FastEVM services...'
+          docker compose down
+          echo 'Services stopped on node4'
+        "
+      - echo "✅ All FastEVM services stopped"
+
+  # Status alias
+  status:
+    desc: "Check status of all nodes (alias for check-status)"
+    cmds:
+      - task: check-status
+
+  # Help
+  help:
+    desc: "Show available tasks and usage information"
+    cmds:
+      - echo "FastEVM Remote Deployment Tasks"
+      - echo "==============================="
+      - echo ""
+      - echo "Main Tasks:"
+      - echo "  deploy              - Deploy to all 4 nodes using builder approach"
+      - echo "  deploy-legacy       - Deploy using legacy approach (build on each node)"
+      - echo "  stop                - Stop all services"
+      - echo "  status              - Check service status"
+      - echo "  setup               - Setup deployment environment"
+      - echo ""
+      - echo "Builder Tasks:"
+      - echo "  upload-to-builder   - Upload source code to builder node"
+      - echo "  build-on-builder    - Build all images on builder node"
+      - echo "  load-images-local   - Load built images to local machine"
+      - echo "  distribute-images   - Copy images to all nodes"
+      - echo ""
+      - echo "Configuration:"
+      - echo "  Set environment variables:"
+      - echo "    NODE1_HOST, NODE1_USER, NODE1_PORT, NODE1_KEY_PATH"
+      - echo "    NODE2_HOST, NODE2_USER, NODE2_PORT, NODE2_KEY_PATH"
+      - echo "    NODE3_HOST, NODE3_USER, NODE3_PORT, NODE3_KEY_PATH"
+      - echo "    NODE4_HOST, NODE4_USER, NODE4_PORT, NODE4_KEY_PATH"
+      - echo "    BUILDER_HOST, BUILDER_USER, BUILDER_PORT, BUILDER_KEY_PATH"
+      - echo "    REMOTE_PROJECT_PATH"
+      - echo ""
+      - echo "Examples:"
+      - echo "  task deploy"
+      - echo "  task build-on-builder"
+      - echo "  task distribute-images"
+      - echo "  task status"
+      - echo "  task stop"
