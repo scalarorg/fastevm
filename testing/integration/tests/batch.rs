@@ -27,16 +27,15 @@
 //! - Environment variables for RPC URLs must be set
 //! - Test accounts must be prefunded in genesis.json
 
-use alloy_primitives::Address;
 use alloy_provider::{Provider, ProviderBuilder};
 use bip39::Mnemonic;
 use eyre::Result;
 use rand::Rng;
 use std::env;
-use std::str::FromStr;
+use std::time::Instant;
 use std::{collections::HashMap, time::Duration};
 use testing::{
-    address::{derive_eth_account, generate_account_from_seed, Account},
+    address::{generate_account_from_seed, Account},
     rpc::get_nonces,
     transactions::create_transfer_transaction,
 };
@@ -68,22 +67,9 @@ const TEST_MNEMONIC: &str =
 /// - Skip gracefully if any RPC endpoint is unavailable
 #[tokio::test]
 async fn test_batch_transfer_one_transaction() -> Result<(), Box<dyn std::error::Error>> {
-    let accounts = generate_accounts(100)?;
-    let _ = send_batch_transfer_transactions(accounts.as_slice(), 1).await?;
-    sleep(Duration::from_secs(60)).await;
-    //Check nonces
-    let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let address_nonces = get_nonces(
-        accounts
-            .iter()
-            .map(|account| account.address)
-            .collect::<Vec<_>>()
-            .as_slice(),
-        url.as_str(),
-    )
-    .await;
-    println!("Address nonces: {:?}", address_nonces);
-    Ok(())
+    let account_number = 100;
+    let number_of_transactions = 1;
+    send_transaction_with_check_nonce(account_number, number_of_transactions).await
 }
 
 /// Test that generates 100 sender addresses and sends 2 transactions per sender.
@@ -109,21 +95,69 @@ async fn test_batch_transfer_one_transaction() -> Result<(), Box<dyn std::error:
 /// - Skip gracefully if any RPC endpoint is unavailable
 #[tokio::test]
 async fn test_batch_transfer_two_transactions() -> Result<(), Box<dyn std::error::Error>> {
-    let accounts = generate_accounts(100)?;
-    let _ = send_batch_transfer_transactions(accounts.as_slice(), 2).await?;
-    sleep(Duration::from_secs(60)).await;
-    //Check nonces
+    let account_number = 100;
+    let number_of_transactions = 2;
+    send_transaction_with_check_nonce(account_number, number_of_transactions).await
+}
+
+#[tokio::test]
+async fn check_nonce() -> Result<(), Box<dyn std::error::Error>> {
+    let account_number = 100;
+    let accounts = generate_accounts(account_number)?;
+
+    let addresses = accounts
+        .iter()
+        .map(|account| account.address)
+        .collect::<Vec<_>>();
     let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let address_nonces = get_nonces(
-        accounts
-            .iter()
-            .map(|account| account.address)
-            .collect::<Vec<_>>()
-            .as_slice(),
-        url.as_str(),
-    )
-    .await;
-    println!("Address nonces: {:?}", address_nonces);
+    let address_nonces = get_nonces(addresses.as_slice(), url.as_str()).await;
+    for (address, nonce) in address_nonces.iter() {
+        println!("Address {:?} has nonce {:?}", address, nonce);
+    }
+    Ok(())
+}
+
+async fn send_transaction_with_check_nonce(
+    account_number: usize,
+    number_of_transactions: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let accounts = generate_accounts(account_number)?;
+
+    let addresses = accounts
+        .iter()
+        .map(|account| account.address)
+        .collect::<Vec<_>>();
+    let _ = send_batch_transfer_transactions(accounts.as_slice(), number_of_transactions as usize)
+        .await?;
+    let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
+    let expected_duration = (account_number as u64) * number_of_transactions * 1000;
+    let timeout = Duration::from_millis(expected_duration);
+    let start_time = Instant::now();
+    let mut success_count = 0;
+    while start_time.elapsed() < timeout {
+        sleep(Duration::from_secs(10)).await;
+        success_count = 0;
+        let address_nonces = get_nonces(addresses.as_slice(), url.as_str()).await;
+        for (_, nonce) in address_nonces.iter() {
+            if nonce == &number_of_transactions {
+                success_count += 1;
+            }
+        }
+        println!(
+            "Success count with number of transactions {:?}: {:?}",
+            number_of_transactions, success_count
+        );
+        if success_count == account_number {
+            println!("All transactions are mined");
+            break;
+        }
+    }
+    println!(
+        "Timeout {:?} seconds. Success count with number of transactions {:?}: {:?}",
+        timeout.as_secs(),
+        number_of_transactions,
+        success_count
+    );
     Ok(())
 }
 fn generate_accounts(number_of_senders: usize) -> Result<Vec<Account>, Box<dyn std::error::Error>> {

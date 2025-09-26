@@ -16,7 +16,9 @@ use tracing::debug;
 /// Struct to store committed transactions and pooled transactions
 /// Pooled transactions are transactions from committed transactions that are added to the reth pool
 struct PooledCommittedTransactions<Transaction: PoolTransaction> {
+    // next mysticeti committed transactions
     committed_transactions: CommittedTransactions<Transaction>,
+    // transactions already in reth pool
     pooled_transactions: Vec<Arc<ValidPoolTransaction<Transaction>>>,
 }
 pub struct ConsensusPool<Pool: TransactionPool>
@@ -40,8 +42,15 @@ where
             pending_transactions: Mutex::new(Vec::new()),
         }
     }
+
     pub fn queue_size(&self) -> usize {
         self.commited_queue.len()
+    }
+
+    pub fn next_committed_transactions(&self) -> Option<&CommittedTransactions<Pool::Transaction>> {
+        self.commited_queue
+            .front()
+            .map(|item| &item.committed_transactions)
     }
 }
 
@@ -76,10 +85,11 @@ where
         {
             //This transactions are ordered and consecutive by nonce
             debug!(
-                "Committed transactions: {:?}. Number of pooledtransactions: {:?}",
+                "Committed transactions: {:?}. Number of pooled transactions: {:?}",
                 committed_transactions.transactions.len(),
                 pooled_transactions.len()
             );
+            //TODO: find better way to sync committed transactions and pooled transactions
             pending_transactions.extend(pooled_transactions);
             //Sort transactions by sender nonce
             pending_transactions.sort_by(|tx1, tx2| {
@@ -92,7 +102,7 @@ where
             });
         }
         debug!(
-            "Get proposal transactions. Pending txs: {}. Overall txs: {:?}",
+            "Get proposal transactions. Last pending txs: {}. All pending txs (+ current committed): {:?}",
             pending_size,
             pending_transactions.len()
         );
@@ -108,7 +118,7 @@ where
             .collect::<HashSet<TxHash>>();
         let mut pending_transactions = self.pending_transactions.lock().unwrap();
         debug!(
-            "Remove mined transactions in block number {:?}. Pending txs: {}. Mined txs: {:?}",
+            "Remove mined transactions in block number {:?}. Mysticeti pending txs: {}. Mined txs: {:?}",
             execution_payload.block_number(),
             pending_transactions.len(),
             tx_hashes.len()

@@ -1,14 +1,13 @@
+use alloy_consensus::BlockHeader;
 use alloy_primitives::{Address, TxHash, B256};
+use alloy_rpc_types_engine::PayloadAttributes;
 use alloy_rpc_types_eth::TransactionTrait;
 use anyhow::Result;
 use reth_ethereum::{
     chainspec::{ChainSpecProvider, EthChainSpec},
-    node::{
-        api::{
-            BeaconConsensusEngineHandle, BuiltPayload, EngineApiMessageVersion, ExecutionPayload,
-            PayloadTypes,
-        },
-        engine::EthPayloadAttributes,
+    node::api::{
+        BeaconConsensusEngineHandle, BuiltPayload, EngineApiMessageVersion, ExecutionPayload,
+        PayloadTypes,
     },
     rpc::types::engine::{ForkchoiceState, ForkchoiceUpdated},
     storage::StateProviderFactory,
@@ -26,7 +25,7 @@ use std::{
 use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::consensus::ConsensusPool;
+use crate::consensus::{ConsensusPool, ProposalBlock};
 
 const BLOCK_INTERVAL: u64 = 1000; //1 second
 const WAITING_PENDING_TXS_TIMEOUT: u64 = 3000; // 10 second timeout
@@ -48,8 +47,7 @@ where
     provider: Provider,
     //Keep track of the last payload
     //This payload is used to build new forkchoice state and next payloadAttribute
-    last_payload: Option<Payload::ExecutionData>,
-    pending_payload_id: Option<PayloadId>,
+    proposal_block: Option<ProposalBlock<Payload>>,
 }
 
 impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
@@ -73,8 +71,7 @@ where
             payload_builder_handle,
             engine_handle,
             provider,
-            last_payload: None,
-            pending_payload_id: None,
+            proposal_block: None,
         }
     }
 }
@@ -85,6 +82,37 @@ where
     Payload: PayloadTypes,
     Pool: TransactionPool,
 {
+    fn has_proposal_block(&self) -> bool {
+        self.proposal_block.is_some()
+    }
+    fn proposal_block_executed(&self) -> Option<bool> {
+        self.proposal_block
+            .as_ref()
+            .map(|proposal_block| proposal_block.is_executed())
+    }
+    /// Get current forkchoice state
+    async fn create_forkchoice_state(&self, last_block_hash: Option<B256>) -> ForkchoiceState {
+        //Todo: Implement this
+        match last_block_hash {
+            Some(block_hash) => ForkchoiceState {
+                head_block_hash: block_hash,
+                safe_block_hash: block_hash,
+                finalized_block_hash: block_hash,
+            },
+            None => {
+                let chain_spec = self.provider.chain_spec();
+                let head_block_hash = chain_spec.genesis_hash();
+                let safe_block_hash = head_block_hash;
+                let finalized_block_hash = head_block_hash;
+                ForkchoiceState {
+                    head_block_hash,
+                    safe_block_hash,
+                    finalized_block_hash,
+                }
+            }
+        }
+    }
+
     /// Process a single subdag
     async fn process_single_subdag(&mut self, subdag: CommittedSubDag) -> Result<()> {
         let committed_transactions = CommittedTransactions::<Pool::Transaction>::try_from(subdag)?;
@@ -93,15 +121,17 @@ where
             .update_pool_with_transactions(&committed_transactions)
             .await?;
         //Add committed transactions to consensuspool
-        let mut consensus_pool = self
-            .consensus_pool
-            .lock()
-            .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
-        consensus_pool.add_committed_transactions(committed_transactions, pooled_txs);
-        debug!(
-            "Subdag queued successfully. Queue size: {}",
-            consensus_pool.queue_size()
-        );
+        {
+            let mut consensus_pool = self
+                .consensus_pool
+                .lock()
+                .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
+            consensus_pool.add_committed_transactions(committed_transactions, pooled_txs);
+            debug!(
+                "Subdag queued successfully. Queue size: {}",
+                consensus_pool.queue_size()
+            );
+        } // MutexGuard is dropped here
         Ok(())
     }
 
@@ -229,32 +259,6 @@ where
         }
     }
 
-    /// Get current forkchoice state
-    async fn create_forkchoice_state(&self) -> ForkchoiceState {
-        //Todo: Implement this
-        match &self.last_payload {
-            Some(payload) => {
-                let block_hash = payload.block_hash();
-                ForkchoiceState {
-                    head_block_hash: block_hash,
-                    safe_block_hash: block_hash,
-                    finalized_block_hash: block_hash,
-                }
-            }
-            None => {
-                let chain_spec = self.provider.chain_spec();
-                let head_block_hash = chain_spec.genesis_hash();
-                let safe_block_hash = head_block_hash;
-                let finalized_block_hash = head_block_hash;
-                ForkchoiceState {
-                    head_block_hash,
-                    safe_block_hash,
-                    finalized_block_hash,
-                }
-            }
-        }
-    }
-
     async fn retrieve_payload(
         &self,
         payload_id: PayloadId,
@@ -267,49 +271,60 @@ where
     }
 
     /// Try to execute the pending payload
-    async fn try_execute_pending_payload(
+    async fn execute_pending_payload(
         &self,
-        payload_id: PayloadId,
+        built_payload: &Payload::BuiltPayload,
     ) -> Result<Option<Payload::ExecutionData>> {
-        match self.retrieve_payload(payload_id).await? {
-            Some(pending_payload) => {
-                debug!(
-                "Payload built successfully. Update last payload to {:?} and clear pending payload id:",
-                pending_payload
-            );
-                let execution_payload = Payload::block_to_payload(pending_payload.block().clone());
-                match self
-                    .engine_handle
-                    .new_payload(execution_payload.clone())
-                    .await
-                {
-                    Ok(payload_status) => {
-                        if payload_status.is_valid() {
-                            info!("New payload sent successfully");
-                            Ok(Some(execution_payload))
-                        } else {
-                            Err(anyhow::anyhow!(
-                                "Execute new payload failed with status: {:?}",
-                                payload_status
-                            ))
+        debug!(
+            "Execute built payload {:?}",
+            built_payload.block().header().number()
+        );
+
+        let execution_payload = Payload::block_to_payload(built_payload.block().clone());
+        match self
+            .engine_handle
+            .new_payload(execution_payload.clone())
+            .await
+        {
+            Ok(payload_status) => {
+                if payload_status.is_valid() {
+                    info!("New payload sent successfully");
+                    let block_hash = execution_payload.block_hash();
+                    let forkchoice_state = self.create_forkchoice_state(Some(block_hash)).await;
+                    //Call fork_choice_updated to make last executed block canonical
+                    //TODO: handle execution result
+                    match self
+                        .engine_handle
+                        .fork_choice_updated(
+                            forkchoice_state,
+                            None,
+                            EngineApiMessageVersion::default(),
+                        )
+                        .await
+                    {
+                        Ok(ForkchoiceUpdated {
+                            payload_status,
+                            payload_id,
+                        }) => {
+                            debug!("Forkchoice updated successfully with payload {:?} and status: {:?}", payload_id, payload_status);
+                        }
+                        Err(e) => {
+                            error!("Forkchoice updated failed: {:?}", e);
                         }
                     }
-                    Err(e) => Err(anyhow::anyhow!(
-                        "Execute new payload failed with error: {:?}",
-                        e
-                    )),
+                    Ok(Some(execution_payload))
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Execute new payload failed with status: {:?}",
+                        payload_status
+                    ))
                 }
             }
-            None => Err(anyhow::anyhow!("Payload {:?} not found", payload_id)),
+            Err(e) => Err(anyhow::anyhow!(
+                "Execute new payload failed with error: {:?}",
+                e
+            )),
         }
-    }
-    /// Get the current queue size
-    pub async fn queue_size(&self) -> Result<usize> {
-        let consensus_pool = self
-            .consensus_pool
-            .lock()
-            .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
-        Ok(consensus_pool.queue_size())
     }
 }
 
@@ -323,82 +338,43 @@ where
         let mut interval =
             tokio::time::interval(tokio::time::Duration::from_millis(BLOCK_INTERVAL));
         loop {
-            match &self.pending_payload_id {
-                //If there is a pending payload id, try to get the payload and execute it in the engine
-                Some(payload_id) => {
-                    debug!("Try to execute pending payload: {:?}", payload_id);
-                    let result = self.try_execute_pending_payload(payload_id.clone()).await;
-                    match result {
-                        Ok(Some(execution_payload)) => {
-                            let forkchoice_state = self.create_forkchoice_state().await;
-                            match self
-                                .engine_handle
-                                .fork_choice_updated(
-                                    forkchoice_state,
-                                    None,
-                                    EngineApiMessageVersion::default(),
-                                )
-                                .await
-                            {
-                                Ok(ForkchoiceUpdated {
-                                    payload_status,
-                                    payload_id,
-                                }) => {
-                                    debug!(
-                                        "Forkchoice updated successfully with payload {:?} and status: {:?}",
-                                        payload_id,
-                                        payload_status
-                                    );
-                                }
-                                Err(e) => {
-                                    error!("Forkchoice updated failed: {:?}", e);
-                                }
-                            }
+            //Try process proposal block
+            let has_proposal_block = self.has_proposal_block();
+            if has_proposal_block {
+                match self.process_proposal_block().await {
+                    Ok(Some(execution_payload)) => {
+                        debug!(
+                            "Process proposal block successfully. Execution payload: {:?}",
+                            execution_payload
+                        );
+                        {
                             self.consensus_pool
                                 .lock()
                                 .unwrap()
                                 .remove_mined_transactions(&execution_payload.payload);
-                            self.last_payload = Some(execution_payload);
-                            self.pending_payload_id = None;
-                            debug!("Try to execute pending payload successfully");
-                        }
-                        Ok(None) => {
-                            debug!(
-                                "Payload {:?} is not executed. Try to execute it later",
-                                payload_id
-                            );
-                        }
-                        Err(e) => {
-                            error!("try execute pending payload failed: {:?}", e);
-                        }
+                        } // MutexGuard is dropped here
+                    }
+                    Ok(None) => {
+                        debug!("Process proposal block successfully without execution payload");
+                    }
+                    Err(e) => {
+                        error!("Process proposal block failed: {:?}", e);
                     }
                 }
-                //If no pending payload id, build next payload
-                None => {
-                    debug!("No pending payload id. Build next payload.");
-                    let queue_size = self.queue_size().await.unwrap_or_default();
-                    if queue_size > 0 {
+            } else {
+                debug!("No proposal block. Try build next one.");
+                match self.build_next_proposal_block(None).await {
+                    Ok(Some(payload_id)) => {
                         debug!(
-                            "Queue size: {}. Start processing by building next payload or executing pending payload.",
-                            queue_size
+                            "Build next proposal block successfully. Pending payload id: {:?}",
+                            payload_id
                         );
-                        match self.build_next_payload().await {
-                            Ok(Some(payload_id)) => {
-                                debug!(
-                                    "Build next payload successfully. Pending payload id: {:?}",
-                                    payload_id
-                                );
-                                self.pending_payload_id.replace(payload_id);
-                            }
-                            Ok(None) => {
-                                debug!("Build next payload successfully without payload id");
-                            }
-                            Err(e) => {
-                                error!("Build next payload failed: {:?}", e);
-                            }
-                        }
-                    } else {
-                        trace!("Queue is empty. Waiting for subdag.");
+                    }
+                    Ok(None) => {
+                        debug!("Build next proposal block successfully without payload id");
+                    }
+                    Err(e) => {
+                        error!("Build next proposal block failed: {:?}", e);
                     }
                 }
             }
@@ -408,6 +384,7 @@ where
                 Ok(subdag) => {
                     //Receive subdag from channel and update local transaction pool
                     //Add subdag to consensus pool for further processing
+                    debug!("Received committed subdag: {:?}", subdag);
                     let result = self.process_single_subdag(subdag).await;
                     if result.is_err() {
                         error!("Process single subdag failed: {:?}", result);
@@ -427,94 +404,179 @@ where
             interval.tick().await;
         }
     }
+
+    pub async fn build_next_proposal_block(
+        &mut self,
+        last_built_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
+    ) -> Result<Option<PayloadId>> {
+        let committed_transactions = {
+            self.consensus_pool
+                .lock()
+                .unwrap()
+                .next_committed_transactions()
+                .cloned()
+        };
+        if let Some(committed_transactions) = committed_transactions {
+            debug!(
+                "Create proposal block with committed transactions: Index: {:?}, Round: {:?}, Author: {:?}, Timestamp: {:?}, Number of transactions: {:?}",
+                committed_transactions.commit_ref.index,
+                committed_transactions.leader.round,
+                committed_transactions.leader.author,
+                committed_transactions.timestamp_ms,
+                committed_transactions.transactions.len()
+            );
+            let last_block_hash = last_built_payload
+                .as_ref()
+                .map(|payload| payload.block().hash());
+            let forkchoice_state = self.create_forkchoice_state(last_block_hash).await;
+            //Create payload attributes with timestamp in seconds
+            let payload_attributes = self
+                .create_payload_attributes(
+                    committed_transactions.timestamp_ms / 1000,
+                    last_built_payload,
+                )
+                .await;
+            let ForkchoiceUpdated {
+                payload_status,
+                payload_id,
+            } = self
+                .engine_handle
+                .fork_choice_updated(
+                    forkchoice_state,
+                    Some(payload_attributes.clone()),
+                    EngineApiMessageVersion::default(),
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
+
+            if payload_status.is_valid() {
+                if let Some(payload_id) = payload_id {
+                    info!(
+                        "Forkchoice updated successfully. Create proposal block with payload id: {:?}.",
+                        payload_id
+                    );
+                    self.proposal_block =
+                        Some(ProposalBlock::new(payload_id.clone(), payload_attributes));
+                    return Ok(Some(payload_id));
+                } else {
+                    info!("Forkchoice updated successfully without payload id");
+                }
+            } else {
+                info!("Forkchoice update failed: {:?}", payload_status);
+            }
+        }
+        Ok(None)
+    }
     /// Create next payload attributes
+    /// This attributes must be equals on all the nodes
     async fn create_payload_attributes(
         &self,
-    ) -> Option<<EthEngineTypes as PayloadTypes>::PayloadAttributes> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        timestamp: u64,
+        last_build_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
+    ) -> <EthEngineTypes as PayloadTypes>::PayloadAttributes {
         //TODO:
         //1. Get actual prev_randao from the previous block's header
         //2. Check and create withdrawals vector
         //3. Set suggested fee recipient
-
-        let attributes = match &self.last_payload {
+        debug!("Create payload attributes with timestamp: {:?}", timestamp);
+        match last_build_payload {
             Some(payload) => {
+                let last_block_number = payload.block().header().number();
+                let last_block_hash = payload.block().hash();
+                let last_block_timestamp = payload.block().header().timestamp();
                 debug!(
                     "Last payload number: {:?} with timestamp: {:?}. Next timestamp: {:?}",
-                    payload.block_number(),
-                    payload.timestamp(),
-                    timestamp
+                    last_block_number, last_block_timestamp, timestamp
                 );
-                if timestamp < payload.timestamp() {
-                    warn!("Timestamp is less than last payload timestamp. Waiting for next iteration.");
-                    return None;
-                }
-                let attributes = EthPayloadAttributes {
+
+                PayloadAttributes {
                     timestamp,
-                    prev_randao: B256::random(),
-                    suggested_fee_recipient: Address::random(),
+                    prev_randao: B256::default(),
+                    suggested_fee_recipient: Address::default(),
                     withdrawals: Default::default(),
-                    parent_beacon_block_root: Some(payload.block_hash()),
-                };
-                Some(attributes)
+                    parent_beacon_block_root: Some(last_block_hash),
+                }
             }
             None => {
                 let chain_spec = self.provider.chain_spec();
-                let attributes = EthPayloadAttributes {
+                PayloadAttributes {
                     timestamp,
-                    prev_randao: B256::random(),
-                    suggested_fee_recipient: Address::random(),
+                    prev_randao: B256::default(),
+                    suggested_fee_recipient: Address::default(),
                     withdrawals: Default::default(),
                     parent_beacon_block_root: Some(chain_spec.genesis_hash()),
-                };
-                Some(attributes)
+                }
             }
-        };
-        attributes
+        }
     }
-    pub async fn build_next_payload(&mut self) -> Result<Option<PayloadId>> {
-        // //Befor build next payload, try to get latest state, and put it into consensus_pool
-        // let latest_state = self.provider.latest();
-        // if let Ok(latest_state) = latest_state {
-        //     let mut consensus_pool = self
-        //         .consensus_pool
-        //         .lock()
-        //         .map_err(|_e| anyhow::anyhow!("Failed to lock consensus pool"))?;
-        //     consensus_pool.set_latest_state(latest_state);
-        // }
-        let forkchoice_state = self.create_forkchoice_state().await;
-        let payload_attributes = self.create_payload_attributes().await;
-        let ForkchoiceUpdated {
-            payload_status,
-            payload_id,
-        } = self
-            .engine_handle
-            .fork_choice_updated(
-                forkchoice_state,
-                payload_attributes,
-                EngineApiMessageVersion::default(),
-            )
-            .await
-            .map_err(anyhow::Error::msg)?;
-        info!(
-            "Forkchoice updated: Payload status: {:?}; Payload id: {:?}",
-            payload_status, payload_id
-        );
-        if payload_status.is_valid() {
-            if let Some(payload_id) = payload_id {
-                info!(
-                    "Forkchoice updated successfully. Update pending payload id to: {:?}.",
-                    payload_id
-                );
-                return Ok(Some(payload_id));
-            } else {
-                info!("Forkchoice updated successfully without payload id");
+    async fn process_proposal_block(
+        &mut self,
+    ) -> Result<Option<<EthEngineTypes as PayloadTypes>::ExecutionData>> {
+        assert!(self.has_proposal_block());
+        let proposal_block_executed = self.proposal_block_executed();
+        if proposal_block_executed == Some(true) {
+            let proposal_block = self.proposal_block.as_ref().unwrap();
+            debug!(
+                "Current proposal block with payload id {:?} is executed. Try to build next one.",
+                proposal_block.payload_id
+            );
+            match self
+                .build_next_proposal_block(proposal_block.built_payload.clone())
+                .await
+            {
+                Ok(Some(payload_id)) => {
+                    debug!(
+                        "Build next proposal block successfully. Pending payload id: {:?}",
+                        payload_id
+                    );
+                }
+                Ok(None) => {
+                    debug!("Build next proposal block successfully without payload id");
+                }
+                Err(e) => {
+                    error!("Build next proposal block failed: {:?}", e);
+                }
             }
-        } else {
-            info!("Forkchoice update failed: {:?}", payload_status);
+            return Ok(None);
+        }
+        // Proposal block is processing
+        let (payload_id, mut built_payload) = {
+            let proposal_block = self.proposal_block.as_ref().unwrap();
+            (
+                proposal_block.payload_id.clone(),
+                proposal_block.built_payload.clone(),
+            )
+        };
+        if built_payload.is_none() {
+            debug!(
+                "Payload {:?} is not built. Try to get it from payload builder.",
+                payload_id
+            );
+            if let Ok(Some(payload)) = self.retrieve_payload(payload_id).await {
+                built_payload.replace(payload.clone());
+                self.proposal_block.as_mut().unwrap().set_payload(payload);
+            }
+        }
+        if let Some(built_payload) = built_payload {
+            debug!("Payload {:?} is built. Try to execute it.", payload_id);
+            match self.execute_pending_payload(&built_payload).await {
+                Ok(Some(execution_payload)) => {
+                    //Set proposal block as executed
+                    self.proposal_block.as_mut().unwrap().set_executed();
+                    return Ok(Some(execution_payload));
+                }
+                Ok(None) => {
+                    debug!(
+                        "Payload {:?} is not executed. Try to execute it later",
+                        payload_id
+                    );
+                    return Ok(None);
+                }
+                Err(e) => {
+                    error!("Execute pending payload failed: {:?}", e);
+                    return Err(anyhow::anyhow!("Execute pending payload failed: {:?}", e));
+                }
+            }
         }
         Ok(None)
     }
