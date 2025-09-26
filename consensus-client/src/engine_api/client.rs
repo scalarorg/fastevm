@@ -230,7 +230,11 @@ impl ExecutionClient {
                 maybe_msg = commit_receiver.recv() => {
                     match maybe_msg {
                         Some(subdag) => {
-                            info!("Processing subdag: {:?}", subdag);
+                            if subdag.timestamp_ms == 0 {
+                                info!("Subdag has no timestamp, skipping");
+                                continue;
+                            }
+                            info!("Received committed subdag: {:?}", subdag);
                             //let payload = self.process_subdag(subdag).await;
                             // match EngineApiClient::<EthEngineTypes>::new_payload_v3(&http_client, payload, vec![], B256::default()).await {
                             //     Ok(resp) => info!("newPayload response: {:?}", resp),
@@ -238,7 +242,7 @@ impl ExecutionClient {
                             // }
                             // let transactions = self.extract_commited_transactions(subdag);
                             let reth_subdag = RethCommittedSubDag::from(subdag);
-                            info!("Payload: {:?}", reth_subdag);
+                            info!("Convert mysticeti subdag to reth subdag: {:?}", reth_subdag);
                             let res = ConsensusTransactionApiClient::submit_committed_subdag(&http_client, reth_subdag).await;
                             if res.is_ok() {
                                 info!("submit_committed_transactions successfully");

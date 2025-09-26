@@ -16,6 +16,7 @@ reth-extension = { workspace = true }
 # Ethereum
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
 alloy-rpc-types-eth = { workspace = true }
+alloy-rpc-types-engine = { workspace = true }
 alloy-consensus = { workspace = true }
 # alloy-rlp = { workspace = true }
 eyre = { workspace = true}

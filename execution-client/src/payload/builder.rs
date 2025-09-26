@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use alloy_consensus::BlockHeader;
 use reth_basic_payload_builder::{
     BuildArguments, BuildOutcome, MissingPayloadBehaviour, PayloadBuilder, PayloadConfig,
 };
@@ -168,33 +169,6 @@ where
                 .lock()
                 .map_err(|e| PayloadBuilderError::Internal(RethError::msg(e)))?;
             consensus_pool.get_proposal_transactions()
-            // 1. try to get the first subdag and check if all transactions are available in the pool
-            // let first_subdag = queue_guard.front();
-            // if let Some(subdag) = first_subdag {
-            //     let transactions = subdag.flatten_transactions();
-            //     let transactions = decode_transactions::<Pool::Transaction>(transactions);
-            //     let all_transactions_available = transactions.iter().all(|tx| {
-            //         let tx = Vec::<u8>::from(tx);
-            //         let tx_hash = TxHash::from_slice(tx.as_slice());
-            //         if self.pool.contains(&tx_hash) {
-            //             true
-            //         } else {
-            //             debug!(
-            //                 "Transaction not found in pool: 0x{}",
-            //                 hex::encode(tx.as_slice())
-            //             );
-            //             false
-            //         }
-            //     });
-            //     if all_transactions_available {
-            //         queue_guard.pop_front()
-            //     } else {
-            //         debug!("Not all transactions are available in the pool. Skipping building payload from subdag");
-            //         None
-            //     }
-            // } else {
-            //     None
-            // }
         };
         if proposal_transactions.is_empty() {
             return Err(PayloadBuilderError::Internal(RethError::msg(
@@ -209,6 +183,21 @@ where
             args,
             |attributes| get_best_transactions(&self.pool, proposal_transactions, attributes),
         );
+        if let Ok(payload) = &payload {
+            match payload {
+                BuildOutcome::Better { payload, .. } => {
+                    let block = payload.block();
+                    let header = block.header();
+                    debug!(
+                        "[MysticetiPayloadBuilder] try_build. Block number: {}, parent hash: {}, header: {:?}",
+                        block.header().number(),
+                        hex::encode(block.header().parent_hash()),
+                        header
+                    );
+                }
+                _ => {}
+            }
+        }
         payload
     }
 

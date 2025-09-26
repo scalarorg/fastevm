@@ -1,3 +1,4 @@
+use reth_ethereum::primitives::transaction::error::InvalidTransactionError;
 use reth_transaction_pool::{
     error::InvalidPoolTransactionError, BestTransactions, PoolTransaction, ValidPoolTransaction,
 };
@@ -23,7 +24,38 @@ impl<T: PoolTransaction> BestMysticetiTransactions<T> {
 
 impl<T: PoolTransaction> BestTransactions for BestMysticetiTransactions<T> {
     fn mark_invalid(&mut self, transaction: &Self::Item, kind: InvalidPoolTransactionError) {
-        debug!("Marking transaction as invalid: {:?}", transaction.hash());
+        debug!(
+            "Mark transaction as invalid {:?}: {:?}",
+            transaction.hash(),
+            kind
+        );
+        match kind {
+            InvalidPoolTransactionError::Consensus(
+                InvalidTransactionError::TxTypeNotSupported { .. },
+            ) => {
+                // /// Identifier for legacy transaction, however a legacy tx is technically not
+                // /// typed.
+                // pub const LEGACY_TX_TYPE_ID: u8 = 0;
+
+                // /// Identifier for an EIP2930 transaction.
+                // pub const EIP2930_TX_TYPE_ID: u8 = 1;
+
+                // /// Identifier for an EIP1559 transaction.
+                // pub const EIP1559_TX_TYPE_ID: u8 = 2;
+
+                // /// Identifier for an EIP4844 transaction.
+                // pub const EIP4844_TX_TYPE_ID: u8 = 3;
+
+                // /// Identifier for an EIP7702 transaction.
+                // pub const EIP7702_TX_TYPE_ID: u8 = 4;
+                debug!(
+                    "Transaction {:?} has type {:?}",
+                    transaction.hash(),
+                    transaction.tx_type()
+                );
+            }
+            _ => {}
+        }
         self.reth_best_txs.mark_invalid(transaction, kind);
     }
 

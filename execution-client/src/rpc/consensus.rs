@@ -4,7 +4,6 @@ use jsonrpsee::types::ErrorObject;
 use reth_extension::CommittedSubDag;
 use reth_extension::ConsensusTransactionApiServer;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::debug;
 
 /// The type that implements the `txpool` rpc namespace trait
 #[derive(Debug)]

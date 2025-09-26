@@ -490,7 +490,7 @@ start_consensus_node() {
     log_info "Starting consensus node $node_index..."
     
     # Set environment variables
-    export RUST_LOG=info
+    export RUST_LOG=debug
     export NODE_INDEX=$((node_index-1))
     export NODE_IP="$consensus_ip"
     
