@@ -111,7 +111,7 @@ impl ValidatorNode {
 
     async fn start_transaction_processing(
         &self,
-        mut input_payload_rx: mpsc::UnboundedReceiver<PayloadItem>,
+        mut input_txs_rx: mpsc::UnboundedReceiver<PayloadItem>,
     ) {
         // Process received payload from execution client
         let transaction_client = self
@@ -120,9 +120,7 @@ impl ValidatorNode {
             .unwrap()
             .transaction_client();
         tokio::spawn(async move {
-            while let Some(payload) = input_payload_rx.recv().await {
-                info!("Received payload from execution client: {:?}", &payload);
-                //let tx_data = extract_transaction_from_payload_v3(payload);
+            while let Some(payload) = input_txs_rx.recv().await {
                 let tx_data = payload.into_iter().map(|tx| tx.into()).collect();
                 match transaction_client.submit(tx_data).await {
                     Ok((block_ref, _status_receiver)) => {

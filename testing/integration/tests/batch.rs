@@ -44,6 +44,7 @@ use tokio::time::sleep;
 const TEST_MNEMONIC: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
+const NUMBER_OF_SENDERS: usize = 100;
 /// Test that generates 100 sender addresses and sends batch transactions.
 ///
 /// This test performs the following steps:
@@ -67,7 +68,7 @@ const TEST_MNEMONIC: &str =
 /// - Skip gracefully if any RPC endpoint is unavailable
 #[tokio::test]
 async fn test_batch_transfer_one_transaction() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = 100;
+    let account_number = NUMBER_OF_SENDERS;
     let number_of_transactions = 1;
     send_transaction_with_check_nonce(account_number, number_of_transactions).await
 }
@@ -95,14 +96,35 @@ async fn test_batch_transfer_one_transaction() -> Result<(), Box<dyn std::error:
 /// - Skip gracefully if any RPC endpoint is unavailable
 #[tokio::test]
 async fn test_batch_transfer_two_transactions() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = 100;
+    let account_number = NUMBER_OF_SENDERS;
     let number_of_transactions = 2;
     send_transaction_with_check_nonce(account_number, number_of_transactions).await
 }
 
 #[tokio::test]
-async fn check_nonce() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = 100;
+async fn test_batch_transfer_10() -> Result<(), Box<dyn std::error::Error>> {
+    let account_number = NUMBER_OF_SENDERS;
+    let number_of_transactions = 10;
+    send_transaction_with_check_nonce(account_number, number_of_transactions).await
+}
+
+#[tokio::test]
+async fn test_batch_transfer_20() -> Result<(), Box<dyn std::error::Error>> {
+    let account_number = NUMBER_OF_SENDERS;
+    let number_of_transactions = 20;
+    send_transaction_with_check_nonce(account_number, number_of_transactions).await
+}
+
+#[tokio::test]
+async fn test_batch_transfer_100() -> Result<(), Box<dyn std::error::Error>> {
+    let account_number = NUMBER_OF_SENDERS;
+    let number_of_transactions = 100;
+    send_transaction_with_check_nonce(account_number, number_of_transactions).await
+}
+
+#[tokio::test]
+async fn check_nonces() -> Result<(), Box<dyn std::error::Error>> {
+    let account_number = NUMBER_OF_SENDERS;
     let accounts = generate_accounts(account_number)?;
 
     let addresses = accounts
@@ -111,9 +133,28 @@ async fn check_nonce() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
     let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
     let address_nonces = get_nonces(addresses.as_slice(), url.as_str()).await;
+
+    // Count sender addresses by nonce
+    let mut nonce_counts: HashMap<u64, usize> = HashMap::new();
     for (address, nonce) in address_nonces.iter() {
-        println!("Address {:?} has nonce {:?}", address, nonce);
+        *nonce_counts.entry(*nonce).or_insert(0) += 1;
     }
+
+    // Print summary
+    println!("📊 Nonce Distribution Summary");
+    println!("============================");
+    println!("Total addresses checked: {}", address_nonces.len());
+    println!();
+
+    // Sort nonces for better readability
+    let mut sorted_nonces: Vec<_> = nonce_counts.into_iter().collect();
+    sorted_nonces.sort_by_key(|(nonce, _)| *nonce);
+
+    println!("Nonce Distribution:");
+    for (nonce, count) in sorted_nonces.iter() {
+        println!("  Nonce {}: {} addresses", nonce, count);
+    }
+
     Ok(())
 }
 
@@ -129,6 +170,7 @@ async fn send_transaction_with_check_nonce(
         .collect::<Vec<_>>();
     let _ = send_batch_transfer_transactions(accounts.as_slice(), number_of_transactions as usize)
         .await?;
+    // check if all transactions are mined
     let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
     let expected_duration = (account_number as u64) * number_of_transactions * 1000;
     let timeout = Duration::from_millis(expected_duration);
@@ -283,9 +325,8 @@ async fn send_batch_transfer_transactions(
     );
     let mut transaction_counter = 0;
 
-    for (sender_idx, account) in sender_accounts.iter().enumerate() {
-        // Send 2 transactions for this sender
-        for tx_in_sender in 0..transactions_per_sender {
+    for tx_in_sender in 0..transactions_per_sender {
+        for (sender_idx, account) in sender_accounts.iter().enumerate() {
             transaction_counter += 1;
 
             // Randomly select a recipient from the sender addresses (excluding self)
@@ -306,17 +347,17 @@ async fn send_batch_transfer_transactions(
             // Get current nonce for the sender
             let current_nonce = address_nonces.get(&account.address).copied();
 
-            println!(
-                "📤 Transaction {} of {} (Sender {}: tx {}): {} -> {} (nonce: {:?}, RPC: {})",
-                transaction_counter,
-                total_transactions,
-                sender_idx + 1,
-                tx_in_sender + 1,
-                account.address,
-                recipient_account.address,
-                current_nonce,
-                rpc_url
-            );
+            // println!(
+            //     "📤 Transaction {} of {} (Sender {}: tx {}): {} -> {} (nonce: {:?}, RPC: {})",
+            //     transaction_counter,
+            //     total_transactions,
+            //     sender_idx + 1,
+            //     tx_in_sender + 1,
+            //     account.address,
+            //     recipient_account.address,
+            //     current_nonce,
+            //     rpc_url
+            // );
 
             // Create and sign the transfer transaction
             let tx_envelope = match create_transfer_transaction(
@@ -342,10 +383,10 @@ async fn send_batch_transfer_transactions(
             // Broadcast the transaction to the network
             match provider.send_tx_envelope(tx_envelope).await {
                 Ok(pending_tx) => {
-                    println!(
-                        "   ✅ Transaction sent successfully (hash: {:?})",
-                        pending_tx.tx_hash()
-                    );
+                    // println!(
+                    //     "   ✅ Transaction sent successfully (hash: {:?})",
+                    //     pending_tx.tx_hash()
+                    // );
                     successful_transactions += 1;
                 }
                 Err(e) => {

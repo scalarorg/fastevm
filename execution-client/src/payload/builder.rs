@@ -1,12 +1,11 @@
 //! Payload component configuration for the Ethereum node.
 
-use std::sync::{Arc, Mutex};
+use std::{collections::VecDeque, sync::Arc};
 
 use alloy_consensus::BlockHeader;
 use reth_basic_payload_builder::{
     BuildArguments, BuildOutcome, MissingPayloadBehaviour, PayloadBuilder, PayloadConfig,
 };
-use reth_errors::RethError;
 use reth_ethereum::{
     chainspec::EthereumHardforks,
     evm::EthEvmConfig,
@@ -54,7 +53,7 @@ pub struct MysticetiPayloadBuilder<Pool: TransactionPool, Client, EvmConfig = Et
     /// The type responsible for creating the evm.
     evm_config: EvmConfig,
     /// Subdag queue.
-    consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>,
+    consensus_pool: Arc<ConsensusPool<Pool>>,
     /// Payload builder configuration.
     builder_config: EthereumBuilderConfig,
 }
@@ -82,7 +81,7 @@ impl<Pool: TransactionPool, Client: Clone, EvmConfig: Clone>
     pub fn new(
         client: Client,
         pool: Pool,
-        consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>,
+        consensus_pool: Arc<ConsensusPool<Pool>>,
         evm_config: EvmConfig,
         builder_config: EthereumBuilderConfig,
     ) -> Self {
@@ -122,7 +121,7 @@ fn get_best_transactions<
     Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>,
 >(
     pool: &Pool,
-    committed_txs: Vec<Arc<ValidPoolTransaction<Pool::Transaction>>>,
+    committed_txs: Vec<Arc<Pool::Transaction>>,
     attributes: BestTransactionsAttributes,
 ) -> Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<Pool::Transaction>>>> {
     // Get all default best transactions first,
@@ -133,8 +132,15 @@ fn get_best_transactions<
         pool.pending_transactions().len()
     );
     let best_txs = pool.best_transactions_with_attributes(attributes);
-    let best_transactions =
-        super::best::BestMysticetiTransactions::<Pool::Transaction>::new(best_txs, committed_txs);
+    //Get all transaction from pool
+    let mut pooled_txs = VecDeque::new();
+    for tx in committed_txs {
+        if let Some(tx) = pool.get(tx.hash()) {
+            pooled_txs.push_back(tx);
+        }
+    }
+
+    let best_transactions = super::best::BestMysticetiTransactions::new(best_txs, pooled_txs);
     Box::new(best_transactions)
 }
 
@@ -159,22 +165,149 @@ where
     type Attributes = EthPayloadBuilderAttributes;
     type BuiltPayload = EthBuiltPayload;
 
+    /*
+    ## Deep Dive Analysis: Why `try_build` and `default_ethereum_payload` Execute Multiple Times with Same Block Number
+
+    Based on my comprehensive analysis of the Reth codebase, I've identified the root causes for why the `try_build` method of `PayloadBuilder` and `default_ethereum_payload` function are executed multiple times with the same block number. Here's my detailed findings:
+
+    ### **Root Cause Analysis**
+
+    #### 1. **Continuous Payload Building Architecture**
+
+    The primary reason for multiple executions is Reth's **continuous payload building architecture**:
+
+    ```rust
+    // From crates/payload/basic/src/lib.rs:383-390
+    while this.interval.poll_tick(cx).is_ready() {
+        // start a new job if there is no pending block, we haven't reached the deadline,
+        // and the payload isn't frozen
+        if this.pending_block.is_none() && !this.best_payload.is_frozen() {
+            this.spawn_build_job();
+        }
+    }
+    ```
+
+    **Key Points:**
+    - **Interval-based building**: By default, payloads are built every **1 second** (`Duration::from_secs(1)`)
+    - **Continuous improvement**: Each interval triggers a new `try_build` call to potentially build a better payload
+    - **Same block number**: All these builds target the **same parent block** and **same block number** (parent + 1)
+
+    #### 2. **Payload ID Deduplication vs Block Number**
+
+    The system has **payload ID deduplication** but **NOT block number deduplication**:
+
+    ```rust
+    // From crates/payload/builder/src/service.rs:401-403
+    if this.contains_payload(id) {
+        debug!(target: "payload_builder",%id, parent = %attr.parent(), "Payload job already in progress, ignoring.");
+    } else {
+        // Create new job
+    }
+    ```
+
+    **Payload ID Generation** (from `crates/ethereum/engine-primitives/src/payload.rs:407-426`):
+    ```rust
+    pub fn payload_id(parent: &B256, attributes: &PayloadAttributes) -> PayloadId {
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(parent.as_slice());
+        hasher.update(&attributes.timestamp.to_be_bytes()[..]);
+        hasher.update(attributes.prev_randao.as_slice());
+        hasher.update(attributes.suggested_fee_recipient.as_slice());
+        // ... more fields
+    }
+    ```
+
+    **The Issue**: Payload IDs are unique per **parent hash + attributes combination**, but multiple payload jobs can target the **same block number** with different:
+    - Timestamps
+    - `prev_randao` values
+    - `suggested_fee_recipient` addresses
+    - Other attributes
+
+    #### 3. **Multiple Trigger Sources**
+
+    Several components can trigger payload building for the same block number:
+
+    1. **Engine API calls** (`engine_forkchoiceUpdatedV1/V2/V3`)
+    2. **Interval-based continuous building** (every 1 second)
+    3. **New transaction arrivals** in the mempool
+    4. **State changes** from new blocks
+
+    #### 4. **Payload Job Lifecycle**
+
+    Each `BasicPayloadJob` runs for **12 seconds** (slot duration) and continuously builds:
+
+    ```rust
+    // From crates/payload/basic/src/lib.rs:168-185
+    let mut job = BasicPayloadJob {
+        config,
+        executor: self.executor.clone(),
+        deadline,
+        // ticks immediately
+        interval: tokio::time::interval(self.config.interval), // 1 second
+        best_payload: PayloadState::Missing,
+        pending_block: None,
+        cached_reads,
+        payload_task_guard: self.payload_task_guard.clone(),
+        metrics: Default::default(),
+        builder: self.builder.clone(),
+    };
+
+    // start the first job right away
+    job.spawn_build_job();
+    ```
+
+    **During this 12-second window:**
+    - The job spawns a new `try_build` call every 1 second
+    - Each call targets the **same block number** (parent + 1)
+    - The goal is to build progressively better payloads with more transactions
+
+    #### 5. **Transaction Pool Evolution**
+
+    The multiple executions serve a purpose - they allow the payload builder to:
+
+    1. **Incorporate new transactions** that arrive in the mempool
+    2. **Optimize gas usage** by trying different transaction combinations
+    3. **Improve fee collection** by selecting better transactions
+    4. **Handle transaction ordering** changes
+
+    ### **Why This Design Exists**
+
+    This is **intentional behavior** for several reasons:
+
+    1. **MEV Optimization**: Allows builders to continuously improve payloads for better MEV extraction
+    2. **Transaction Inclusion**: New transactions arriving in the pool can be included in subsequent builds
+    3. **Gas Optimization**: Different transaction orderings can lead to better gas utilization
+    4. **Competitive Building**: Multiple builders can compete to create the best payload for the same slot
+
+    ### **Evidence from Code**
+
+    The debug logs show this is expected:
+
+    ```rust
+    // From crates/ethereum/payload/src/lib.rs:175
+    debug!(target: "payload_builder", id=%attributes.id, parent_header = ?parent_header.hash(), parent_number = parent_header.number, "building new payload");
+    ```
+
+    This log appears **multiple times** for the same `parent_number` because it's the **intended behavior**.
+
+    ### **Conclusion**
+
+    The multiple executions of `try_build` and `default_ethereum_payload` with the same block number are **not a bug** but a **feature** of Reth's payload building architecture. It's designed to:
+
+    1. **Continuously improve** payloads during the 12-second slot window
+    2. **Incorporate new transactions** as they arrive
+    3. **Optimize for better fees and gas usage**
+    4. **Enable competitive MEV building**
+
+    The system correctly deduplicates based on **payload ID** (which includes all attributes) but intentionally allows multiple builds for the **same block number** with different attributes to enable continuous optimization.
+    */
+
     fn try_build(
         &self,
         args: BuildArguments<EthPayloadBuilderAttributes, EthBuiltPayload>,
     ) -> Result<BuildOutcome<EthBuiltPayload>, PayloadBuilderError> {
-        let proposal_transactions = {
-            let mut consensus_pool = self
-                .consensus_pool
-                .lock()
-                .map_err(|e| PayloadBuilderError::Internal(RethError::msg(e)))?;
-            consensus_pool.get_proposal_transactions()
-        };
-        if proposal_transactions.is_empty() {
-            return Err(PayloadBuilderError::Internal(RethError::msg(
-                "No proposal transactions",
-            )));
-        }
+        let proposal_transactions = self.consensus_pool.get_proposal_transactions();
         let payload = default_ethereum_payload(
             self.evm_config.clone(),
             self.client.clone(),
@@ -183,22 +316,25 @@ where
             args,
             |attributes| get_best_transactions(&self.pool, proposal_transactions, attributes),
         );
-        if let Ok(payload) = &payload {
+
+        payload.map(|payload| {
             match payload {
                 BuildOutcome::Better { payload, .. } => {
                     let block = payload.block();
                     let header = block.header();
                     debug!(
-                        "[MysticetiPayloadBuilder] try_build. Block number: {}, parent hash: {}, header: {:?}",
+                        "[MysticetiPayloadBuilder] try_build with better payload. Block number: {}, parent hash: {}, header: {:?}",
                         block.header().number(),
                         hex::encode(block.header().parent_hash()),
                         header
                     );
+                    //Return freeze payload instead of better payload
+                    //Stop try_build process
+                    BuildOutcome::Freeze(payload)
                 }
-                _ => {}
+                _ => payload,
             }
-        }
-        payload
+        })
     }
 
     fn on_missing_payload(

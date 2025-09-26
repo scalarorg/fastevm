@@ -21,7 +21,9 @@ use crate::{
     payload::MysticetiPayloadBuilderFactory,
     rpc::{CliTxpoolListener, ConsensusTransactionsHandler, TxpoolListener},
 };
+
 use reth_ethereum::{
+    chainspec::ChainSpecProvider,
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
     node::{
         builder::{components::BasicPayloadServiceBuilder, NodeHandle},
@@ -30,10 +32,8 @@ use reth_ethereum::{
     },
 };
 use reth_extension::{ConsensusTransactionApiServer, TxpoolListenerApiServer};
-use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::unbounded_channel;
+use std::sync::Arc;
 use tracing::info;
-
 // Use in cli
 use bip39 as _;
 use hdwallet as _;
@@ -54,8 +54,8 @@ fn main() {
     Cli::<EthereumChainSpecParser, CliTxpoolListener>::parse()
         .run(|builder, args| async move {
             //Create a channel for sending subdag received from rpc server to BeaconConsensusEngineHandle
-            let (subdag_tx, subdag_rx) = unbounded_channel();
-            let consensus_pool = Arc::new(Mutex::new(ConsensusPool::new()));
+            // let (subdag_tx, subdag_rx) = unbounded_channel();
+            let consensus_pool = Arc::new(ConsensusPool::new(args.committed_subdags_per_block));
             let mysticeti_payload_builder = BasicPayloadServiceBuilder::new(
                 MysticetiPayloadBuilderFactory::new(consensus_pool.clone()),
             );
@@ -65,20 +65,28 @@ fn main() {
                 // use default ethereum components but use our custom payload builder
                 .with_components(EthereumNode::components().payload(mysticeti_payload_builder))
                 .with_add_ons(EthereumAddOns::default())
-                .extend_rpc_modules(move |ctx| {
-                    if !args.enable_txpool_listener {
-                        return Ok(());
-                    }
+                .extend_rpc_modules({
+                    let consensus_pool = consensus_pool.clone();
+                    move |ctx| {
+                        if !args.enable_txpool_listener {
+                            return Ok(());
+                        }
 
-                    // here we get the configured pool.
-                    let pool = ctx.pool().clone();
-                    let listener = TxpoolListener::new(pool.clone());
-                    let consensus_handler = ConsensusTransactionsHandler::new(subdag_tx);
-                    // now we merge our extension namespace into all configured transports
-                    ctx.modules.merge_configured(listener.into_rpc())?;
-                    ctx.modules.merge_http(consensus_handler.into_rpc())?;
-                    info!("successfully extended rpc modules with txpool listener");
-                    Ok(())
+                        // here we get the configured pool.
+                        let pool = ctx.pool().clone();
+                        let listener = TxpoolListener::new(pool.clone());
+                        let chain_spec = ctx.provider().chain_spec();
+                        let consensus_handler = ConsensusTransactionsHandler::new(
+                            consensus_pool.clone(),
+                            pool.clone(),
+                            chain_spec,
+                        );
+                        // now we merge our extension namespace into all configured transports
+                        ctx.modules.merge_configured(listener.into_rpc())?;
+                        ctx.modules.merge_http(consensus_handler.into_rpc())?;
+                        info!("successfully extended rpc modules with txpool listener");
+                        Ok(())
+                    }
                 })
                 .on_node_started(move |node| {
                     let payload_builder_handle: reth_payload_builder::PayloadBuilderHandle<
@@ -86,13 +94,11 @@ fn main() {
                     > = node.payload_builder_handle.clone();
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
                     // let engine_events = node.add_ons_handle.engine_events.new_listener();
-                    //use reth_ethereum::chainspec::ChainSpecProvider;
-                    //node.provider.chain_spec();
-                    let transaction_pool = node.pool.clone();
+                    // use reth_ethereum::chainspec::ChainSpecProvider;
+                    // node.provider.chain_spec();
+                    // let transaction_pool = node.pool.clone();
                     let mut mysticeti_consensus = MysticetiConsensus::new(
-                        subdag_rx,
                         consensus_pool,
-                        transaction_pool,
                         node.provider,
                         payload_builder_handle,
                         engine_handle,

@@ -432,6 +432,7 @@ start_execution_node() {
         "--chain" "$data_dir/genesis.json"
         "--datadir" "$data_dir"
         "--instance" "$node_index"
+        "--engine.always-process-payload-attributes-on-canonical-head"
         "--http"
         "--http.api" "eth,net,web3,admin,debug"
         "--http.addr" "0.0.0.0"
@@ -462,6 +463,7 @@ start_execution_node() {
         "--p2p-secret-key" "$data_dir/p2p/secret.key"
         "--bootnodes" "$bootnodes"
         "--enable-txpool-listener"
+        "--committed-subdags-per-block" "10"
         "-vvvv"
     )
     

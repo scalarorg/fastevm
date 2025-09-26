@@ -15,7 +15,7 @@ path = "src/cli.rs"
 reth-extension = { workspace = true }
 # Ethereum
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
-alloy-rpc-types-eth = { workspace = true }
+# alloy-rpc-types-eth = { workspace = true }
 alloy-rpc-types-engine = { workspace = true }
 alloy-consensus = { workspace = true }
 # alloy-rlp = { workspace = true }
@@ -35,7 +35,6 @@ reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
 reth-evm = { workspace = true }
 reth-rpc-layer = { workspace = true }
-reth-errors = { workspace = true }
 reth-transaction-pool = { workspace = true }
 
 # Additional dependencies for RPC and caching

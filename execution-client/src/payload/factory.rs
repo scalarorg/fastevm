@@ -14,7 +14,7 @@ use reth_ethereum::{
 use crate::{consensus::ConsensusPool, payload::MysticetiPayloadBuilder};
 use reth_ethereum_payload_builder::EthereumBuilderConfig;
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 // use reth_transaction_pool::{PoolTransaction, TransactionPool};
 
 #[non_exhaustive]
@@ -22,14 +22,14 @@ pub struct MysticetiPayloadBuilderFactory<Pool: TransactionPool>
 where
     Pool: TransactionPool,
 {
-    consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>,
+    consensus_pool: Arc<ConsensusPool<Pool>>,
 }
 
 impl<Pool: TransactionPool> MysticetiPayloadBuilderFactory<Pool>
 where
     Pool: TransactionPool,
 {
-    pub fn new(consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>) -> Self {
+    pub fn new(consensus_pool: Arc<ConsensusPool<Pool>>) -> Self {
         Self { consensus_pool }
     }
 }

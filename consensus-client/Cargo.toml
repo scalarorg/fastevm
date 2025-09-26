@@ -26,6 +26,7 @@ jsonrpsee = { workspace = true }
 http = { workspace = true }
 prometheus = "0.13.3"
 
+hex = { workspace = true }
 rand.workspace = true
 serde = { workspace = true }
 serde_yaml = "0.9"
