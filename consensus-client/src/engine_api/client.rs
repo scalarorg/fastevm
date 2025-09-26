@@ -164,57 +164,12 @@ impl ExecutionClient {
 
         loop {
             tokio::select! {
-            //    _ = interval.tick() => {
-            //         // Call forkChoiceUpdated
-            //         let fc_state = self.get_forcechoice_state().await;
-            //         let payload_attributes = self.get_payload_attributes().await;
-            //         info!("forkChoiceUpdated: {:?}, payload_attributes: {:?}", fc_state, payload_attributes);
-            //         /*
-            //          * "shanghaiTime": 1700001200,  // Shanghai activates at this timestamp
-            //          * "cancunTime": 1710000000     // Cancun activates at this timestamp Saturday, March 9, 2024 4:00:00 PM
-            //          * After cancunTime, we must use fork_choice_updated_v3
-            //          * Before cancunTime, we must use fork_choice_updated_v2
-            //          */
-            //         match EngineApiClient::<EthEngineTypes>::fork_choice_updated_v3(&http_client, fc_state.clone(), payload_attributes).await {
-            //             Ok(resp) => {
-            //                 info!("forkChoiceUpdated response: {:?}", resp);
-            //                 payload_id = resp.payload_id;
-            //                 consecutive_errors = 0; // Reset error counter on success
-            //             },
-            //             Err(e) => {
-            //                 consecutive_errors += 1;
-            //                 error!("forkChoiceUpdated failed (attempt {}/{}): {:?}",
-            //                     consecutive_errors, MAX_CONSECUTIVE_ERRORS, e);
-
-            //                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-            //                     error!("Too many consecutive errors, stopping Engine API client");
-            //                     break;
-            //                 }
-            //             }
-            //         }
-
-            //         if let Some(payload_id) = payload_id.as_ref() {
-            //            match EngineApiClient::<EthEngineTypes>::get_payload_v3(&http_client, payload_id.clone()).await {
-            //                 Ok(payload) => {
-            //                     let _res = self.send_payload_for_consensus(payload).await;
-            //                 },
-            //                 Err(err) =>  {
-            //                     error!("getPayload failed: {:?}", err)
-            //                 }
-            //             }
-            //         }
-            //    }
                 may_tx = txpool_subscriber.next() => {
                         match may_tx {
                             Some(Ok(tx)) => {
-                                info!("Received transaction: {:?}", tx);
-                                match self.send_transaction(tx).await {
-                                    Ok(()) => {
-                                        info!("Transaction sent successfully");
-                                    }
-                                    Err(e) => {
-                                        error!("Transaction sent failed: {:?}", e);
-                                    }
+                                info!("Received transactions: {:?}", tx.len());
+                                if let Err(e) = self.send_transaction(tx).await {
+                                    error!("Error sending transaction to consensus: {:?}", e);
                                 }
                             }
                             Some(Err(err)) => {
@@ -230,23 +185,16 @@ impl ExecutionClient {
                 maybe_msg = commit_receiver.recv() => {
                     match maybe_msg {
                         Some(subdag) => {
-                            if subdag.timestamp_ms == 0 {
-                                info!("Subdag has no timestamp, skipping");
-                                continue;
-                            }
-                            info!("Received committed subdag: {:?}", subdag);
-                            //let payload = self.process_subdag(subdag).await;
-                            // match EngineApiClient::<EthEngineTypes>::new_payload_v3(&http_client, payload, vec![], B256::default()).await {
-                            //     Ok(resp) => info!("newPayload response: {:?}", resp),
-                            //     Err(e) => error!("newPayload failed: {:?}", e),
-                            // }
-                            // let transactions = self.extract_commited_transactions(subdag);
+                            //TODO: findout why timestamp_ms is 0
+                            info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Commit Digest {:?}, Leader round {:?}, Leader Digest {:?}",
+                            subdag.timestamp_ms,
+                            subdag.commit_ref.index,
+                            format!("{:?}", subdag.commit_ref.digest),
+                            subdag.leader.round,
+                            hex::encode(subdag.leader.digest.as_ref()));
                             let reth_subdag = RethCommittedSubDag::from(subdag);
-                            info!("Convert mysticeti subdag to reth subdag: {:?}", reth_subdag);
                             let res = ConsensusTransactionApiClient::submit_committed_subdag(&http_client, reth_subdag).await;
-                            if res.is_ok() {
-                                info!("submit_committed_transactions successfully");
-                            } else {
+                            if res.is_err() {
                                 error!("submit_committed_transactions failed: {:?}", res);
                             }
                         }

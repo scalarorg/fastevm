@@ -66,10 +66,13 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::{
     Block, BlockId, BlockNumberOrTag, BlockTransactions, Transaction, TransactionReceipt,
 };
-use eyre::Result;
+use anyhow::Result;
 use std::env;
 use testing::address::generate_account_from_seed;
 
+// Generate test accounts
+const TEST_MNEMONIC: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 /// Test that verifies all 4 nodes have consistent block numbers
 ///
 /// This test performs the following steps:
@@ -78,7 +81,7 @@ use testing::address::generate_account_from_seed;
 /// 3. Verifies that all nodes are within a reasonable range of each other
 /// 4. Reports any inconsistencies found
 #[tokio::test]
-async fn test_cross_node_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_cross_node_consistency() -> Result<()> {
     println!("🔍 Testing cross-node block number consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -155,9 +158,10 @@ async fn test_cross_node_consistency() -> Result<(), Box<dyn std::error::Error>>
 /// 1. Gets the minimum block number among all nodes
 /// 2. Fetches the block with that number from all nodes
 /// 3. Verifies that all nodes have the same block hash
-/// 4. Reports any hash mismatches
+/// 4. If hash differences are found, uses binary search to find the first occurrence
+/// 5. Reports any hash mismatches and their exact location
 #[tokio::test]
-async fn test_block_hash_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_block_hash_consistency() -> Result<()> {
     println!("🔍 Testing block hash consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -239,12 +243,14 @@ async fn test_block_hash_consistency() -> Result<(), Box<dyn std::error::Error>>
     // Check hash consistency
     let first_hash = &block_hashes[0];
     let mut consistent = true;
+    let mut inconsistent_nodes = Vec::new();
 
     for (idx, hash) in block_hashes.iter().enumerate() {
         if hash != first_hash {
             println!("❌ Hash mismatch: Node {} has different hash", idx + 1);
             println!("  Expected: {:?}", first_hash);
             println!("  Actual:   {:?}", hash);
+            inconsistent_nodes.push(idx + 1);
             consistent = false;
         }
     }
@@ -259,6 +265,26 @@ async fn test_block_hash_consistency() -> Result<(), Box<dyn std::error::Error>>
             "❌ Block hash inconsistency detected for block {}",
             min_block
         );
+
+        // Use binary search to find the first occurrence of hash difference
+        println!("🔍 Searching for first occurrence of hash difference...");
+        match find_first_hash_difference(min_block).await {
+            Ok(Some(first_different_block)) => {
+                println!(
+                    "📍 First hash difference found at block {}",
+                    first_different_block
+                );
+
+                // Get detailed information about the first different block
+                print_block_hash_details(first_different_block).await;
+            }
+            Ok(None) => {
+                println!("ℹ️  No hash differences found in earlier blocks");
+            }
+            Err(e) => {
+                println!("❌ Error during binary search: {:?}", e);
+            }
+        }
     }
 
     Ok(())
@@ -272,7 +298,7 @@ async fn test_block_hash_consistency() -> Result<(), Box<dyn std::error::Error>>
 /// 3. Verifies that all nodes have identical block data
 /// 4. Checks block headers, transactions, receipts, and other metadata
 #[tokio::test]
-async fn test_full_block_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_full_block_consistency() -> Result<()> {
     println!("🔍 Testing full block data consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -385,7 +411,7 @@ async fn test_full_block_consistency() -> Result<(), Box<dyn std::error::Error>>
 /// 2. Fetches state root, gas used, and other state-related data
 /// 3. Verifies that all nodes have identical state information
 #[tokio::test]
-async fn test_state_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_state_consistency() -> Result<()> {
     println!("🔍 Testing state consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -500,7 +526,7 @@ async fn test_state_consistency() -> Result<(), Box<dyn std::error::Error>> {
 /// 2. Fetches transaction data from all nodes
 /// 3. Verifies that all nodes have identical transactions in the same order
 #[tokio::test]
-async fn test_transaction_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_transaction_consistency() -> Result<()> {
     println!("🔍 Testing transaction consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -612,7 +638,7 @@ async fn test_transaction_consistency() -> Result<(), Box<dyn std::error::Error>
 /// 2. Checks account balances and nonces across all nodes
 /// 3. Verifies that all nodes have identical account state
 #[tokio::test]
-async fn test_account_state_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_account_state_consistency() -> Result<()> {
     println!("🔍 Testing account state consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -637,16 +663,15 @@ async fn test_account_state_consistency() -> Result<(), Box<dyn std::error::Erro
         return Ok(());
     }
 
-    // Generate test accounts
-    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     let mnemonic = bip39::Mnemonic::parse(TEST_MNEMONIC)
-        .map_err(|e| eyre::eyre!("Invalid mnemonic: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid mnemonic: {}", e))?;
     let seed = mnemonic.to_seed("");
     let seed_bytes = &seed[..];
 
     let mut test_accounts = Vec::new();
     for i in 0..10 {
-        let account = generate_account_from_seed(seed_bytes, i as u32)?;
+        let account = generate_account_from_seed(seed_bytes, i as u32)
+            .map_err(|e| anyhow::anyhow!("Failed to generate account: {}", e))?;
         test_accounts.push(account);
     }
 
@@ -791,7 +816,7 @@ fn compare_state_info(state1: &StateInfo, state2: &StateInfo) -> bool {
 /// 2. Fetches transaction receipts from all nodes
 /// 3. Verifies that all nodes have identical receipt data
 #[tokio::test]
-async fn test_receipt_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_receipt_consistency() -> Result<()> {
     println!("🔍 Testing receipt consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -952,7 +977,7 @@ async fn test_receipt_consistency() -> Result<(), Box<dyn std::error::Error>> {
 /// 2. Fetches gas price information from all nodes
 /// 3. Verifies that all nodes have consistent gas pricing
 #[tokio::test]
-async fn test_gas_price_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_gas_price_consistency() -> Result<()> {
     println!("🔍 Testing gas price consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -1025,7 +1050,7 @@ async fn test_gas_price_consistency() -> Result<(), Box<dyn std::error::Error>> 
 /// 1. Gets the chain ID from all nodes
 /// 2. Verifies that all nodes report the same chain ID
 #[tokio::test]
-async fn test_chain_id_consistency() -> Result<(), Box<dyn std::error::Error>> {
+async fn test_chain_id_consistency() -> Result<()> {
     println!("🔍 Testing chain ID consistency...");
 
     let rpc_urls = get_rpc_urls();
@@ -1118,4 +1143,188 @@ struct StateInfo {
     logs_bloom: alloy_primitives::Bloom,
     receipts_root: B256,
     transactions_root: B256,
+}
+
+/// Binary search to find the first block where hash differences occur
+///
+/// This function performs a binary search from genesis (block 0) to the given max_block
+/// to find the first block number where nodes have different block hashes.
+async fn find_first_hash_difference(max_block: u64) -> Result<Option<u64>> {
+    let rpc_urls = get_rpc_urls();
+    let mut providers = Vec::new();
+
+    // Connect to all RPC endpoints
+    for (idx, rpc_url) in rpc_urls.iter().enumerate() {
+        match ProviderBuilder::new().connect(rpc_url).await {
+            Ok(provider) => {
+                providers.push(provider);
+            }
+            Err(e) => {
+                println!("Failed to connect to RPC endpoint {}: {:?}", idx + 1, e);
+            }
+        }
+    }
+
+    if providers.is_empty() {
+        println!("⚠️  Warning: No RPC endpoints available. Skipping test...");
+        return Ok(None);
+    }
+    let mut left = 0u64;
+    let mut right = max_block;
+    let mut first_difference = None;
+
+    while left <= right {
+        let mid = left + (right - left) / 2;
+
+        println!("  Checking block {} for hash consistency...", mid);
+
+        // Get block hashes from all providers for this block
+        let mut block_hashes = Vec::new();
+        let mut all_successful = true;
+
+        for (idx, provider) in providers.iter().enumerate() {
+            match provider
+                .get_block(BlockId::Number(BlockNumberOrTag::Number(mid)))
+                .await
+            {
+                Ok(Some(block)) => {
+                    block_hashes.push((idx + 1, block.header.hash));
+                }
+                Ok(None) => {
+                    println!("    Node {}: Block {} not found", idx + 1, mid);
+                    all_successful = false;
+                    break;
+                }
+                Err(e) => {
+                    println!("    Node {}: Failed to get block {}: {:?}", idx + 1, mid, e);
+                    all_successful = false;
+                    break;
+                }
+            }
+        }
+
+        if !all_successful || block_hashes.len() < 2 {
+            // If we can't get blocks from all nodes, move to next block
+            left = mid + 1;
+            continue;
+        }
+
+        // Check if all hashes are the same
+        let first_hash = &block_hashes[0].1;
+        let mut has_difference = false;
+
+        for (node_id, hash) in &block_hashes[1..] {
+            if hash != first_hash {
+                has_difference = true;
+                println!(
+                    "    ❌ Hash difference found at block {} (node {})",
+                    mid, node_id
+                );
+                break;
+            }
+        }
+
+        if has_difference {
+            // Found a difference at this block, record it and search earlier
+            first_difference = Some(mid);
+            if mid == 0 {
+                // Can't go earlier than genesis
+                break;
+            }
+            right = mid - 1;
+        } else {
+            // No difference at this block, search later blocks
+            left = mid + 1;
+        }
+    }
+
+    Ok(first_difference)
+}
+
+/// Print detailed information about block hash differences for a specific block
+async fn print_block_hash_details(block_number: u64) {
+    println!(
+        "\n📋 Detailed block hash information for block {}:",
+        block_number
+    );
+    let rpc_urls = get_rpc_urls();
+    let mut providers = Vec::new();
+
+    // Connect to all RPC endpoints
+    for (idx, rpc_url) in rpc_urls.iter().enumerate() {
+        match ProviderBuilder::new().connect(rpc_url).await {
+            Ok(provider) => {
+                providers.push(provider);
+            }
+            Err(e) => {
+                println!("Failed to connect to RPC endpoint {}: {:?}", idx + 1, e);
+            }
+        }
+    }
+
+    if providers.is_empty() {
+        println!("⚠️  Warning: No RPC endpoints available. Skipping test...");
+        return;
+    }
+    let mut block_data = Vec::new();
+
+    for (idx, provider) in providers.iter().enumerate() {
+        match provider
+            .get_block(BlockId::Number(BlockNumberOrTag::Number(block_number)))
+            .await
+        {
+            Ok(Some(block)) => {
+                block_data.push((idx + 1, block));
+            }
+            Ok(None) => {
+                println!("  Node {}: Block {} not found", idx + 1, block_number);
+            }
+            Err(e) => {
+                println!(
+                    "  Node {}: Failed to get block {}: {:?}",
+                    idx + 1,
+                    block_number,
+                    e
+                );
+            }
+        }
+    }
+
+    if block_data.len() < 2 {
+        println!("  ⚠️  Not enough block data to compare");
+        return;
+    }
+
+    // Group blocks by hash to show which nodes have the same hash
+    let mut hash_groups: std::collections::HashMap<B256, Vec<usize>> =
+        std::collections::HashMap::new();
+
+    for (node_id, block) in &block_data {
+        let hash = block.header.hash;
+        hash_groups
+            .entry(hash)
+            .or_insert_with(Vec::new)
+            .push(*node_id);
+    }
+
+    println!("  Hash groups:");
+    for (hash, nodes) in hash_groups {
+        println!("    Hash {:?}: Nodes {:?}", hash, nodes);
+    }
+
+    // Show block header details for comparison
+    if block_data.len() >= 2 {
+        println!("  Block header comparison:");
+        let (_, first_block) = &block_data[0];
+        println!("    Parent hash: {:?}", first_block.header.parent_hash);
+        println!("    State root: {:?}", first_block.header.state_root);
+        println!(
+            "    Transactions root: {:?}",
+            first_block.header.transactions_root
+        );
+        println!("    Receipts root: {:?}", first_block.header.receipts_root);
+        println!("    Gas used: {}", first_block.header.gas_used);
+        println!("    Gas limit: {}", first_block.header.gas_limit);
+        println!("    Timestamp: {}", first_block.header.timestamp);
+    }
 }

@@ -23,6 +23,9 @@ pub(crate) struct CliTxpoolListener {
     /// CLI flag to enable the txpool extension namespace
     #[arg(long)]
     pub enable_txpool_listener: bool,
+    /// Number of transactions to send in a batch
+    #[arg(long)]
+    pub committed_subdags_per_block: usize,
 }
 
 /// The type that implements the `txpool` rpc namespace trait
