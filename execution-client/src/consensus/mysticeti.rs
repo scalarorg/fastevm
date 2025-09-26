@@ -1,9 +1,8 @@
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, TxHash, B256};
 use alloy_rpc_types_eth::TransactionTrait;
 use anyhow::Result;
 use reth_ethereum::{
     chainspec::{ChainSpecProvider, EthChainSpec},
-    evm::revm::database::EvmStateProvider,
     node::{
         api::{
             BeaconConsensusEngineHandle, BuiltPayload, EngineApiMessageVersion, ExecutionPayload,
@@ -17,19 +16,24 @@ use reth_ethereum::{
 use reth_ethereum_engine_primitives::EthEngineTypes;
 use reth_extension::{CommittedSubDag, CommittedTransactions};
 use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
-use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
+use reth_transaction_pool::{
+    PoolTransaction, TransactionOrigin, TransactionPool, ValidPoolTransaction,
+};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     sync::{Arc, Mutex},
 };
-use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver};
+use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::consensus::ConsensusPool;
 
 const BLOCK_INTERVAL: u64 = 1000; //1 second
-const PAYLOAD_EXECUTION_TIMEOUT: u64 = 30; // 30 second timeout
-const PAYLOAD_EXECUTION_INTERVAL: u64 = 500; // 10 millisecond interval
+const WAITING_PENDING_TXS_TIMEOUT: u64 = 3000; // 10 second timeout
+const WAITING_PENDING_TXS_INTERVAL: u64 = 100; // 1 second interval
+
+//const PAYLOAD_EXECUTION_TIMEOUT: u64 = 30; // 30 second timeout
+//const PAYLOAD_EXECUTION_INTERVAL: u64 = 500; // 10 millisecond interval
 pub struct MysticetiConsensus<Provider, Payload, Pool>
 where
     Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
@@ -85,14 +89,15 @@ where
     async fn process_single_subdag(&mut self, subdag: CommittedSubDag) -> Result<()> {
         let committed_transactions = CommittedTransactions::<Pool::Transaction>::try_from(subdag)?;
         //Add subdag to transaction pool
-        self.update_pool_with_transactions(&committed_transactions)
+        let pooled_txs = self
+            .update_pool_with_transactions(&committed_transactions)
             .await?;
         //Add committed transactions to consensuspool
         let mut consensus_pool = self
             .consensus_pool
             .lock()
             .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
-        consensus_pool.add_committed_transactions(committed_transactions);
+        consensus_pool.add_committed_transactions(committed_transactions, pooled_txs);
         debug!(
             "Subdag queued successfully. Queue size: {}",
             consensus_pool.queue_size()
@@ -103,57 +108,127 @@ where
     async fn update_pool_with_transactions(
         &mut self,
         committed_transactions: &CommittedTransactions<Pool::Transaction>,
-    ) -> Result<()> {
+    ) -> Result<Vec<Arc<ValidPoolTransaction<Pool::Transaction>>>> {
+        //Get pending transactions listener for waiting all missing transactions are put to the pending subpool of timeout
+        let pending_tx_listener = self.transaction_pool.pending_transactions_listener();
+        let mut waiting_txs: HashSet<TxHash> = HashSet::new();
+        let external_pending_txs = self
+            .transaction_pool
+            .get_pending_transactions_by_origin(TransactionOrigin::External)
+            .iter()
+            .map(|tx| tx.hash().clone())
+            .collect::<HashSet<_>>();
         let mut added_count = 0;
-        let pending_txs = self.transaction_pool.pending_transactions();
-        let mut pending_txs_map = HashMap::new();
-        for tx in pending_txs {
-            pending_txs_map.insert(tx.hash().clone(), Arc::clone(&tx));
-        }
-        let mut subscribed_txs = Vec::new();
-        let mut missing_txs = HashSet::new();
+        let mut pooled_txs = Vec::new();
+
+        // First pass: add transactions to pool and collect waiting transactions
         for tx in committed_transactions.transactions.iter() {
             let tx_hash = tx.hash();
-            //If transaction is already in the pending pool, skip
-            if pending_txs_map.contains_key(tx_hash) {
-                continue;
-            }
-            if !self.transaction_pool.contains(tx_hash) {
-                missing_txs.insert(tx_hash.clone());
-                //TODO: consider add transaction here
-                // Or wait until all of them are added to the pending pool throught p2p network
-                match self
+            //Add committed transaction to pool if missing
+            let mut pooled_tx = self.transaction_pool.get(tx_hash);
+            if pooled_tx.is_none() {
+                debug!(
+                    "Added subdag transaction to pool: {:?}, sender: {:?}, nonce: {:?}",
+                    tx_hash,
+                    tx.sender_ref(),
+                    tx.nonce()
+                );
+                added_count += 1;
+                pooled_tx = self
                     .transaction_pool
-                    .add_transaction_and_subscribe(TransactionOrigin::External, tx.clone())
+                    .add_external_transaction(tx.as_ref().clone())
                     .await
-                {
-                    Ok(tx_events) => {
-                        subscribed_txs.push(tx_events);
-                        added_count += 1;
-                        debug!(
-                            "Added subdag transaction to pool: {:?}, sender: {:?}, nonce: {:?}",
-                            tx_hash,
-                            tx.sender_ref(),
-                            tx.nonce()
-                        );
-                    }
-                    Err(e) => {
-                        error!("Add subdag transaction {:?}, sender: {:?}, nonce: {:?} to pool failed: {:?}", 
-                            tx_hash, tx.sender_ref(), tx.nonce(), e);
-                    }
+                    .map(|tx_hash| self.transaction_pool.get(&tx_hash))
+                    .ok()
+                    .flatten();
+                //Add transaction to waiting transactions
+                waiting_txs.insert(tx_hash.clone());
+            }
+            if let Some(pooled_tx) = pooled_tx {
+                if !external_pending_txs.contains(tx_hash) {
+                    //Add transaction to waiting transactions
+                    waiting_txs.insert(tx_hash.clone());
                 }
-            } else {
-                debug!("Transaction already in pool: {:?}", tx_hash);
+                pooled_txs.push(pooled_tx);
             }
         }
+
         debug!(
-            "Added {}/{} subdag transactions to pool",
+            "Added {}/{} subdag transactions to pool. Waiting for {} transactions to arrive in pending subpool",
             added_count,
-            committed_transactions.transactions.len()
+            committed_transactions.transactions.len(),
+            waiting_txs.len()
         );
-        //TODO: Try add waiting transactions to the pending subpool
-        Ok(())
+
+        // Wait for all waiting transactions to arrive in pending subpool or timeout
+        self.waiting_for_pending_txs(&mut waiting_txs, pending_tx_listener)
+            .await;
+
+        Ok(pooled_txs)
     }
+
+    /// Wait for all waiting transactions to arrive in pending subpool or timeout
+    async fn waiting_for_pending_txs(
+        &self,
+        waiting_txs: &mut HashSet<TxHash>,
+        mut pending_tx_listener: Receiver<TxHash>,
+    ) {
+        if waiting_txs.is_empty() {
+            return;
+        }
+
+        let timeout_duration = std::time::Duration::from_millis(WAITING_PENDING_TXS_TIMEOUT);
+        let start_time = std::time::Instant::now();
+
+        debug!(
+            "Waiting for {} transactions to arrive in pending subpool: {:?}",
+            waiting_txs.len(),
+            waiting_txs
+        );
+
+        while !waiting_txs.is_empty() && start_time.elapsed() < timeout_duration {
+            // Wait for next transaction event or timeout
+            match pending_tx_listener.try_recv() {
+                Ok(tx_hash) => {
+                    let removed = waiting_txs.remove(&tx_hash);
+                    if removed {
+                        debug!(
+                            "Transaction {:?} arrived in pending subpool. Remaining: {}",
+                            tx_hash,
+                            waiting_txs.len()
+                        );
+                    }
+                }
+                Err(e) => match e {
+                    TryRecvError::Empty => {
+                        debug!(
+                            "No pending transaction received. Sleeping for {} milliseconds",
+                            WAITING_PENDING_TXS_INTERVAL
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            WAITING_PENDING_TXS_INTERVAL,
+                        ))
+                        .await;
+                    }
+                    TryRecvError::Disconnected => {
+                        warn!("Pending transaction listener channel closed");
+                        break;
+                    }
+                },
+            }
+        }
+        pending_tx_listener.close();
+        if !waiting_txs.is_empty() {
+            warn!(
+                "Timeout waiting for {} transactions to arrive in pending subpool: {:?}",
+                waiting_txs.len(),
+                waiting_txs
+            );
+        } else {
+            debug!("All waiting transactions arrived in pending subpool");
+        }
+    }
+
     /// Get current forkchoice state
     async fn create_forkchoice_state(&self) -> ForkchoiceState {
         //Todo: Implement this
@@ -279,6 +354,10 @@ where
                                     error!("Forkchoice updated failed: {:?}", e);
                                 }
                             }
+                            self.consensus_pool
+                                .lock()
+                                .unwrap()
+                                .remove_mined_transactions(&execution_payload.payload);
                             self.last_payload = Some(execution_payload);
                             self.pending_payload_id = None;
                             debug!("Try to execute pending payload successfully");

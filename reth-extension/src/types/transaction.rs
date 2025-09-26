@@ -12,7 +12,7 @@ use crate::CommittedSubDag;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommittedTransactions<Transaction> {
     pub leader: BlockRef,
-    pub transactions: Vec<Transaction>,
+    pub transactions: Vec<Arc<Transaction>>,
     pub timestamp_ms: u64,
     pub commit_ref: CommitRef,
     pub reputation_scores_desc: Vec<(AuthorityIndex, u64)>,
@@ -36,7 +36,7 @@ where
             for tx in block.block.transactions().into_iter() {
                 let tx_data = tx.data().to_vec();
                 let transaction = decode_transaction::<Transaction>(&mut tx_data.as_slice())?;
-                transactions.push(transaction);
+                transactions.push(Arc::new(transaction));
             }
         }
         //TODO: Improve ordering algorithm

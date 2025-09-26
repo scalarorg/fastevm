@@ -85,6 +85,7 @@ fn main() {
                         reth_ethereum::node::EthEngineTypes,
                     > = node.payload_builder_handle.clone();
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
+                    // let engine_events = node.add_ons_handle.engine_events.new_listener();
                     //use reth_ethereum::chainspec::ChainSpecProvider;
                     //node.provider.chain_spec();
                     let transaction_pool = node.pool.clone();

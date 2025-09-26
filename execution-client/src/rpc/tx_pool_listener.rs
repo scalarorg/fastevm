@@ -9,7 +9,6 @@ use reth_transaction_pool::{NewTransactionEvent, ValidPoolTransaction};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
-use tokio_stream::wrappers::ReceiverStream;
 use tracing::info;
 
 use reth_extension::{encode_transactions, TxpoolListenerApiServer};
