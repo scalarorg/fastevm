@@ -1,0 +1,33 @@
+[package]
+name = "reth-extension"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# For Mysticeti types
+consensus-core = { workspace = true }
+consensus-config = { workspace = true }
+fastcrypto = { workspace = true }
+# futures-util = {workspace = true}
+alloy-primitives = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+eyre = {workspace = true}
+jsonrpsee = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# tokio = { workspace = true }
+# anyhow = { workspace = true }
+# thiserror = { workspace = true }
+# async-stream = { workspace = true }
+# async-trait = { workspace = true }
+# futures = { workspace = true }
+# lru = "0.12"
+# dashmap = "5.5"
+# uuid = { workspace = true }
+# tokio-stream = "0.1"
+
+[dev-dependencies]
+tokio-test = { workspace = true }

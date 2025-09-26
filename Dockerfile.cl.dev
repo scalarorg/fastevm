@@ -1,0 +1,46 @@
+# Use the official Rust image as a builder
+FROM scalarorg/fastevm-builder:latest AS builder
+# Build profile, release by default
+ARG BUILD_PROFILE=release
+ENV BUILD_PROFILE=$BUILD_PROFILE
+
+# Set working directory
+WORKDIR /app
+
+# Copy the entire workspace
+COPY Cargo.toml Cargo.lock ./
+COPY execution-client ./execution-client
+COPY reth-extension ./reth-extension
+COPY consensus-client ./consensus-client
+COPY testing ./testing
+
+# Build all binaries from consensus-client crate
+RUN cargo build --profile $BUILD_PROFILE --bin fastevm-consensus
+RUN cp /app/target/$BUILD_PROFILE/fastevm-consensus /app/fastevm-consensus
+
+# Create a minimal runtime image
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user
+RUN useradd -m -u 1000 mysticeti
+
+# Set working directory
+WORKDIR /app
+
+# Copy all binaries from builder
+COPY --from=builder /app/fastevm-consensus /usr/local/bin/
+RUN ln -sf /usr/local/bin/fastevm-consensus /usr/local/bin/mysticeti
+# Create data directory
+RUN mkdir -p /app/data && chown -R mysticeti:mysticeti /app
+
+# Switch to non-root user
+USER mysticeti
+
+# Set default command
+ENTRYPOINT ["mysticeti"]
+CMD ["--help"] 

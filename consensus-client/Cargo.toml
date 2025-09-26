@@ -1,0 +1,40 @@
+[package]
+name = "fastevm-consensus"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fastevm-consensus"
+path = "src/main.rs"
+
+
+[dependencies]
+reth-extension = { workspace = true }
+#Mysticeti
+consensus-core = { workspace = true }
+consensus-config = { workspace = true }
+
+mysten-metrics = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "mysten-metrics"}
+sui-protocol-config = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "sui-protocol-config"}
+alloy-primitives = { workspace = true }
+reth-rpc-layer = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { version = "4.0", features = ["derive"] }
+
+jsonrpsee = { workspace = true }
+http = { workspace = true }
+prometheus = "0.13.3"
+
+rand.workspace = true
+serde = { workspace = true }
+serde_yaml = "0.9"
+
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+tempfile = "3.8"

@@ -1,0 +1,448 @@
+x-execution-service: &execution-service
+  build:
+    context: .
+    dockerfile: Dockerfile.el.dev
+    # dockerfile: Dockerfile.reth
+  image: scalarorg/fastevm-reth:latest
+  #image: ghcr.io/paradigmxyz/reth:v1.6.0
+  user: root
+  restart: always
+
+x-consensus-service: &consensus-service
+  build:
+    context: .
+    dockerfile: Dockerfile.cl.dev
+  image: scalarorg/fastevm-consensus:latest
+  user: root
+  restart: always
+
+services:  
+  # Genesis and JWT setup init container
+  genesis-init:
+    <<: *execution-service
+    container_name: fastevm-genesis-init
+    working_dir: /scripts
+    user: root
+    entrypoint: ["/bin/sh", "-x", "/scripts/init.sh"]
+    #entrypoint: ["sleep", "infinity"]
+    volumes:
+      - execution-data1:/execution1:rw 
+      - execution-data2:/execution2:rw
+      - execution-data3:/execution3:rw
+      - execution-data4:/execution4:rw
+      - consensus-data1:/consensus1:rw
+      - consensus-data2:/consensus2:rw
+      - consensus-data3:/consensus3:rw
+      - consensus-data4:/consensus4:rw
+      - ./execution-client/shared:/shared
+      - ./scripts:/scripts
+      - ./consensus-client:/consensus-client
+    networks:
+      - fastevm-network
+    restart: "no"
+
+  # Committee configuration init container
+  consensus-init:
+    <<: *consensus-service
+    container_name: fastevm-consensus-init
+    user: root
+    volumes:
+      - consensus-data1:/consensus1
+      - consensus-data2:/consensus2
+      - consensus-data3:/consensus3
+      - consensus-data4:/consensus4
+      - ./consensus-client/examples/parameters.yml:/parameters.yml
+      - ./scripts:/scripts
+    entrypoint: ["/bin/sh", "/scripts/init.sh", "--consensus"]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.9
+    restart: "no"
+    depends_on:
+      - genesis-init
+
+  # ===== EXECUTION NODES =====
+  execution-bootnode:
+    <<: *execution-service
+    container_name: execution-bootnode
+    # entrypoint: ["sleep", "infinity"]
+    command: [
+      "p2p", "bootnode",
+      "--addr", "0.0.0.0:30301",
+      "-vvvv"
+    ]
+    volumes:
+      - ./scripts:/scripts:ro
+    ports:
+      - "30301:30301"
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.19
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  # Execution Node 1 (Reference/Boot Node)
+  execution-node1:
+    <<: *execution-service
+    container_name: fastevm-execution1
+    hostname: execution1
+    ports:
+      - "8551:8551"   # Engine API
+      - "8545:8545"   # HTTP RPC
+      - "8546:8546"   # WS RPC
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+    volumes:
+      - execution-data1:/data:rw
+      - ./scripts:/scripts:ro
+    #entrypoint: ["sleep", "infinity"]
+    command: [
+      "node",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
+      "--http",
+      "--http.api", "eth,net,web3,admin,debug",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--http.corsdomain", "*",
+      "--ws",
+      "--ws.api", "eth,net,web3,admin,debug",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--ws.origins", "*",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
+      "-vvvv"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.20
+    healthcheck:
+      test: ["CMD", "/scripts/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
+    restart: unless-stopped
+
+  # Execution Node 2
+  execution-node2:
+    <<: *execution-service
+    container_name: fastevm-execution2
+    hostname: execution2
+    ports:
+      - "8552:8551"   # Engine API
+      - "8547:8545"   # HTTP RPC
+      - "8548:8546"   # WS RPC
+      - "30304:30303/tcp"
+      - "30304:30303/udp"
+    volumes:
+      - execution-data2:/data:rw
+      - ./scripts:/scripts:ro
+    command: [
+      "node",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
+      "--http",
+      "--http.api", "eth,net,web3,admin",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--http.corsdomain", "*",
+      "--ws",
+      "--ws.api", "eth,net,web3,admin",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--ws.origins", "*",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
+      "-vvvv"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.21
+    healthcheck:
+      test: ["CMD", "/scripts/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
+    restart: unless-stopped
+
+  # Execution Node 3
+  execution-node3:
+    <<: *execution-service
+    container_name: fastevm-execution3
+    hostname: execution3
+    ports:
+      - "8553:8551"   # Engine API
+      - "8549:8545"   # HTTP RPC
+      - "8550:8546"   # WS RPC
+      - "30305:30303/tcp"
+      - "30305:30303/udp"
+    volumes:
+      - execution-data3:/data:rw
+      - ./scripts:/scripts:ro
+    command: [
+      "node",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
+      "--http",
+      "--http.api", "eth,net,web3,admin",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--http.corsdomain", "*",
+      "--ws",
+      "--ws.api", "eth,net,web3,admin",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--ws.origins", "*",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
+      "-vvvv"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.22
+    healthcheck:
+      test: ["CMD", "/scripts/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
+    restart: unless-stopped
+
+  # Execution Node 4
+  execution-node4:
+    <<: *execution-service
+    container_name: fastevm-execution4
+    hostname: execution4
+    ports:
+      - "8554:8551"   # Engine API
+      - "8555:8545"   # HTTP RPC
+      - "8556:8546"   # WS RPC
+      - "30306:30303/tcp"
+      - "30306:30303/udp"
+    volumes:
+      - execution-data4:/data:rw
+      - ./scripts:/scripts:ro
+    command: [
+      "node",
+      "--chain", "/data/genesis.json",
+      "--datadir", "/data",
+      "--http",
+      "--http.api", "eth,net,web3,admin",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8545",
+      "--http.corsdomain", "*",
+      "--ws",
+      "--ws.api", "eth,net,web3,admin",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "8546",
+      "--ws.origins", "*",
+      "--authrpc.addr", "0.0.0.0",
+      "--authrpc.port", "8551",
+      "--authrpc.jwtsecret", "/data/jwt.hex",
+      "--addr", "0.0.0.0",
+      "--port", "30303",
+      "--discovery.addr", "0.0.0.0",
+      "--discovery.port", "30303",
+      "--p2p-secret-key", "/data/p2p/secret.key",
+      "--bootnodes", "$BOOTNODES",
+      "--enable-txpool-listener",
+      "-vvvv"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.23
+    healthcheck:
+      test: ["CMD", "/scripts/healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+      execution-bootnode:
+        condition: service_started
+    restart: unless-stopped
+
+  # ===== CONSENSUS NODES =====
+  
+  # Consensus Node 1
+  consensus-node1:
+    <<: *consensus-service
+    container_name: fastevm-consensus1
+    volumes:
+      - consensus-data1:/app/data:rw
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=0
+      - NODE_IP=172.20.0.10
+    # entrypoint: ["sleep", "infinity"]
+    command: [
+      "start",
+      "--config", "/app/data/node.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.10
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node1:
+        condition: service_healthy
+
+  # Consensus Node 2
+  consensus-node2:
+    <<: *consensus-service
+    container_name: fastevm-consensus2
+    volumes:
+      - consensus-data2:/app/data
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=1
+      - NODE_IP=172.20.0.11
+    command: [
+      "start",
+      "--config", "/app/data/node.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.11
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node2:
+        condition: service_healthy
+
+  # Consensus Node 3
+  consensus-node3:
+    <<: *consensus-service
+    container_name: fastevm-consensus3
+    volumes:
+      - consensus-data3:/app/data
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=2
+      - NODE_IP=172.20.0.12
+    command: [
+      "start",
+      "--config", "/app/data/node.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.12
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node3:
+        condition: service_healthy
+
+  # Consensus Node 4
+  consensus-node4:
+    <<: *consensus-service
+    container_name: fastevm-consensus4
+    volumes:
+      - consensus-data4:/app/data
+    environment:
+      - RUST_LOG=info
+      - NODE_INDEX=3
+      - NODE_IP=172.20.0.13
+    command: [
+      "start",
+      "--config", "/app/data/node.yml"
+    ]
+    networks:
+      fastevm-network:
+        ipv4_address: 172.20.0.13
+    restart: unless-stopped
+    depends_on:
+      consensus-init:
+        condition: service_completed_successfully
+      execution-node4:
+        condition: service_healthy
+
+  # ===== MONITORING SERVICE =====
+  
+  monitoring:
+    image: nginx:alpine
+    container_name: fastevm-monitoring
+    ports:
+      - "8088:80"
+    volumes:
+      - ./monitoring/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./monitoring/index.html:/usr/share/nginx/html/index.html:ro
+    depends_on:
+      - execution-node1
+      - execution-node2
+      - execution-node3
+      - execution-node4
+      - consensus-node1
+      - consensus-node2
+      - consensus-node3
+      - consensus-node4
+    networks:
+      - fastevm-network
+
+networks:
+  fastevm-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  # Execution node data volumes
+  execution-data1:
+  execution-data2:
+  execution-data3:
+  execution-data4:
+  # Consensus node data volumes
+  consensus-data1:
+  consensus-data2:
+  consensus-data3:
+  consensus-data4:
