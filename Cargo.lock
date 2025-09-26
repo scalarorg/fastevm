@@ -3939,13 +3939,11 @@ dependencies = [
  "reth-payload-builder",
  "reth-rpc-layer",
  "reth-transaction-pool",
- "rustc-hash 2.1.1",
  "secp256k1 0.30.0",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
- "tokio-stream",
  "tokio-test",
  "tracing",
 ]

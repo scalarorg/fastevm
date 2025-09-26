@@ -20,14 +20,14 @@ impl ConsensusTransactionsHandler {
 impl ConsensusTransactionApiServer for ConsensusTransactionsHandler {
     #[doc = " Submit commited subdag"]
     fn submit_committed_subdag(&self, subdag: CommittedSubDag) -> RpcResult<()> {
-        let transaction_count = subdag.len();
-        if transaction_count == 0 {
-            debug!("No transactions in subdag");
-            return Ok(());
-        } else {
-            debug!("Received subdag with {} transactions", transaction_count);
-        }
-
+        // let transaction_count = subdag.len();
+        // if transaction_count == 0 {
+        //     debug!("No transactions in subdag");
+        //     return Ok(());
+        // } else {
+        //     debug!("Received subdag with {} transactions", transaction_count);
+        // }
+        // For consistency, we always send the subdag to the consensus handler
         // send the subdag to the consensus handler
         if let Err(e) = self.subdag_tx.send(subdag) {
             return Err(ErrorObject::owned(

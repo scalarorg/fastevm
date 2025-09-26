@@ -76,6 +76,7 @@ reth-tracing = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0"
 reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie" }
 reth-trie-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie-db" }
 reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-network-peers" }
+# reth-tokio-util = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-tokio-util" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-transaction-pool" }
 
 revm = { version = "28.0.1", default-features = false }
@@ -115,7 +116,7 @@ sha2 = "0.10"
 sha3 = "0.10"
 secp256k1 = "0.30"
 hex = "0.4"
-rustc-hash = { version = "2.0", default-features = false }
+# rustc-hash = { version = "2.0", default-features = false }
 
 # Ethereum types
 ethereum-types = "0.15.1"

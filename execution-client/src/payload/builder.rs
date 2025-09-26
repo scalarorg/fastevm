@@ -121,18 +121,19 @@ fn get_best_transactions<
     Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>,
 >(
     pool: &Pool,
-    transactions: Vec<Pool::Transaction>,
+    committed_txs: Vec<Arc<ValidPoolTransaction<Pool::Transaction>>>,
     attributes: BestTransactionsAttributes,
 ) -> Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<Pool::Transaction>>>> {
-    debug!("[MysticetiPayloadBuilder] get_best_transactions from subdag");
-
     // Get all default best transactions first,
     // Then convert it to a HashMap with transaction hash as key and transaction as value
-    let uncommitted_transactions = pool.best_transactions_with_attributes(attributes);
-    let best_transactions = super::best::BestMysticetiTransactions::<Pool::Transaction>::new(
-        uncommitted_transactions,
-        transactions,
+    debug!(
+        "[MysticetiPayloadBuilder] get_best_transactions from subdag. Number of committed transactions: {}. Number of reth pending transactions: {}",
+        committed_txs.len(),
+        pool.pending_transactions().len()
     );
+    let best_txs = pool.best_transactions_with_attributes(attributes);
+    let best_transactions =
+        super::best::BestMysticetiTransactions::<Pool::Transaction>::new(best_txs, committed_txs);
     Box::new(best_transactions)
 }
 
@@ -233,9 +234,7 @@ where
             self.pool.clone(),
             self.builder_config.clone(),
             args,
-            |attributes| {
-                get_best_transactions(&self.pool, Vec::<Pool::Transaction>::default(), attributes)
-            },
+            |attributes| get_best_transactions(&self.pool, Vec::default(), attributes),
         )?
         .into_payload()
         .ok_or_else(|| PayloadBuilderError::MissingPayload)
