@@ -34,10 +34,15 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::info;
 
+// Use in cli
+use bip39 as _;
+use hdwallet as _;
 use hex as _;
 use reth_network_peers as _;
 use reth_rpc_layer as _;
 use secp256k1 as _;
+use serde_json as _;
+use sha2 as _;
 
 /// Flow hook execution:
 /// on_component_initialized

@@ -6,25 +6,25 @@
 
 use alloy_primitives::Address;
 use alloy_provider::{Provider, ProviderBuilder};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Gets the transaction nonces for the given addresses from the specified RPC URLs.
-pub async fn get_nonces(addresses: &Vec<Address>, urls: &Vec<&str>) -> HashMap<Address, u64> {
-    let mut nonces = HashMap::new();
-    for (address, url) in addresses.iter().zip(urls.iter()) {
-        // Get the initial nonce for the sender address
-        let provider = match ProviderBuilder::new().connect(url).await {
-            Ok(provider) => provider,
-            Err(e) => {
-                println!(
-                    "⚠️  Warning: Could not connect to Ethereum network at {:?}",
-                    &url
-                );
-                println!("   Error: {:?}", &e);
-                println!("   Skipping test...");
-                return nonces;
-            }
-        };
+pub async fn get_nonces(addresses: &[Address], url: &str) -> BTreeMap<Address, u64> {
+    let mut nonces = BTreeMap::new();
+    // Get the initial nonce for the sender address
+    let provider = match ProviderBuilder::new().connect(url).await {
+        Ok(provider) => provider,
+        Err(e) => {
+            println!(
+                "⚠️  Warning: Could not connect to Ethereum network at {:?}",
+                &url
+            );
+            println!("   Error: {:?}", &e);
+            println!("   Skipping test...");
+            return nonces;
+        }
+    };
+    for address in addresses.iter() {
         let address_nonce = match provider.get_transaction_count(*address).await {
             Ok(nonce) => nonce,
             Err(e) => {

@@ -35,11 +35,54 @@
 //! 4. Extract public key from private key
 //! 5. Compute Ethereum address as last 20 bytes of Keccak256(public_key)
 
+use alloy_primitives::Address;
 use bip32::{DerivationPath, XPrv};
 use bip39::Mnemonic;
 use k256::elliptic_curve::sec1::ToEncodedPoint;
+use secp256k1::SecretKey;
 use std::str::FromStr;
 use tiny_keccak::{Hasher, Keccak};
+
+/// Account struct containing address and private key
+#[derive(Debug)]
+pub struct Account {
+    pub address: Address,
+    pub private_key: [u8; 32],
+}
+
+/// Generate an account from a seed and index
+pub fn generate_account_from_seed(seed: &[u8], index: u32) -> eyre::Result<Account> {
+    use sha2::{Digest, Sha256};
+    // Simple deterministic key generation using seed + index
+    let mut hasher = Sha256::new();
+    hasher.update(seed);
+    hasher.update(&(index as u32).to_le_bytes());
+    let hash = hasher.finalize();
+
+    // Use the hash as private key (first 32 bytes)
+    let mut private_key = [0u8; 32];
+    private_key.copy_from_slice(&hash[..32]);
+
+    // Create secp256k1 secret key
+    let secp = secp256k1::Secp256k1::new();
+    let secret_key = SecretKey::from_slice(&private_key)
+        .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
+
+    // Get the public key and derive address
+    let public_key = secret_key.public_key(&secp);
+    let public_key_bytes = public_key.serialize_uncompressed();
+
+    // Ethereum address is the last 20 bytes of keccak256 hash of the public key
+    let hash = alloy_primitives::keccak256(&public_key_bytes[1..]);
+    let mut address_bytes = [0u8; 20];
+    address_bytes.copy_from_slice(&hash[12..]);
+
+    let address = Address::from(address_bytes);
+    Ok(Account {
+        address,
+        private_key,
+    })
+}
 
 /// Derive an Ethereum address from a mnemonic phrase and derivation path.
 ///
@@ -127,6 +170,71 @@ pub fn derive_eth_address(
     let address = &output[12..];
 
     Ok(format!("0x{}", hex::encode(address)))
+}
+
+/// Derives both an Ethereum address and private key from a mnemonic phrase and derivation path.
+///
+/// This function follows the standard BIP39/BIP32 derivation process to generate
+/// both a deterministic Ethereum address and its corresponding private key.
+///
+/// # Arguments
+///
+/// * `mnemonic` - A BIP39 mnemonic phrase
+/// * `derivation_path` - BIP32 derivation path (e.g., "m/44'/60'/0'/0/0")
+///
+/// # Returns
+///
+/// Returns a `Result` containing:
+/// * `Ok((String, String))` - A tuple of (address, private_key) where:
+///   - `address` is the derived Ethereum address with 0x prefix
+///   - `private_key` is the derived private key as a hex string (64 characters)
+/// * `Err(Box<dyn std::error::Error>)` - Error if derivation fails
+pub fn derive_eth_account(
+    mnemonic: &str,
+    derivation_path: &str,
+) -> Result<(String, String), Box<dyn std::error::Error>> {
+    use bip32::{DerivationPath, XPrv};
+    use bip39::Mnemonic;
+    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use std::str::FromStr;
+    use tiny_keccak::{Hasher, Keccak};
+
+    // 1) Convert mnemonic -> seed (BIP39)
+    let mnemonic = Mnemonic::parse(mnemonic)?;
+    let seed = mnemonic.to_seed("");
+
+    // 2) Create master extended private key from seed (BIP32)
+    let xprv = XPrv::new(&seed)?;
+
+    // 3) Parse derivation path and derive child xprv
+    let path = DerivationPath::from_str(derivation_path)?;
+    let mut child_xprv = xprv;
+    for cn in path.into_iter() {
+        child_xprv = child_xprv.derive_child(cn)?;
+    }
+
+    // 4) Get the raw private key bytes (32 bytes)
+    let private_key_bytes = child_xprv.private_key().to_bytes();
+    let private_key = hex::encode(private_key_bytes);
+
+    // 5) Derive the Ethereum address from the private key
+    let secret = k256::SecretKey::from_bytes(&private_key_bytes)?;
+    let pubkey = k256::PublicKey::from_secret_scalar(&secret.to_nonzero_scalar());
+    let encoded = pubkey.to_encoded_point(false); // uncompressed
+    let pubkey_bytes = encoded.as_bytes();
+
+    // Ethereum address is last 20 bytes of keccak256(uncompressed_pubkey[1..]) (skip 0x04)
+    let pubkey_no_prefix = &pubkey_bytes[1..]; // 64 bytes
+    let mut keccak = Keccak::v256();
+    let mut output = [0u8; 32];
+    keccak.update(pubkey_no_prefix);
+    keccak.finalize(&mut output);
+
+    // take last 20 bytes
+    let address = &output[12..];
+    let address = format!("0x{}", hex::encode(address));
+
+    Ok((address, private_key))
 }
 
 /// Convert an Ethereum address to EIP-55 checksum format.

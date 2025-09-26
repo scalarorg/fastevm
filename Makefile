@@ -37,12 +37,12 @@ help:
 # Build all packages in debug mode
 build:
 	@echo "🔨 Building FastEVM packages in debug mode..."
-	cargo build --workspace
+	cargo build --workspace --bins
 
 # Build all packages in release mode
 build-release:
 	@echo "🚀 Building FastEVM packages in release mode..."
-	cargo build --workspace --release
+	cargo build --workspace --release --bins
 
 # Clean build artifacts
 clean:
