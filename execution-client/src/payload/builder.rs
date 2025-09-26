@@ -1,9 +1,6 @@
 //! Payload component configuration for the Ethereum node.
 
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use reth_basic_payload_builder::{
     BuildArguments, BuildOutcome, MissingPayloadBehaviour, PayloadBuilder, PayloadConfig,
@@ -22,9 +19,10 @@ use reth_ethereum::{
 };
 use reth_ethereum_payload_builder::{default_ethereum_payload, EthereumBuilderConfig};
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
-use reth_extension::CommittedSubDag;
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderError};
 use tracing::debug;
+
+use crate::consensus::ConsensusPool;
 
 /// Mysticeti payload builder that processes transactions from the subdag instead of the pool.
 /// Modified reth_ethereum_payload_builder::EthereumPayloadBuilder to use subdag transactions
@@ -45,9 +43,9 @@ use tracing::debug;
 /// * Preserves all standard Ethereum payload building capabilities
 /// * Integrates seamlessly with the existing Reth node architecture
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
-pub struct MysticetiPayloadBuilder<Pool, Client, EvmConfig = EthEvmConfig> {
+pub struct MysticetiPayloadBuilder<Pool: TransactionPool, Client, EvmConfig = EthEvmConfig> {
     /// Client providing access to node state.
     client: Client,
     /// Transaction pool.
@@ -55,12 +53,12 @@ pub struct MysticetiPayloadBuilder<Pool, Client, EvmConfig = EthEvmConfig> {
     /// The type responsible for creating the evm.
     evm_config: EvmConfig,
     /// Subdag queue.
-    subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
+    consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>,
     /// Payload builder configuration.
     builder_config: EthereumBuilderConfig,
 }
 
-impl<Pool: Clone, Client: Clone, EvmConfig: Clone>
+impl<Pool: TransactionPool, Client: Clone, EvmConfig: Clone>
     MysticetiPayloadBuilder<Pool, Client, EvmConfig>
 {
     /// Creates a new Mysticeti payload builder instance.
@@ -83,14 +81,14 @@ impl<Pool: Clone, Client: Clone, EvmConfig: Clone>
     pub fn new(
         client: Client,
         pool: Pool,
-        subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
+        consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>,
         evm_config: EvmConfig,
         builder_config: EthereumBuilderConfig,
     ) -> Self {
         Self {
             client,
             pool,
-            subdag_queue,
+            consensus_pool,
             evm_config,
             builder_config,
         }
@@ -123,20 +121,17 @@ fn get_best_transactions<
     Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>,
 >(
     pool: &Pool,
-    subdag: CommittedSubDag,
+    transactions: Vec<Pool::Transaction>,
     attributes: BestTransactionsAttributes,
 ) -> Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<Pool::Transaction>>>> {
     debug!("[MysticetiPayloadBuilder] get_best_transactions from subdag");
 
-    // Create a SubDagTransactions iterator from the subdag
-    // This extracts transactions from the consensus mechanism instead of the pool
-    let subdag_transactions = subdag.flatten_transactions();
     // Get all default best transactions first,
     // Then convert it to a HashMap with transaction hash as key and transaction as value
     let uncommitted_transactions = pool.best_transactions_with_attributes(attributes);
-    let best_transactions = super::best::CommittedTransactions::<Pool::Transaction>::new(
+    let best_transactions = super::best::BestMysticetiTransactions::<Pool::Transaction>::new(
         uncommitted_transactions,
-        subdag_transactions,
+        transactions,
     );
     Box::new(best_transactions)
 }
@@ -166,32 +161,54 @@ where
         &self,
         args: BuildArguments<EthPayloadBuilderAttributes, EthBuiltPayload>,
     ) -> Result<BuildOutcome<EthBuiltPayload>, PayloadBuilderError> {
-        let subdag = {
-            let mut queue_guard = self
-                .subdag_queue
+        let proposal_transactions = {
+            let mut consensus_pool = self
+                .consensus_pool
                 .lock()
                 .map_err(|e| PayloadBuilderError::Internal(RethError::msg(e)))?;
-            queue_guard.pop_front()
+            consensus_pool.get_proposal_transactions()
+            // 1. try to get the first subdag and check if all transactions are available in the pool
+            // let first_subdag = queue_guard.front();
+            // if let Some(subdag) = first_subdag {
+            //     let transactions = subdag.flatten_transactions();
+            //     let transactions = decode_transactions::<Pool::Transaction>(transactions);
+            //     let all_transactions_available = transactions.iter().all(|tx| {
+            //         let tx = Vec::<u8>::from(tx);
+            //         let tx_hash = TxHash::from_slice(tx.as_slice());
+            //         if self.pool.contains(&tx_hash) {
+            //             true
+            //         } else {
+            //             debug!(
+            //                 "Transaction not found in pool: 0x{}",
+            //                 hex::encode(tx.as_slice())
+            //             );
+            //             false
+            //         }
+            //     });
+            //     if all_transactions_available {
+            //         queue_guard.pop_front()
+            //     } else {
+            //         debug!("Not all transactions are available in the pool. Skipping building payload from subdag");
+            //         None
+            //     }
+            // } else {
+            //     None
+            // }
         };
-        match subdag {
-            Some(subdag) => {
-                let payload = default_ethereum_payload(
-                    self.evm_config.clone(),
-                    self.client.clone(),
-                    self.pool.clone(),
-                    self.builder_config.clone(),
-                    args,
-                    |attributes| get_best_transactions(&self.pool, subdag, attributes),
-                );
-                payload
-            }
-            None => {
-                //Ok(BuildOutcome::Cancelled) -- don not work
-                Err(PayloadBuilderError::Internal(RethError::msg(
-                    "No subdag found in queue",
-                )))
-            }
+        if proposal_transactions.is_empty() {
+            return Err(PayloadBuilderError::Internal(RethError::msg(
+                "No proposal transactions",
+            )));
         }
+        let payload = default_ethereum_payload(
+            self.evm_config.clone(),
+            self.client.clone(),
+            self.pool.clone(),
+            self.builder_config.clone(),
+            args,
+            |attributes| get_best_transactions(&self.pool, proposal_transactions, attributes),
+        );
+        payload
     }
 
     fn on_missing_payload(
@@ -216,7 +233,9 @@ where
             self.pool.clone(),
             self.builder_config.clone(),
             args,
-            |attributes| get_best_transactions(&self.pool, CommittedSubDag::default(), attributes),
+            |attributes| {
+                get_best_transactions(&self.pool, Vec::<Pool::Transaction>::default(), attributes)
+            },
         )?
         .into_payload()
         .ok_or_else(|| PayloadBuilderError::MissingPayload)
@@ -226,27 +245,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reth_ethereum::pool::noop::NoopTransactionPool;
-    use std::sync::Arc;
-
-    #[test]
-    fn test_payload_builder_creation() {
-        // Test that we can create basic components
-        let pool = NoopTransactionPool::default();
-        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        // Test queue operations
-        {
-            let mut queue = subdag_queue.lock().unwrap();
-            queue.push_back(CommittedSubDag::default());
-        }
-
-        assert_eq!(subdag_queue.lock().unwrap().len(), 1);
-    }
+    use reth_extension::CommittedSubDag;
 
     #[test]
     fn test_committed_subdag_operations() {
-        let mut subdag = CommittedSubDag::default();
+        let subdag = CommittedSubDag::default();
 
         // Test that we can add blocks (even if empty)
         assert!(subdag.blocks.is_empty());

@@ -1,6 +1,6 @@
 # FastEVM Makefile for Refactored Packages
 
-.PHONY: help build build-release test clean run-execution run-consensus integration-test
+.PHONY: help build build-release test clean run-execution run-consensus integration-test local-network local-start local-stop local-status local-logs local-cleanup
 
 # Default target
 help:
@@ -18,6 +18,16 @@ help:
 	@echo "Running:"
 	@echo "  run-execution  - Run execution-client with transaction listener"
 	@echo "  run-consensus  - Run consensus-client with transaction subscription"
+	@echo ""
+	@echo "Local Network (No Docker):"
+	@echo "  local-network  - Start local 4-node network (execution + consensus)"
+	@echo "  local-start    - Start local network"
+	@echo "  local-stop     - Stop local network"
+	@echo "  local-status   - Show local network status"
+	@echo "  local-logs     - Show local network logs"
+	@echo "  local-cleanup  - Clean up local network data"
+	@echo "  local-init     - Initialize local network data only"
+	@echo "  local-test-setup - Test local development setup"
 	@echo ""
 	@echo "Development:"
 	@echo "  check          - Check code without building"
@@ -176,3 +186,95 @@ quick-start: install-dev build test
 	@echo "🎉 Quick start complete! Ready for development."
 	@echo "Use 'make run-execution' or 'make run-consensus' to start services."
 	@echo "Use 'make watch' for continuous development mode."
+
+# ===== LOCAL NETWORK TARGETS (No Docker) =====
+
+# Start local network (main target)
+local-network: build-release
+	@echo "🚀 Starting FastEVM local network (4 execution + 4 consensus nodes)..."
+	@echo "This will start the network without Docker for faster development."
+	@echo ""
+	@./scripts/local-network.sh start
+
+# Start local network
+local-start: build-release
+	@echo "🚀 Starting local network..."
+	@./scripts/local-network.sh start
+
+# Stop local network
+local-stop:
+	@echo "🛑 Stopping local network..."
+	@./scripts/local-network.sh stop
+
+# Show local network status
+local-status:
+	@echo "📊 Local network status:"
+	@./scripts/local-network.sh status
+
+# Show local network logs
+local-logs:
+	@echo "📋 Local network logs:"
+	@./scripts/local-network.sh logs
+
+# Clean up local network data
+local-cleanup:
+	@echo "🧹 Cleaning up local network data..."
+	@./scripts/local-network.sh cleanup
+
+# Initialize local network data only
+local-init: build-release
+	@echo "🔧 Initializing local network data..."
+	@./scripts/local-network.sh init
+
+# Restart local network
+local-restart: local-stop
+	@echo "🔄 Restarting local network..."
+	@sleep 2
+	@./scripts/local-network.sh start
+
+# Show logs for specific service
+local-logs-execution:
+	@echo "📋 Execution node logs:"
+	@./scripts/local-network.sh logs execution-node1
+
+local-logs-consensus:
+	@echo "📋 Consensus node logs:"
+	@./scripts/local-network.sh logs consensus-node1
+
+# Test local network connectivity
+local-test:
+	@echo "🧪 Testing local network connectivity..."
+	@echo "Testing execution nodes..."
+	@for port in 8545 8547 8549 8555; do \
+		echo -n "  Port $$port: "; \
+		if curl -s http://localhost:$$port > /dev/null 2>&1; then \
+			echo "✅ OK"; \
+		else \
+			echo "❌ Failed"; \
+		fi; \
+	done
+	@echo "Testing engine API ports..."
+	@for port in 8551 8552 8553 8554; do \
+		echo -n "  Port $$port: "; \
+		if curl -s http://localhost:$$port > /dev/null 2>&1; then \
+			echo "✅ OK"; \
+		else \
+			echo "❌ Failed"; \
+		fi; \
+	done
+
+# Development mode - start network and watch for changes
+local-dev: local-network
+	@echo "👀 Starting development mode..."
+	@echo "Network is running. Use Ctrl+C to stop."
+	@echo "Logs are available in .local-logs/"
+	@echo "Use 'make local-status' to check status"
+	@echo "Use 'make local-logs' to view logs"
+	@echo ""
+	@echo "Press Ctrl+C to stop the network..."
+	@trap 'make local-stop' INT; while true; do sleep 1; done
+
+# Test local setup
+local-test-setup:
+	@echo "🧪 Testing local development setup..."
+	@./scripts/test-local-setup.sh

@@ -1,7 +1,9 @@
 use alloy_primitives::{Address, B256};
+use alloy_rpc_types_eth::TransactionTrait;
 use anyhow::Result;
 use reth_ethereum::{
     chainspec::{ChainSpecProvider, EthChainSpec},
+    evm::revm::database::EvmStateProvider,
     node::{
         api::{
             BeaconConsensusEngineHandle, BuiltPayload, EngineApiMessageVersion, ExecutionPayload,
@@ -10,23 +12,36 @@ use reth_ethereum::{
         engine::EthPayloadAttributes,
     },
     rpc::types::engine::{ForkchoiceState, ForkchoiceUpdated},
+    storage::StateProviderFactory,
 };
-
 use reth_ethereum_engine_primitives::EthEngineTypes;
-use reth_extension::CommittedSubDag;
+use reth_extension::{CommittedSubDag, CommittedTransactions};
 use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver};
+use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{
+    sync::mpsc::{error::TryRecvError, UnboundedReceiver},
+    time::sleep,
+};
 use tracing::{debug, error, info, trace, warn};
 
-pub struct MysticetiConsensus<Provider, Payload>
+use crate::consensus::ConsensusPool;
+
+const BLOCK_INTERVAL: u64 = 1000; //1 second
+const PAYLOAD_EXECUTION_TIMEOUT: u64 = 30; // 30 second timeout
+const PAYLOAD_EXECUTION_INTERVAL: u64 = 500; // 10 millisecond interval
+pub struct MysticetiConsensus<Provider, Payload, Pool>
 where
-    Provider: ChainSpecProvider + Unpin + 'static,
+    Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
     Payload: PayloadTypes,
+    Pool: TransactionPool,
 {
     subdag_rx: UnboundedReceiver<CommittedSubDag>,
-    subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
+    consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>,
+    transaction_pool: Pool,
     payload_builder_handle: PayloadBuilderHandle<Payload>,
     engine_handle: BeaconConsensusEngineHandle<Payload>,
     provider: Provider,
@@ -36,21 +51,24 @@ where
     pending_payload_id: Option<PayloadId>,
 }
 
-impl<Provider, Payload> MysticetiConsensus<Provider, Payload>
+impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
 where
-    Provider: ChainSpecProvider + Unpin + 'static,
+    Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
     Payload: PayloadTypes,
+    Pool: TransactionPool,
 {
     pub fn new(
         subdag_rx: UnboundedReceiver<CommittedSubDag>,
-        subdag_queue: Arc<Mutex<VecDeque<CommittedSubDag>>>,
+        consensus_pool: Arc<Mutex<ConsensusPool<Pool>>>,
+        transaction_pool: Pool,
         provider: Provider,
         payload_builder_handle: PayloadBuilderHandle<Payload>,
         engine_handle: BeaconConsensusEngineHandle<Payload>,
     ) -> Self {
         Self {
             subdag_rx,
-            subdag_queue,
+            consensus_pool,
+            transaction_pool,
             payload_builder_handle,
             engine_handle,
             provider,
@@ -60,26 +78,69 @@ where
     }
 }
 
-impl<Provider, Payload> MysticetiConsensus<Provider, Payload>
+impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
 where
-    Provider: ChainSpecProvider + Unpin + 'static,
+    Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
     Payload: PayloadTypes,
+    Pool: TransactionPool,
 {
     /// Process a single subdag
     async fn process_single_subdag(&mut self, subdag: CommittedSubDag) -> Result<()> {
+        let committed_transactions = CommittedTransactions::<Pool::Transaction>::try_from(subdag)?;
         //Add subdag to queue
-        let mut queue_guard = self
-            .subdag_queue
+        self.update_pool_with_transactions(&committed_transactions)
+            .await?;
+        //Add committed transactions to consensuspool
+        let mut consensus_pool = self
+            .consensus_pool
             .lock()
             .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
-        queue_guard.push_back(subdag.clone());
-        info!(
+        consensus_pool.add_committed_transactions(committed_transactions);
+        debug!(
             "Subdag queued successfully. Queue size: {}",
-            queue_guard.len()
+            consensus_pool.queue_size()
         );
         Ok(())
     }
 
+    async fn update_pool_with_transactions(
+        &mut self,
+        committed_transactions: &CommittedTransactions<Pool::Transaction>,
+    ) -> Result<()> {
+        let mut added_count = 0;
+        for tx in committed_transactions.transactions.iter() {
+            let tx_hash = tx.hash();
+            if !self.transaction_pool.contains(tx_hash) {
+                match self
+                    .transaction_pool
+                    .add_transaction(TransactionOrigin::External, tx.clone())
+                    .await
+                {
+                    Ok(tx_hash) => {
+                        added_count += 1;
+                        debug!(
+                            "Added subdag transaction to pool: {:?}, sender: {:?}, nonce: {:?}",
+                            tx_hash,
+                            tx.sender_ref(),
+                            tx.nonce()
+                        );
+                    }
+                    Err(e) => {
+                        error!("Add subdag transaction {:?}, sender: {:?}, nonce: {:?} to pool failed: {:?}", 
+                            tx_hash, tx.sender_ref(), tx.nonce(), e);
+                    }
+                }
+            } else {
+                debug!("Transaction already in pool: {:?}", tx_hash);
+            }
+        }
+        debug!(
+            "Added {}/{} subdag transactions to pool",
+            added_count,
+            committed_transactions.transactions.len()
+        );
+        Ok(())
+    }
     /// Get current forkchoice state
     async fn create_forkchoice_state(&self) -> ForkchoiceState {
         //Todo: Implement this
@@ -116,75 +177,153 @@ where
             .transpose()
             .map_err(anyhow::Error::msg)
     }
+    /// Check if the last payload is executed
+    async fn wait_for_payload_executed(
+        &self,
+        executed_payload: &Payload::ExecutionData,
+    ) -> Result<bool> {
+        let block_number = executed_payload.block_number();
+        let block_hash = executed_payload.block_hash();
+        let timeout = Duration::from_secs(PAYLOAD_EXECUTION_TIMEOUT); // 30 second timeout
+        let start = std::time::Instant::now();
 
+        loop {
+            if start.elapsed() > timeout {
+                warn!("Timeout waiting for payload execution");
+                return Ok(false);
+            }
+
+            if let Ok(latest_state) = self.provider.latest() {
+                if let Ok(Some(_)) = latest_state.block_hash(block_number) {
+                    debug!(
+                        "Last payload is executed. Block hash: {:?}, number: {:?}",
+                        hex::encode(block_hash),
+                        block_number
+                    );
+                    let mut consensus_pool = self
+                        .consensus_pool
+                        .lock()
+                        .map_err(|_e| anyhow::anyhow!("Failed to lock consensus pool"))?;
+                    consensus_pool.set_latest_state(latest_state);
+                    return Ok(true);
+                } else {
+                    debug!(
+                        "Last payload number {} and hash {:?} is not executed",
+                        block_number,
+                        hex::encode(block_hash)
+                    );
+                }
+            } else {
+                error!("Failed to get latest state");
+                return Err(anyhow::anyhow!("Failed to get latest state"));
+            }
+            sleep(Duration::from_millis(PAYLOAD_EXECUTION_INTERVAL)).await;
+        }
+    }
     /// Try to execute the pending payload
-    async fn try_execute_pending_payload(&mut self, payload_id: PayloadId) -> Result<()> {
-        let pending_payload = self.retrieve_payload(payload_id).await?;
-        if let Some(pending_payload) = pending_payload {
-            debug!(
+    async fn try_execute_pending_payload(
+        &self,
+        payload_id: PayloadId,
+    ) -> Result<Option<Payload::ExecutionData>> {
+        match self.retrieve_payload(payload_id).await? {
+            Some(pending_payload) => {
+                debug!(
                 "Payload built successfully. Update last payload to {:?} and clear pending payload id:",
                 pending_payload
             );
-            let execution_payload = Payload::block_to_payload(pending_payload.block().clone());
-            match self
-                .engine_handle
-                .new_payload(execution_payload.clone())
-                .await
-            {
-                Ok(payload_status) => {
-                    if payload_status.is_valid() {
-                        info!("New payload sent successfully");
-                        self.pending_payload_id = None;
-                        self.last_payload = Some(execution_payload.clone());
-                        //Update
-                        let forkchoice_state = self.create_forkchoice_state().await;
-                        self.engine_handle
-                            .fork_choice_updated(
-                                forkchoice_state,
-                                None,
-                                EngineApiMessageVersion::default(),
-                            )
-                            .await
-                            .map_err(anyhow::Error::msg)?;
-                    } else {
-                        error!("New payload failed: {:?}", payload_status);
+                let execution_payload = Payload::block_to_payload(pending_payload.block().clone());
+                match self
+                    .engine_handle
+                    .new_payload(execution_payload.clone())
+                    .await
+                {
+                    Ok(payload_status) => {
+                        if payload_status.is_valid() {
+                            info!("New payload sent successfully");
+                            Ok(Some(execution_payload))
+                        } else {
+                            Err(anyhow::anyhow!(
+                                "Execute new payload failed with status: {:?}",
+                                payload_status
+                            ))
+                        }
                     }
-                }
-                Err(e) => {
-                    error!("New payload failed: {:?}", e);
+                    Err(e) => Err(anyhow::anyhow!(
+                        "Execute new payload failed with error: {:?}",
+                        e
+                    )),
                 }
             }
-        } else {
-            error!("Payload not found");
+            None => Err(anyhow::anyhow!("Payload {:?} not found", payload_id)),
         }
-
-        Ok(())
     }
     /// Get the current queue size
     pub async fn queue_size(&self) -> Result<usize> {
-        let queue_guard = self
-            .subdag_queue
+        let consensus_pool = self
+            .consensus_pool
             .lock()
             .map_err(|_e| anyhow::anyhow!("Failed to lock subdag queue"))?;
-        Ok(queue_guard.len())
+        Ok(consensus_pool.queue_size())
     }
 }
 
-impl<Provider> MysticetiConsensus<Provider, EthEngineTypes>
+impl<Provider, Pool> MysticetiConsensus<Provider, EthEngineTypes, Pool>
 where
-    Provider: ChainSpecProvider + Unpin + 'static,
+    Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
+    Pool: TransactionPool,
 {
     pub async fn start(&mut self) {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        //TODO: Add configurable interval
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_millis(BLOCK_INTERVAL));
         loop {
             match &self.pending_payload_id {
                 //If there is a pending payload id, try to get the payload and execute it in the engine
                 Some(payload_id) => {
-                    trace!("Try to execute pending payload: {:?}", payload_id);
+                    debug!("Try to execute pending payload: {:?}", payload_id);
                     let result = self.try_execute_pending_payload(payload_id.clone()).await;
                     match result {
-                        Ok(()) => {
+                        Ok(Some(execution_payload)) => {
+                            let forkchoice_state = self.create_forkchoice_state().await;
+                            match self
+                                .engine_handle
+                                .fork_choice_updated(
+                                    forkchoice_state,
+                                    None,
+                                    EngineApiMessageVersion::default(),
+                                )
+                                .await
+                            {
+                                Ok(ForkchoiceUpdated {
+                                    payload_status,
+                                    payload_id,
+                                }) => {
+                                    debug!(
+                                        "Forkchoice updated successfully with payload {:?} and status: {:?}",
+                                        payload_id,
+                                        payload_status
+                                    );
+                                    //Todo: Improve this if we need to bootup the engine
+                                    //Wait for the payload to be executed before building next one
+                                    let result =
+                                        self.wait_for_payload_executed(&execution_payload).await;
+                                    if result.is_err() {
+                                        error!("Wait for payload executed failed: {:?}", result);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Forkchoice updated failed: {:?}", e);
+                                }
+                            }
+                            self.last_payload = Some(execution_payload);
+                            self.pending_payload_id = None;
                             debug!("Try to execute pending payload successfully");
+                        }
+                        Ok(None) => {
+                            debug!(
+                                "Payload {:?} is not executed. Try to execute it later",
+                                payload_id
+                            );
                         }
                         Err(e) => {
                             error!("try execute pending payload failed: {:?}", e);
@@ -193,7 +332,7 @@ where
                 }
                 //If no pending payload id, build next payload
                 None => {
-                    trace!("No pending payload id. Build next payload.");
+                    debug!("No pending payload id. Build next payload.");
                     let queue_size = self.queue_size().await.unwrap_or_default();
                     if queue_size > 0 {
                         debug!(
@@ -224,6 +363,8 @@ where
             //Try get subdag from channel and add to queue
             match self.subdag_rx.try_recv() {
                 Ok(subdag) => {
+                    //Receive subdag from channel and update local transaction pool
+                    //Add subdag to consensus pool for further processing
                     let result = self.process_single_subdag(subdag).await;
                     if result.is_err() {
                         error!("Process single subdag failed: {:?}", result);
@@ -251,8 +392,19 @@ where
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        //TODO:
+        //1. Get actual prev_randao from the previous block's header
+        //2. Check and create withdrawals vector
+        //3. Set suggested fee recipient
+
         let attributes = match &self.last_payload {
             Some(payload) => {
+                debug!(
+                    "Last payload number: {:?} with timestamp: {:?}. Next timestamp: {:?}",
+                    payload.block_number(),
+                    payload.timestamp(),
+                    timestamp
+                );
                 if timestamp < payload.timestamp() {
                     warn!("Timestamp is less than last payload timestamp. Waiting for next iteration.");
                     return None;
@@ -281,6 +433,15 @@ where
         attributes
     }
     pub async fn build_next_payload(&mut self) -> Result<Option<PayloadId>> {
+        // //Befor build next payload, try to get latest state, and put it into consensus_pool
+        // let latest_state = self.provider.latest();
+        // if let Ok(latest_state) = latest_state {
+        //     let mut consensus_pool = self
+        //         .consensus_pool
+        //         .lock()
+        //         .map_err(|_e| anyhow::anyhow!("Failed to lock consensus pool"))?;
+        //     consensus_pool.set_latest_state(latest_state);
+        // }
         let forkchoice_state = self.create_forkchoice_state().await;
         let payload_attributes = self.create_payload_attributes().await;
         let ForkchoiceUpdated {
@@ -319,22 +480,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tokio::sync::mpsc::unbounded_channel;
-
-    #[test]
-    fn test_committed_subdag_default() {
-        let subdag = CommittedSubDag::default();
-        assert!(subdag.blocks.is_empty());
-        assert!(subdag.flatten_transactions().is_empty());
-    }
-
-    #[test]
-    fn test_committed_subdag_flatten_transactions() {
-        let subdag = CommittedSubDag::default();
-        let transactions = subdag.flatten_transactions();
-        assert!(transactions.is_empty());
-    }
 
     #[test]
     fn test_payload_id_default() {
@@ -357,42 +502,5 @@ mod tests {
         assert_eq!(forkchoice_state.head_block_hash, head_block_hash);
         assert_eq!(forkchoice_state.safe_block_hash, safe_block_hash);
         assert_eq!(forkchoice_state.finalized_block_hash, finalized_block_hash);
-    }
-
-    #[test]
-    fn test_subdag_queue_operations() {
-        let subdag_queue = Arc::new(Mutex::new(VecDeque::new()));
-
-        // Test adding to queue
-        {
-            let mut queue = subdag_queue.lock().unwrap();
-            queue.push_back(CommittedSubDag::default());
-        }
-
-        // Test queue size
-        assert_eq!(subdag_queue.lock().unwrap().len(), 1);
-
-        // Test popping from queue
-        {
-            let mut queue = subdag_queue.lock().unwrap();
-            let subdag = queue.pop_front();
-            assert!(subdag.is_some());
-        }
-
-        // Test empty queue
-        assert_eq!(subdag_queue.lock().unwrap().len(), 0);
-    }
-
-    #[test]
-    fn test_channel_operations() {
-        let (subdag_tx, mut subdag_rx) = unbounded_channel();
-
-        // Test sending and receiving
-        let test_subdag = CommittedSubDag::default();
-        subdag_tx.send(test_subdag).unwrap();
-
-        // Test that we can receive it
-        let received = subdag_rx.try_recv().unwrap();
-        assert_eq!(received.blocks.len(), 0);
     }
 }

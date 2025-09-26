@@ -14,7 +14,7 @@ pub trait TxpoolListenerApi {
     #[method(name = "transactionCount")]
     fn transaction_count(&self) -> RpcResult<usize>;
     /// Creates a subscription that returns the number of transactions in the pool every 10s.
-    #[subscription(name = "subscribeTransactions", item = Bytes)]
+    #[subscription(name = "subscribeTransactions", item = Vec<Bytes>)]
     fn subscribe_transactions(&self) -> SubscriptionResult;
 }
 

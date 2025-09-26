@@ -5,7 +5,7 @@ use reth_extension::CommittedSubDag;
 use reth_extension::ConsensusTransactionApiServer;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
-use tracing::info;
+
 /// The type that implements the `txpool` rpc namespace trait
 #[derive(Debug)]
 pub struct ConsensusTransactionsHandler {
@@ -20,15 +20,14 @@ impl ConsensusTransactionsHandler {
 impl ConsensusTransactionApiServer for ConsensusTransactionsHandler {
     #[doc = " Submit commited subdag"]
     fn submit_committed_subdag(&self, subdag: CommittedSubDag) -> RpcResult<()> {
-        info!("submit_committed_subdag: {:?}", subdag);
-        let transactions = subdag.flatten_transactions();
-        if transactions.is_empty() {
-            info!("No transactions in subdag");
+        let transaction_count = subdag.len();
+        if transaction_count == 0 {
+            debug!("No transactions in subdag");
             return Ok(());
+        } else {
+            debug!("Received subdag with {} transactions", transaction_count);
         }
-        for tx in transactions.iter() {
-            debug!("tx: {}", hex::encode(tx.to_vec()));
-        }
+
         // send the subdag to the consensus handler
         if let Err(e) = self.subdag_tx.send(subdag) {
             return Err(ErrorObject::owned(
@@ -44,7 +43,6 @@ impl ConsensusTransactionApiServer for ConsensusTransactionsHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reth_ethereum::pool::noop::NoopTransactionPool;
     use reth_extension::CommittedSubDag;
 
     #[test]
@@ -63,7 +61,6 @@ mod tests {
     fn test_consensus_transactions_handler_with_different_pools() {
         let (subdag_tx1, _subdag_rx1) = tokio::sync::mpsc::unbounded_channel();
         let (subdag_tx2, _subdag_rx2) = tokio::sync::mpsc::unbounded_channel();
-
         let handler1 = ConsensusTransactionsHandler::new(subdag_tx1);
         let handler2 = ConsensusTransactionsHandler::new(subdag_tx2);
 
@@ -179,7 +176,7 @@ mod tests {
         let received_subdag = subdag_rx.recv().await;
         assert!(received_subdag.is_some());
         let received = received_subdag.unwrap();
-        assert_eq!(received.blocks.len(), subdag.blocks.len());
+        assert_eq!(received.len(), subdag.len());
     }
 
     #[tokio::test]

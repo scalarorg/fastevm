@@ -104,11 +104,10 @@ impl ExecutionClient {
     //     }
     //     Ok(())
     // }
-    async fn send_transaction(&self, tx: Bytes) -> Result<()> {
-        let payload_item = vec![tx];
+    async fn send_transaction(&self, txs: Vec<Bytes>) -> Result<()> {
         let res = self
             .payload_tx
-            .send(payload_item)
+            .send(txs)
             .map_err(|e| anyhow!("Error sending transaction: {:?}", e));
         if res.is_err() {
             error!("Error sending transaction: {:?}", res);

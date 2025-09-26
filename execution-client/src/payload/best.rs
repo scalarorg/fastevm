@@ -19,13 +19,11 @@ use tracing::{debug, warn};
 /// now. While it contains all gapless transactions of a sender, it _always_ only returns the
 /// transaction with the current on chain nonce.
 #[derive(Debug)]
-pub struct CommittedTransactions<T: PoolTransaction> {
+pub struct BestMysticetiTransactions<T: PoolTransaction> {
     /// Contains a copy of _all_ transactions from pending pool ordered by commited subdag
     /// and by nonce of each sender.
     pub(crate) ordered: BTreeMap<TransactionId, Arc<ValidPoolTransaction<T>>>,
-    /// Store all unordered transactions from commited subdag
-    /// These transactions will be ordered in the next round by nonce of each sender.
-    pub(crate) unordered: Vec<Arc<ValidPoolTransaction<T>>>,
+
     /// Highest nonce for each sender
     pub(crate) highest_nonces: FxHashMap<SenderId, Arc<ValidPoolTransaction<T>>>,
 
@@ -41,66 +39,47 @@ pub struct CommittedTransactions<T: PoolTransaction> {
     pub(crate) skip_blobs: bool,
 }
 
-impl<T: PoolTransaction> CommittedTransactions<T> {
+impl<T: PoolTransaction> BestMysticetiTransactions<T> {
     pub fn new(
-        uncommitted_transactions: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
-        subdag_transactions: Vec<Vec<u8>>,
+        pooled_transactions: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
+        subdag_transactions: Vec<T>,
     ) -> Self {
         let mut best_transactions = Self {
             ordered: BTreeMap::new(),
-            unordered: Vec::new(),
             highest_nonces: FxHashMap::default(),
             invalid: HashSet::new(),
             new_transaction_receiver: None,
             skip_blobs: false,
         };
-        best_transactions.populate_transactions(uncommitted_transactions, subdag_transactions);
+        debug!(
+            "Create best transactions with {} subdag transactions",
+            subdag_transactions.len()
+        );
+        best_transactions.populate_transactions(pooled_transactions, subdag_transactions);
         best_transactions
     }
     pub(crate) fn populate_transactions(
         &mut self,
-        mut uncommitted_transactions: Box<
-            dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>,
-        >,
-        subdag_transactions: Vec<Vec<u8>>,
+        mut pooled_transactions: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
+        subdag_transactions: Vec<T>,
     ) {
-        for commtted_txhash in subdag_transactions {
+        for commtted_tx in subdag_transactions {
             //let tx_hash = TxHash::from_slice(&tx_bytes);
-            if let Some(tx) =
-                uncommitted_transactions.find(|pool_tx| pool_tx.hash().to_vec() == commtted_txhash)
+            if let Some(tx) = pooled_transactions
+                .find(|pool_tx: &Arc<ValidPoolTransaction<T>>| pool_tx.hash() == commtted_tx.hash())
             {
                 self.add_transaction(Arc::clone(&tx));
             } else {
-                warn!("Transaction not found in pool: {:x?}", commtted_txhash);
-                //Todo: request the missing transactions from peers
-            }
-        }
-        //Loop until the unordered transactions are empty or cannot be reordered
-        let mut unordered_size = self.unordered.len();
-        while unordered_size > 0 {
-            self.reorder_transactions();
-            if self.unordered.len() == unordered_size {
+                //This branch must not happen
                 warn!(
-                    "Cannot reorder all transactions, number of unordered transactions {}",
-                    unordered_size
+                    "Transaction not found in transactions pool: {:?}",
+                    commtted_tx.hash()
                 );
-                break;
             }
-            unordered_size = self.unordered.len();
-        }
-    }
-
-    pub(crate) fn reorder_transactions(&mut self) {
-        //New unordered transactions
-        let mut unordered = Vec::new();
-        //Move all unordered transactions to the buffer unordered transactions
-        unordered.append(&mut self.unordered);
-        for tx in unordered {
-            self.add_transaction(tx.clone());
         }
     }
 }
-impl<T: PoolTransaction> CommittedTransactions<T> {
+impl<T: PoolTransaction> BestMysticetiTransactions<T> {
     /// Mark the transaction and it's descendants as invalid.
     pub(crate) fn mark_invalid(
         &mut self,
@@ -115,7 +94,7 @@ impl<T: PoolTransaction> CommittedTransactions<T> {
         self.ordered.pop_first().map(|(_, tx)| tx)
     }
 }
-impl<T: PoolTransaction> CommittedTransactions<T> {
+impl<T: PoolTransaction> BestMysticetiTransactions<T> {
     /// Add a transaction to the committed transactions
     /// Returns true if the transaction is added to the ordered list, false if it is added to the unordered list
     pub fn add_transaction(&mut self, tx: Arc<ValidPoolTransaction<T>>) -> bool {
@@ -127,8 +106,12 @@ impl<T: PoolTransaction> CommittedTransactions<T> {
                     *entry.get_mut() = tx.clone();
                     return true;
                 } else {
-                    //Add to unordered list for the next round
-                    self.unordered.push(tx.clone());
+                    debug!(
+                        "Transaction nonce {:?} is not the next nonce for sender: {:?}. Expected nonce: {:?}",
+                        tx.transaction.nonce(),
+                        tx.transaction_id.sender,
+                        entry.get().transaction.nonce() + 1
+                    );
                     return false;
                 }
             }
@@ -140,7 +123,7 @@ impl<T: PoolTransaction> CommittedTransactions<T> {
         }
     }
 }
-impl<T: PoolTransaction> BestTransactions for CommittedTransactions<T> {
+impl<T: PoolTransaction> BestTransactions for BestMysticetiTransactions<T> {
     fn mark_invalid(&mut self, tx: &Self::Item, kind: InvalidPoolTransactionError) {
         Self::mark_invalid(self, tx, kind)
     }
@@ -158,7 +141,7 @@ impl<T: PoolTransaction> BestTransactions for CommittedTransactions<T> {
     }
 }
 
-impl<T: PoolTransaction> Iterator for CommittedTransactions<T> {
+impl<T: PoolTransaction> Iterator for BestMysticetiTransactions<T> {
     type Item = Arc<ValidPoolTransaction<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -212,10 +195,9 @@ mod tests {
         let subdag_transactions = vec![];
 
         let committed_tx =
-            CommittedTransactions::new(uncommitted_transactions, subdag_transactions);
+            BestMysticetiTransactions::new(uncommitted_transactions, subdag_transactions);
 
         assert!(committed_tx.ordered.is_empty());
-        assert!(committed_tx.unordered.is_empty());
         assert!(committed_tx.highest_nonces.is_empty());
         assert!(committed_tx.invalid.is_empty());
     }
@@ -227,7 +209,7 @@ mod tests {
         let subdag_transactions = vec![];
 
         let mut committed_tx =
-            CommittedTransactions::new(uncommitted_transactions, subdag_transactions);
+            BestMysticetiTransactions::new(uncommitted_transactions, subdag_transactions);
 
         // Test skip_blobs functionality
         assert!(!committed_tx.skip_blobs);
@@ -245,7 +227,7 @@ mod tests {
         let subdag_transactions = vec![];
 
         let mut committed_tx =
-            CommittedTransactions::new(uncommitted_transactions, subdag_transactions);
+            BestMysticetiTransactions::new(uncommitted_transactions, subdag_transactions);
 
         // Test no_updates functionality
         committed_tx.no_updates();

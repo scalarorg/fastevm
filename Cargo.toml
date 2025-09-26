@@ -1,11 +1,11 @@
 [workspace.package]
 version = "1.6.0"
 edition = "2021"
-rust-version = "1.86"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/scalarorg/fastevm"
 repository = "https://github.com/scalarorg/fastevm"
-exclude = [".github/"]
+exclude = [".github/", "testing"]
 
 [workspace]
 members = [
@@ -32,15 +32,23 @@ consensus-config = { git = "https://github.com/scalarorg/mysticeti.git", package
 fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9" }
 fastcrypto-tbls = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9" }
 fastcrypto-zkp = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9", package = "fastcrypto-zkp" }
+
 # Core dependencies
-alloy-consensus = { version = "1.0.23", default-features = false }
-alloy-eips = { version = "1.0.23", default-features = false }
+alloy = { version = "=1.0.23", default-features = false, features = ["network", "providers", "rpc", "reqwest"] }
+alloy-consensus = { version = "=1.0.23", default-features = false }
+alloy-eips = { version = "=1.0.23", default-features = false }
+alloy-network = { version = "=1.0.23", default-features = false }
+alloy-rpc-types-engine = { version = "=1.0.23", default-features = false }
+alloy-rpc-types-eth = { version = "=1.0.23", default-features = false }
+alloy-signer = { version = "=1.0.23", default-features = false }
+alloy-signer-local = { version = "=1.0.23", default-features = false }
+alloy-serde = { version = "=1.0.23", default-features = false }
 alloy-harkforks = { version = "0.2.12", default-features = false }
+alloy-provider = { version = "=1.0.23", default-features = false, features = ["reqwest"] }
 alloy-primitives = { version = "1.3.0", default-features = false, features = ["map-foldhash"] }
-alloy-rpc-types-engine = { version = "1.0.23", default-features = false }
+alloy-rlp = { version = "0.3.10", default-features = false, features = ["core-net"] }
 
 # Reth
-
 reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-basic-payload-builder" }
 reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-payload-builder" }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-chainspec" }
@@ -62,7 +70,7 @@ reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6
 reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-provider", features = ["test-utils"] }
 reth-rpc = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc" }
 reth-rpc-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-api" }
-reth-rpc-layer = { git = "https://github.com/scalarorg/reth.git", branch = "debug", package = "reth-rpc-layer" }
+reth-rpc-layer = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-rpc-layer" }
 reth-stateless = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-stateless" }
 reth-tracing = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-tracing" }
 reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie" }
@@ -74,6 +82,7 @@ revm = { version = "28.0.1", default-features = false }
 walkdir = "2.3.3"
 
 base64 = "0.22.1"
+bincode = "2.0"
 tokio = { version = "1.0", features = ["full"] }
 
 rand = "0.8.5"
@@ -122,7 +131,6 @@ derive-getters = "0.5.0"
 tokio-test = "0.4"
 criterion = "0.7"
 alloy-genesis = { version = "1.0.23", default-features = false }
-alloy-rlp = { version = "0.3.10", default-features = false, features = ["core-net"] }
 rayon = "1.7"
 
 # Add execution and consensus client as dependencies for integration tests

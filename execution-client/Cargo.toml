@@ -15,12 +15,14 @@ path = "src/cli.rs"
 reth-extension = { workspace = true }
 # Ethereum
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
-
-eyre = {workspace = true}
-futures-util = {workspace = true}
+alloy-rpc-types-eth = { workspace = true }
+alloy-consensus = { workspace = true }
+# alloy-rlp = { workspace = true }
+eyre = { workspace = true}
+futures-util = { workspace = true}
 tracing = { workspace = true }
-clap = { version = "4.0", features = ["derive"] }
-hex = "0.4"
+clap = { version = "4.0", features = ["derive"] }  
+hex = { workspace = true }
 secp256k1 = { workspace = true }
 rustc-hash = { workspace = true }
 # Reth
@@ -38,13 +40,15 @@ reth-transaction-pool = { workspace = true }
 # Additional dependencies for RPC and caching
 jsonrpsee = { workspace = true }
 tokio = { workspace = true }
-serde_json = { workspace = true }
 anyhow = { workspace = true }
 tokio-stream = "0.1"
+
+# Consensus dependencies
+# consensus-core = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
 tempfile = "3"
-alloy = "1.0.30"
-alloy-signer-local = "1.0.30"
+# alloy = { workspace = true, features = ["network", "rpc"] }
+alloy-signer-local = { workspace = true }
 http = { workspace = true }

@@ -35,6 +35,12 @@ impl CommittedSubDag {
             })
             .collect()
     }
+    pub fn len(&self) -> usize {
+        self.blocks
+            .iter()
+            .map(|block| block.block.transactions().len())
+            .sum()
+    }
 }
 impl From<ConsensusCommittedSubDag> for CommittedSubDag {
     fn from(subdag: ConsensusCommittedSubDag) -> Self {

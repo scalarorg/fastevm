@@ -1,0 +1,199 @@
+# Setup and Configuration Tasks
+# FastEVM Remote Deployment
+
+version: '3'
+
+vars:
+  CONFIG_FILE: "{{.CONFIG_DIR}}/nodes.env"
+  BACKUP_DIR: "{{.LOGS_DIR}}/backups"
+
+tasks:
+  # Validate configuration
+  validate-config:
+    desc: "Validate deployment configuration"
+    cmds:
+      - echo "🔍 Validating deployment configuration..."
+      - |
+        if [ ! -f "{{.CONFIG_FILE}}" ]; then
+          echo "❌ Configuration file not found: {{.CONFIG_FILE}}"
+          echo "Creating example configuration file..."
+          task: create-example-config
+        fi
+      - echo "✅ Configuration validation completed"
+
+  # Create example configuration
+  create-example-config:
+    desc: "Create example configuration file"
+    cmds:
+      - mkdir -p "{{.CONFIG_DIR}}"
+      - |
+        cat > "{{.CONFIG_FILE}}" << 'EOF'
+# FastEVM Remote Deployment Configuration
+# Copy this file and update with your remote node details
+
+# Node 1 Configuration
+NODE1_HOST=192.168.1.100
+NODE1_USER=ubuntu
+NODE1_PORT=22
+NODE1_KEY_PATH=/path/to/private/key
+# NODE1_PASSWORD=your_password_here
+
+# Node 2 Configuration
+NODE2_HOST=192.168.1.101
+NODE2_USER=ubuntu
+NODE2_PORT=22
+NODE2_KEY_PATH=/path/to/private/key
+# NODE2_PASSWORD=your_password_here
+
+# Node 3 Configuration
+NODE3_HOST=192.168.1.102
+NODE3_USER=ubuntu
+NODE3_PORT=22
+NODE3_KEY_PATH=/path/to/private/key
+# NODE3_PASSWORD=your_password_here
+
+# Node 4 Configuration
+NODE4_HOST=192.168.1.103
+NODE4_USER=ubuntu
+NODE4_PORT=22
+NODE4_KEY_PATH=/path/to/private/key
+# NODE4_PASSWORD=your_password_here
+
+# Project Configuration
+REMOTE_PROJECT_PATH=/opt/fastevm
+DOCKER_NETWORK=fastevm-network
+DOCKER_SUBNET=172.20.0.0/16
+EOF
+      - echo "✅ Example configuration created: {{.CONFIG_FILE}}"
+      - echo "Please edit the configuration file with your remote node details"
+
+  # Load configuration
+  load-config:
+    desc: "Load configuration from file"
+    cmds:
+      - echo "📋 Loading configuration from {{.CONFIG_FILE}}..."
+      - |
+        if [ -f "{{.CONFIG_FILE}}" ]; then
+          set -a
+          source "{{.CONFIG_FILE}}"
+          set +a
+          echo "✅ Configuration loaded successfully"
+        else
+          echo "❌ Configuration file not found: {{.CONFIG_FILE}}"
+          exit 1
+        fi
+
+  # Prepare files for deployment
+  prepare-files:
+    desc: "Prepare files for deployment"
+    cmds:
+      - echo "📁 Preparing files for deployment..."
+      - mkdir -p "{{.LOGS_DIR}}"
+      - |
+        # Create file list for deployment
+        cat > "{{.TASKS_DIR}}/file-list.txt" << 'EOF'
+docker-compose.yml
+consensus-client/docker-compose.yml
+execution-client/docker-compose.yml
+scripts/init.sh
+scripts/healthcheck.sh
+scripts/docker-network.sh
+scripts/bootnodes.env
+execution-client/shared/genesis.json
+monitoring/nginx.conf
+monitoring/index.html
+Dockerfile
+Dockerfile.builder
+Dockerfile.cl
+Dockerfile.cl.dev
+Dockerfile.el
+Dockerfile.el.dev
+consensus-client/examples/committees.yml
+consensus-client/examples/node.example.yml
+consensus-client/examples/node.template.yml
+consensus-client/examples/parameters.yml
+EOF
+      - echo "✅ Files prepared for deployment"
+
+  # Backup configuration
+  backup-config:
+    desc: "Backup current configuration"
+    cmds:
+      - echo "💾 Backing up configuration..."
+      - mkdir -p "{{.BACKUP_DIR}}"
+      - |
+        BACKUP_NAME="config-backup-$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "{{.BACKUP_DIR}}/$BACKUP_NAME"
+        cp -r "{{.CONFIG_DIR}}" "{{.BACKUP_DIR}}/$BACKUP_NAME/"
+        echo "BACKUP_NAME=$BACKUP_NAME" > "{{.BACKUP_DIR}}/latest"
+        echo "✅ Configuration backed up to: {{.BACKUP_DIR}}/$BACKUP_NAME"
+
+  # Restore configuration
+  restore-config:
+    desc: "Restore configuration from backup"
+    vars:
+      BACKUP_FILE: "{{.BACKUP_FILE | default('latest')}}"
+    cmds:
+      - echo "🔄 Restoring configuration from backup: {{.BACKUP_FILE}}..."
+      - |
+        if [ "{{.BACKUP_FILE}}" = "latest" ]; then
+          BACKUP_NAME=$(cat "{{.BACKUP_DIR}}/latest" | cut -d'=' -f2)
+        else
+          BACKUP_NAME="{{.BACKUP_FILE}}"
+        fi
+        if [ -d "{{.BACKUP_DIR}}/$BACKUP_NAME" ]; then
+          cp -r "{{.BACKUP_DIR}}/$BACKUP_NAME/config"/* "{{.CONFIG_DIR}}/"
+          echo "✅ Configuration restored from: $BACKUP_NAME"
+        else
+          echo "❌ Backup not found: $BACKUP_NAME"
+          exit 1
+        fi
+
+  # Check prerequisites
+  check-prerequisites:
+    desc: "Check if all prerequisites are installed"
+    cmds:
+      - echo "🔍 Checking prerequisites..."
+      - |
+        # Check if required tools are installed
+        command -v ssh >/dev/null 2>&1 || { echo "❌ SSH client not found"; exit 1; }
+        command -v scp >/dev/null 2>&1 || { echo "❌ SCP client not found"; exit 1; }
+        command -v rsync >/dev/null 2>&1 || { echo "❌ Rsync not found"; exit 1; }
+        command -v docker >/dev/null 2>&1 || { echo "❌ Docker not found"; exit 1; }
+        command -v docker-compose >/dev/null 2>&1 || { echo "❌ Docker Compose not found"; exit 1; }
+        echo "✅ All prerequisites are installed"
+
+  # Initialize deployment
+  init:
+    desc: "Initialize deployment environment"
+    deps: [check-prerequisites, validate-config]
+    cmds:
+      - echo "🚀 Initializing FastEVM deployment environment..."
+      - mkdir -p "{{.LOGS_DIR}}"
+      - mkdir -p "{{.CONFIG_DIR}}"
+      - task: load-config
+      - echo "✅ Deployment environment initialized"
+
+  # Show configuration
+  show-config:
+    desc: "Show current configuration"
+    cmds:
+      - echo "📋 Current Configuration:"
+      - echo "========================"
+      - |
+        if [ -f "{{.CONFIG_FILE}}" ]; then
+          echo "Configuration file: {{.CONFIG_FILE}}"
+          echo ""
+          echo "Node Configuration:"
+          echo "  Node 1: {{.NODE1_USER}}@{{.NODE1_HOST}}:{{.NODE1_PORT}}"
+          echo "  Node 2: {{.NODE2_USER}}@{{.NODE2_HOST}}:{{.NODE2_PORT}}"
+          echo "  Node 3: {{.NODE3_USER}}@{{.NODE3_HOST}}:{{.NODE3_PORT}}"
+          echo "  Node 4: {{.NODE4_USER}}@{{.NODE4_HOST}}:{{.NODE4_PORT}}"
+          echo ""
+          echo "Project Path: {{.REMOTE_PROJECT_PATH}}"
+          echo "Docker Network: {{.DOCKER_NETWORK}}"
+          echo "Docker Subnet: {{.DOCKER_SUBNET}}"
+        else
+          echo "❌ Configuration file not found: {{.CONFIG_FILE}}"
+          echo "Run 'task setup:create-example-config' to create one"
+        fi
