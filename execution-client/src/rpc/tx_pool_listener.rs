@@ -4,8 +4,8 @@ use jsonrpsee::{
     PendingSubscriptionSink,
 };
 
-use reth_ethereum::pool::{NewTransactionEvent, TransactionPool};
-use reth_transaction_pool::ValidPoolTransaction;
+use reth_ethereum::pool::TransactionPool;
+use reth_transaction_pool::{NewTransactionEvent, ValidPoolTransaction};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
@@ -51,9 +51,10 @@ where
         pending_subscription_sink: PendingSubscriptionSink,
     ) -> SubscriptionResult {
         let pool = self.pool.clone();
-        let pending_transactions = pool.new_transactions_listener();
-        // Convert Receiver to Stream
-        let mut stream = ReceiverStream::new(pending_transactions);
+        // let pending_transactions = pool.pending_transactions_listener();
+        // // Convert Receiver to Stream
+        // let mut stream = ReceiverStream::new(pending_transactions);
+        let mut stream = pool.new_pending_pool_transactions_listener();
         // Spawn an async block to listen for transactions.
         tokio::spawn(Box::pin(async move {
             let sink = match pending_subscription_sink.accept().await {

@@ -19,13 +19,10 @@ use reth_extension::{CommittedSubDag, CommittedTransactions};
 use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
 use std::{
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
-    time::Duration,
 };
-use tokio::{
-    sync::mpsc::{error::TryRecvError, UnboundedReceiver},
-    time::sleep,
-};
+use tokio::sync::mpsc::{error::TryRecvError, UnboundedReceiver};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::consensus::ConsensusPool;
@@ -87,7 +84,7 @@ where
     /// Process a single subdag
     async fn process_single_subdag(&mut self, subdag: CommittedSubDag) -> Result<()> {
         let committed_transactions = CommittedTransactions::<Pool::Transaction>::try_from(subdag)?;
-        //Add subdag to queue
+        //Add subdag to transaction pool
         self.update_pool_with_transactions(&committed_transactions)
             .await?;
         //Add committed transactions to consensuspool
@@ -108,15 +105,30 @@ where
         committed_transactions: &CommittedTransactions<Pool::Transaction>,
     ) -> Result<()> {
         let mut added_count = 0;
+        let pending_txs = self.transaction_pool.pending_transactions();
+        let mut pending_txs_map = HashMap::new();
+        for tx in pending_txs {
+            pending_txs_map.insert(tx.hash().clone(), Arc::clone(&tx));
+        }
+        let mut subscribed_txs = Vec::new();
+        let mut missing_txs = HashSet::new();
         for tx in committed_transactions.transactions.iter() {
             let tx_hash = tx.hash();
+            //If transaction is already in the pending pool, skip
+            if pending_txs_map.contains_key(tx_hash) {
+                continue;
+            }
             if !self.transaction_pool.contains(tx_hash) {
+                missing_txs.insert(tx_hash.clone());
+                //TODO: consider add transaction here
+                // Or wait until all of them are added to the pending pool throught p2p network
                 match self
                     .transaction_pool
-                    .add_transaction(TransactionOrigin::External, tx.clone())
+                    .add_transaction_and_subscribe(TransactionOrigin::External, tx.clone())
                     .await
                 {
-                    Ok(tx_hash) => {
+                    Ok(tx_events) => {
+                        subscribed_txs.push(tx_events);
                         added_count += 1;
                         debug!(
                             "Added subdag transaction to pool: {:?}, sender: {:?}, nonce: {:?}",
@@ -139,6 +151,7 @@ where
             added_count,
             committed_transactions.transactions.len()
         );
+        //TODO: Try add waiting transactions to the pending subpool
         Ok(())
     }
     /// Get current forkchoice state
@@ -177,49 +190,7 @@ where
             .transpose()
             .map_err(anyhow::Error::msg)
     }
-    /// Check if the last payload is executed
-    async fn wait_for_payload_executed(
-        &self,
-        executed_payload: &Payload::ExecutionData,
-    ) -> Result<bool> {
-        let block_number = executed_payload.block_number();
-        let block_hash = executed_payload.block_hash();
-        let timeout = Duration::from_secs(PAYLOAD_EXECUTION_TIMEOUT); // 30 second timeout
-        let start = std::time::Instant::now();
 
-        loop {
-            if start.elapsed() > timeout {
-                warn!("Timeout waiting for payload execution");
-                return Ok(false);
-            }
-
-            if let Ok(latest_state) = self.provider.latest() {
-                if let Ok(Some(_)) = latest_state.block_hash(block_number) {
-                    debug!(
-                        "Last payload is executed. Block hash: {:?}, number: {:?}",
-                        hex::encode(block_hash),
-                        block_number
-                    );
-                    let mut consensus_pool = self
-                        .consensus_pool
-                        .lock()
-                        .map_err(|_e| anyhow::anyhow!("Failed to lock consensus pool"))?;
-                    consensus_pool.set_latest_state(latest_state);
-                    return Ok(true);
-                } else {
-                    debug!(
-                        "Last payload number {} and hash {:?} is not executed",
-                        block_number,
-                        hex::encode(block_hash)
-                    );
-                }
-            } else {
-                error!("Failed to get latest state");
-                return Err(anyhow::anyhow!("Failed to get latest state"));
-            }
-            sleep(Duration::from_millis(PAYLOAD_EXECUTION_INTERVAL)).await;
-        }
-    }
     /// Try to execute the pending payload
     async fn try_execute_pending_payload(
         &self,
@@ -303,13 +274,6 @@ where
                                         payload_id,
                                         payload_status
                                     );
-                                    //Todo: Improve this if we need to bootup the engine
-                                    //Wait for the payload to be executed before building next one
-                                    let result =
-                                        self.wait_for_payload_executed(&execution_payload).await;
-                                    if result.is_err() {
-                                        error!("Wait for payload executed failed: {:?}", result);
-                                    }
                                 }
                                 Err(e) => {
                                     error!("Forkchoice updated failed: {:?}", e);

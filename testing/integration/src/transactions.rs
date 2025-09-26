@@ -65,34 +65,36 @@ use std::str::FromStr;
 /// }
 /// ```
 pub async fn create_transfer_transaction(
-    signer_privkey: &str,
+    signer_privkey: &[u8],
     recipient: &str,
     chain_id: ChainId,
     gwei_amount: u64,
-    nonce: u64,
+    nonce: Option<u64>,
 ) -> Result<<Ethereum as Network>::TxEnvelope> {
     // Parse the recipient address from string to Address type
     let recipient_addr = Address::from_str(recipient)
         .map_err(|e| eyre::eyre!("Invalid recipient address: {}", e))?;
 
     // Create a wallet signer from the provided private key
-    let wallet = PrivateKeySigner::from_str(signer_privkey)
+    // let wallet = PrivateKeySigner::from_str(signer_privkey)
+    //     .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
+    let wallet = PrivateKeySigner::from_slice(signer_privkey)
         .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
-
     // Get the sender's address from the wallet
     let sender_addr = wallet.address();
 
     // Build a transaction request with standard ETH transfer parameters
-    let tx = TransactionRequest::default()
+    let mut tx = TransactionRequest::default()
         .with_from(sender_addr)
         .with_to(recipient_addr)
-        .with_nonce(nonce)
         .with_chain_id(chain_id)
         .with_value(U256::from(gwei_amount))
         .with_gas_limit(21_000) // Standard gas limit for ETH transfers
         .with_max_priority_fee_per_gas(1_000_000_000) // 1 Gwei
         .with_max_fee_per_gas(20_000_000_000); // 20 Gwei
-
+    if let Some(nonce) = nonce {
+        tx = tx.with_nonce(nonce);
+    }
     // Convert the LocalSigner to an EthereumWallet to satisfy the NetworkWallet trait bound
     let ethereum_wallet = EthereumWallet::from(wallet);
 

@@ -98,10 +98,10 @@ The local network consists of:
 - **Node 4**: RPC port 8555, Engine API port 8554, P2P port 30306
 
 ### Consensus Nodes (4 nodes)
-- **Node 1**: Port 26657, IP 172.20.0.10
-- **Node 2**: Port 26658, IP 172.20.0.11
-- **Node 3**: Port 26659, IP 172.20.0.12
-- **Node 4**: Port 26660, IP 172.20.0.13
+- **Node 1**: Port 26657, IP 127.0.0.1
+- **Node 2**: Port 26658, IP 127.0.0.1
+- **Node 3**: Port 26659, IP 127.0.0.1
+- **Node 4**: Port 26660, IP 127.0.0.1
 
 ## Directory Structure
 

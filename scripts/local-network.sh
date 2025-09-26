@@ -20,8 +20,28 @@ DATA_DIR="$PROJECT_ROOT/.local-data"
 LOGS_DIR="$PROJECT_ROOT/.local-logs"
 PIDS_DIR="$PROJECT_ROOT/.local-pids"
 
+# WebSocket configuration (can be overridden by command line)
+ENABLE_WS=true
+
+# Genesis configuration
+GENESIS_FILE=$PROJECT_ROOT/execution-client/shared/genesis.json
+GENESIS_OUTPUT_DIR="$DATA_DIR/genesis"
+CLI=$PROJECT_ROOT/target/release/cli
+EXECUTION_CLIENT=$PROJECT_ROOT/target/release/fastevm-execution
+CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
+
+# Default values for account generation
+DEFAULT_ACCOUNT_NUMBER=100
+DEFAULT_ACCOUNT_AMOUNT="1000000000000000000000"  # 1000 ETH in wei
+DEFAULT_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+# Command line options
+ACCOUNT_COUNT="$DEFAULT_ACCOUNT_NUMBER"
+ACCOUNT_AMOUNT="$DEFAULT_ACCOUNT_AMOUNT"
+MNEMONIC="$DEFAULT_MNEMONIC"
 # Port configuration
-EXECUTION_PORTS=(8545 8547 8549 8555)  # HTTP RPC ports
+EXECUTION_PORTS=(8545 8544 8543 8542)  # HTTP RPC ports
+EXECUTION_PORTS_WS=(8546 8548 8550 8552)  # WebSocket RPC ports
 ENGINE_PORTS=(8551 8552 8553 8554)     # Engine API ports
 P2P_PORTS=(30303 30304 30305 30306)    # P2P ports
 CONSENSUS_PORTS=(26657 26658 26659 26660)  # Consensus ports
@@ -92,8 +112,54 @@ setup_directories() {
     mkdir -p "$DATA_DIR"/{consensus1,consensus2,consensus3,consensus4}
     mkdir -p "$LOGS_DIR"
     mkdir -p "$PIDS_DIR"
+    mkdir -p "$GENESIS_OUTPUT_DIR"
     
     log_success "Directories created!"
+}
+
+# Generate and prefund accounts in genesis.json
+prefund_genesis() {
+    local account_count="${1:-$ACCOUNT_COUNT}"
+    local account_amount="${2:-$ACCOUNT_AMOUNT}"
+    local mnemonic="${3:-$MNEMONIC}"
+    
+    log_info "Generating prefunded genesis.json with $account_count accounts..."
+    log_info "Each account will be funded with $account_amount wei"
+    
+    # Check if CLI is built
+    if [ ! -f "$CLI" ]; then
+        log_error "CLI not found at $CLI. Please build the project first."
+        return 1
+    fi
+    
+    # Check if input genesis exists
+    if [ ! -f "$GENESIS_FILE" ]; then
+        log_error "Input genesis file not found: $GENESIS_FILE"
+        return 1
+    fi
+    
+    # Generate prefunded genesis
+    if "$CLI" allocate-funds \
+        --input "$GENESIS_FILE" \
+        --count "$account_count" \
+        --mnemonic "$mnemonic" \
+        --amount "$account_amount" \
+        --output "$GENESIS_OUTPUT_DIR"; then
+        log_success "Generated prefunded genesis.json with $account_count accounts"
+        log_info "Genesis file saved to: $GENESIS_OUTPUT_DIR/genesis.json"
+        
+        # Show some account addresses for reference
+        log_info "Sample prefunded accounts:"
+        jq -r '.alloc | keys[0:5] | .[]' "$GENESIS_OUTPUT_DIR/genesis.json" | while read -r addr; do
+            local balance=$(jq -r ".alloc[\"$addr\"].balance" "$GENESIS_OUTPUT_DIR/genesis.json")
+            log_info "  $addr: $balance wei"
+        done
+        
+        return 0
+    else
+        log_error "Failed to generate prefunded genesis.json"
+        return 1
+    fi
 }
 
 # Build the project
@@ -135,18 +201,14 @@ generate_p2p_secret_key() {
     local hex_file="$p2p_dir/secret.hex"
     
     if [ ! -f "$secret_file" ]; then
-        # Generate deterministic secret based on node index
+        # Generate a proper 32-byte (64 hex chars) secret key
         local seed="fastevm-node-${node_index}-p2p-secret-2025"
-        echo "$seed" | openssl dgst -sha256 -binary | openssl dgst -sha256 -hex | cut -d' ' -f2 | tr -d '\n' > "$secret_file"
+        echo "$seed" | openssl dgst -sha256 -hex | cut -d' ' -f2 | tr -d '\n' > "$secret_file"
         
-        # Generate hex version
-        if command -v reth &> /dev/null; then
-            reth show-peer-id --file "$secret_file" --output "$hex_file" 2>/dev/null || true
-        else
-            # Fallback: use openssl to generate hex
-            cat "$secret_file" > "$hex_file"
-        fi
-        
+        # Generate a deterministic peer ID from the secret key for enode URLs
+        # We'll use the secret key directly as the peer ID for simplicity
+        # This ensures we get a consistent 64-character hex string
+        $CLI show-peer-id --file "$secret_file" --output "$hex_file"
         # Remove 0x prefix if present
         if [ -f "$hex_file" ]; then
             sed -i '' 's/^0x//' "$hex_file" 2>/dev/null || sed -i 's/^0x//' "$hex_file"
@@ -175,12 +237,16 @@ init_execution_node() {
     # Generate P2P secret key
     generate_p2p_secret_key "$node_index" "$data_dir"
     
-    # Copy genesis.json if it exists
-    if [ -f "$PROJECT_ROOT/execution-client/shared/genesis.json" ]; then
-        cp "$PROJECT_ROOT/execution-client/shared/genesis.json" "$data_dir/genesis.json"
-        log_info "Copied genesis.json to $data_dir"
+    # Copy prefunded genesis.json if it exists, otherwise fall back to original
+    local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
+    if [ -f "$prefunded_genesis" ]; then
+        cp "$prefunded_genesis" "$data_dir/genesis.json"
+        log_info "Copied prefunded genesis.json to $data_dir"
+    elif [ -f "$GENESIS_FILE" ]; then
+        cp "$GENESIS_FILE" "$data_dir/genesis.json"
+        log_info "Copied original genesis.json to $data_dir"
     else
-        log_warning "Genesis file not found, using default chain"
+        log_warning "No genesis file found, using default chain"
     fi
     
     # Initialize the node if genesis exists
@@ -191,6 +257,120 @@ init_execution_node() {
 }
 
 # Initialize consensus node data
+# Generate consensus node configuration files
+generate_consensus_files() {
+    local node_index="$1"
+    local data_dir="$DATA_DIR/consensus$node_index"
+    
+    log_info "Generating consensus node $node_index configuration files..."
+    
+    # Create data directory if it doesn't exist
+    mkdir -p "$data_dir"
+    
+    # Copy prefunded genesis.json if it exists, otherwise fall back to original
+    local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
+    local shared_genesis="$PROJECT_ROOT/execution-client/shared/genesis.json"
+    
+    if [ -f "$prefunded_genesis" ]; then
+        if cp "$prefunded_genesis" "$data_dir/genesis.json"; then
+            log_info "Copied prefunded genesis.json to consensus node $node_index"
+        else
+            log_error "Failed to copy prefunded genesis.json to consensus node $node_index"
+            return 1
+        fi
+    elif [ -f "$shared_genesis" ]; then
+        if cp "$shared_genesis" "$data_dir/genesis.json"; then
+            log_info "Copied original genesis.json to consensus node $node_index"
+        else
+            log_error "Failed to copy genesis.json to consensus node $node_index"
+            return 1
+        fi
+    else
+        log_error "No genesis file found: $shared_genesis"
+        return 1
+    fi
+    
+    # Copy parameters.yml from examples
+    local parameters_template="$PROJECT_ROOT/consensus-client/examples/parameters.yml"
+    if [ -f "$parameters_template" ]; then
+        if cp "$parameters_template" "$data_dir/parameters.yml"; then
+            log_info "Copied parameters.yml to consensus node $node_index"
+        else
+            log_error "Failed to copy parameters.yml to consensus node $node_index"
+            return 1
+        fi
+    else
+        log_error "Parameters template not found: $parameters_template"
+        return 1
+    fi
+    
+    # Generate committees.yml using fastevm-consensus command
+    if command -v "$CONSENSUS_CLIENT" >/dev/null 2>&1; then
+        if "$CONSENSUS_CLIENT" generate-committee \
+            --output "$data_dir/committees.yml" \
+            --authorities "4" \
+            --epoch "0" \
+            --stake "1000" \
+            --ip-addresses "127.0.0.1,127.0.0.1,127.0.0.1,127.0.0.1" \
+            --network-ports "26657,26658,26659,26660"; then
+            log_info "Generated committees.yml for consensus node $node_index"
+        else
+            log_error "Failed to generate committees.yml for consensus node $node_index"
+            return 1
+        fi
+    else
+        log_error "Consensus client not found: $CONSENSUS_CLIENT"
+        log_info "Please build the project first with: make build"
+        return 1
+    fi
+    
+    log_success "Generated consensus node $node_index files: genesis.json, committees.yml, parameters.yml"
+}
+
+# Generate consensus node configuration from template
+generate_consensus_node_config() {
+    local node_index="$1"
+    local data_dir="$DATA_DIR/consensus$node_index"
+    local jwt_secret="0x$(cat "$DATA_DIR/execution$node_index/jwt.hex")"
+    local genesis_block_hash="0x0000000000000000000000000000000000000000000000000000000000000000"
+    
+    # Get the correct ports for this node
+    local http_port="${EXECUTION_PORTS[$((node_index-1))]}"
+    local ws_port="${EXECUTION_PORTS_WS[$((node_index-1))]}"
+    
+    log_info "Generating consensus node $node_index configuration from template..."
+    log_info "Using execution HTTP port: $http_port, WS port: $ws_port"
+    
+    # Create data directory if it doesn't exist
+    mkdir -p "$data_dir"
+    
+    # Template file path
+    local template_file="$PROJECT_ROOT/consensus-client/examples/node.local.yml"
+    local config_file="$data_dir/node.yml"
+    
+    if [ -f "$template_file" ]; then
+        # Copy template to data directory
+        cp "$template_file" "$config_file"
+        
+        # Replace placeholders in the config file
+        sed -i '' "s/{NODE_INDEX}/$node_index/g" "$config_file" 2>/dev/null || sed -i "s/{NODE_INDEX}/$node_index/g" "$config_file"
+        sed -i '' "s/{AUTHORITY_INDEX}/$((node_index-1))/g" "$config_file" 2>/dev/null || sed -i "s/{AUTHORITY_INDEX}/$((node_index-1))/g" "$config_file"
+        sed -i '' "s/{JWT_SECRET}/$jwt_secret/g" "$config_file" 2>/dev/null || sed -i "s/{JWT_SECRET}/$jwt_secret/g" "$config_file"
+        sed -i '' "s/{GENESIS_BLOCK_HASH}/$genesis_block_hash/g" "$config_file" 2>/dev/null || sed -i "s/{GENESIS_BLOCK_HASH}/$genesis_block_hash/g" "$config_file"
+        
+        # Update execution URLs to use localhost with correct ports
+        sed -i '' "s|http://execution$node_index:8545|http://127.0.0.1:$http_port|g" "$config_file" 2>/dev/null
+        sed -i '' "s|ws://execution$node_index:8546|ws://127.0.0.1:$ws_port|g" "$config_file" 2>/dev/null
+        
+        log_success "Generated consensus node config: $config_file"
+        log_info "Execution HTTP URL: http://127.0.0.1:$http_port"
+        log_info "Execution WS URL: ws://127.0.0.1:$ws_port"
+    else
+        log_error "Consensus template not found: $template_file"
+        return 1
+    fi
+}
+
 init_consensus_node() {
     local node_index="$1"
     local data_dir="$DATA_DIR/consensus$node_index"
@@ -199,46 +379,33 @@ init_consensus_node() {
     
     log_info "Initializing consensus node $node_index..."
     
-    # Create node configuration
-    local config_file="$data_dir/node.yml"
-    local template_file="$PROJECT_ROOT/consensus-client/examples/node.template.yml"
+    # Generate required files first
+    generate_consensus_files "$node_index"
     
-    if [ -f "$template_file" ]; then
-        cp "$template_file" "$config_file"
-        
-        # Replace placeholders
-        sed -i '' "s/{NODE_INDEX}/$node_index/g" "$config_file" 2>/dev/null || sed -i "s/{NODE_INDEX}/$node_index/g" "$config_file"
-        sed -i '' "s/{AUTHORITY_INDEX}/$((node_index-1))/g" "$config_file" 2>/dev/null || sed -i "s/{AUTHORITY_INDEX}/$((node_index-1))/g" "$config_file"
-        sed -i '' "s/{JWT_SECRET}/0x$(cat "$DATA_DIR/execution$node_index/jwt.hex")/g" "$config_file" 2>/dev/null || sed -i "s/{JWT_SECRET}/0x$(cat "$DATA_DIR/execution$node_index/jwt.hex")/g" "$config_file"
-        sed -i '' "s/{GENESIS_BLOCK_HASH}/0x0000000000000000000000000000000000000000000000000000000000000000/g" "$config_file" 2>/dev/null || sed -i "s/{GENESIS_BLOCK_HASH}/0x0000000000000000000000000000000000000000000000000000000000000000/g" "$config_file"
-        
-        log_info "Created consensus config: $config_file"
-    else
-        log_warning "Consensus template not found, creating basic config"
-        cat > "$config_file" << EOF
-node_index: $node_index
-authority_index: $((node_index-1))
-jwt_secret: "0x$(cat "$DATA_DIR/execution$node_index/jwt.hex")"
-genesis_block_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
-execution_url: "http://127.0.0.1:${ENGINE_PORTS[$((node_index-1))]}"
-consensus_port: $consensus_port
-consensus_ip: $consensus_ip
-EOF
-    fi
+    # Generate node configuration from template
+    generate_consensus_node_config "$node_index"
 }
 
 # Start execution node
 start_execution_node() {
     local node_index="$1"
     local data_dir="$DATA_DIR/execution$node_index"
-    local http_port="${EXECUTION_PORTS[$((node_index-1))]}"
-    local engine_port="${ENGINE_PORTS[$((node_index-1))]}"
+    # local http_port="${EXECUTION_PORTS[$((node_index-1))]}"
+    #local engine_port="${ENGINE_PORTS[$((node_index-1))]}"
+    local http_port=8545
+    local ws_port=8546
+    local engine_port=8551
     local p2p_port="${P2P_PORTS[$((node_index-1))]}"
     local node_ip="${NODE_IPS[$((node_index-1))]}"
     local log_file="$LOGS_DIR/execution-node$node_index.log"
     local pid_file="$PIDS_DIR/execution-node$node_index.pid"
     
-    log_info "Starting execution node $node_index on port $http_port..."
+    # Build port info string
+    local port_info="http:$http_port, engine:$engine_port, p2p:$p2p_port"
+    # if [ "$ENABLE_WS" = true ]; then
+    #     port_info="http:$http_port, ws:$((http_port+1)), engine:$engine_port, p2p:$p2p_port"
+    # fi
+    log_info "Starting execution node $node_index on port $port_info..."
     
     # Build bootnodes string
     local bootnodes=""
@@ -259,33 +426,51 @@ start_execution_node() {
         fi
     done
     
+    # Build command arguments
+    local cmd_args=(
+        "node"
+        "--chain" "$data_dir/genesis.json"
+        "--datadir" "$data_dir"
+        "--instance" "$node_index"
+        "--http"
+        "--http.api" "eth,net,web3,admin,debug"
+        "--http.addr" "0.0.0.0"
+        "--http.port" "$http_port"
+        "--http.corsdomain" "*"
+    )
+    
+    # Add WebSocket arguments if enabled
+    if [ "$ENABLE_WS" = true ]; then
+        cmd_args+=(
+            "--ws"
+            "--ws.api" "eth,net,web3,admin,debug"
+            "--ws.addr" "0.0.0.0"
+            "--ws.port" "$((http_port+1))"
+            "--ws.origins" "*"
+        )
+    fi
+    
+    # Add remaining arguments
+    cmd_args+=(
+        "--authrpc.addr" "0.0.0.0"
+        "--authrpc.port" "$engine_port"
+        "--authrpc.jwtsecret" "$data_dir/jwt.hex"
+        "--addr" "0.0.0.0"
+        "--port" "$p2p_port"
+        "--discovery.addr" "0.0.0.0"
+        "--discovery.port" "$p2p_port"
+        "--p2p-secret-key" "$data_dir/p2p/secret.key"
+        "--bootnodes" "$bootnodes"
+        "--enable-txpool-listener"
+        "-vvvv"
+    )
+    
+    # Add --txpool.max-account-slots
+    cmd_args+=(
+        "--txpool.max-account-slots" "32"
+    )
     # Start the node
-    nohup "$PROJECT_ROOT/target/release/fastevm-execution" \
-        node \
-        --chain "$data_dir/genesis.json" \
-        --datadir "$data_dir" \
-        --http \
-        --http.api "eth,net,web3,admin,debug" \
-        --http.addr "0.0.0.0" \
-        --http.port "$http_port" \
-        --http.corsdomain "*" \
-        --ws \
-        --ws.api "eth,net,web3,admin,debug" \
-        --ws.addr "0.0.0.0" \
-        --ws.port "$((http_port+1))" \
-        --ws.origins "*" \
-        --authrpc.addr "0.0.0.0" \
-        --authrpc.port "$engine_port" \
-        --authrpc.jwtsecret "$data_dir/jwt.hex" \
-        --addr "0.0.0.0" \
-        --port "$p2p_port" \
-        --discovery.addr "0.0.0.0" \
-        --discovery.port "$p2p_port" \
-        --p2p-secret-key "$data_dir/p2p/secret.key" \
-        --bootnodes "$bootnodes" \
-        --enable-txpool-listener \
-        -vvvv \
-        > "$log_file" 2>&1 &
+    nohup "$EXECUTION_CLIENT" "${cmd_args[@]}" > "$log_file" 2>&1 &
     
     local pid=$!
     echo $pid > "$pid_file"
@@ -310,9 +495,9 @@ start_consensus_node() {
     export NODE_IP="$consensus_ip"
     
     # Start the node
-    nohup "$PROJECT_ROOT/target/release/fastevm-consensus" \
+    cd $data_dir && nohup "$CONSENSUS_CLIENT" \
         start \
-        --config "$data_dir/node.yml" \
+        --config node.yml \
         > "$log_file" 2>&1 &
     
     local pid=$!
@@ -349,6 +534,9 @@ wait_for_service() {
 start_network() {
     log_info "Starting FastEVM local network..."
     
+    # Generate prefunded genesis.json first
+    prefund_genesis
+    
     # Initialize all nodes
     for i in {1..4}; do
         init_execution_node "$i"
@@ -369,7 +557,9 @@ start_network() {
             exit 1
         }
     done
-    
+    # local sleep_time=30
+    # echo " Sleep $sleep_time seconds for all execution nodes to be ready"
+    # sleep $sleep_time
     # Start consensus nodes
     for i in {1..4}; do
         start_consensus_node "$i"
@@ -418,7 +608,12 @@ show_status() {
         local pid_file="$PIDS_DIR/execution-node$i.pid"
         
         if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-            echo "  ✅ Node $i: http://localhost:$http_port (RPC), http://localhost:$engine_port (Engine API)"
+            local status_info="http://localhost:$http_port (RPC), http://localhost:$engine_port (Engine API)"
+            if [ "$ENABLE_WS" = true ]; then
+                local ws_port=$((http_port+1))
+                status_info="http://localhost:$http_port (RPC), ws://localhost:$ws_port (WS), http://localhost:$engine_port (Engine API)"
+            fi
+            echo "  ✅ Node $i: $status_info"
         else
             echo "  ❌ Node $i: Not running"
         fi
@@ -487,8 +682,90 @@ cleanup() {
     log_success "Cleanup complete!"
 }
 
+# Parse command line arguments
+parse_arguments() {
+    COMMAND="start"  # Default command
+    
+    # First, check if first argument is a command
+    if [[ $# -gt 0 ]] && [[ "$1" =~ ^(start|stop|restart|status|logs|cleanup|init|prefund|regenerate-consensus|regenerate-genesis)$ ]]; then
+        COMMAND="$1"
+        shift  # Remove the command from arguments
+    fi
+    
+    # Then parse remaining options
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --no-ws)
+                ENABLE_WS=false
+                shift
+                ;;
+            --ws)
+                ENABLE_WS=true
+                shift
+                ;;
+            --accounts)
+                ACCOUNT_COUNT="$2"
+                shift 2
+                ;;
+            --amount)
+                ACCOUNT_AMOUNT="$2"
+                shift 2
+                ;;
+            --mnemonic)
+                MNEMONIC="$2"
+                shift 2
+                ;;
+            --help|-h)
+                show_help
+                exit 0
+                ;;
+            *)
+                # Unknown option
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Show help
+show_help() {
+    echo "Usage: $0 {start|stop|restart|status|logs|cleanup|init|regenerate-consensus|regenerate-genesis} [OPTIONS]"
+    echo
+    echo "Commands:"
+    echo "  start        - Start the local network (default)"
+    echo "  stop         - Stop the local network"
+    echo "  restart      - Restart the local network"
+    echo "  status       - Show network status"
+    echo "  logs [service] - Show logs (all services or specific service)"
+    echo "  cleanup      - Clean up all data and stop network"
+    echo "  init         - Initialize node data without starting"
+    echo "  regenerate-consensus - Regenerate consensus node configuration files"
+    echo "  regenerate-genesis - Regenerate prefunded genesis.json with new accounts"
+    echo
+    echo "Options:"
+    echo "  --ws         - Enable WebSocket support (default)"
+    echo "  --no-ws      - Disable WebSocket support"
+    echo "  --accounts N - Number of accounts to generate (default: $DEFAULT_ACCOUNT_NUMBER)"
+    echo "  --amount X   - Amount in wei to fund each account (default: $DEFAULT_ACCOUNT_AMOUNT)"
+    echo "  --mnemonic \"...\" - Mnemonic phrase for account generation (default: test mnemonic)"
+    echo "  --help, -h   - Show this help message"
+    echo
+    echo "Examples:"
+    echo "  $0 start                                    # Start with default settings"
+    echo "  $0 start --accounts 50 --amount 500000000000000000000  # 50 accounts with 500 ETH each"
+    echo "  $0 regenerate-genesis --accounts 200       # Generate 200 prefunded accounts"
+    echo "  $0 start --no-ws                           # Start without WebSocket"
+    echo "  $0 logs execution-node1                    # Show logs for execution node 1"
+    echo "  $0 status                                  # Show network status"
+}
+
+# Parse arguments first
+parse_arguments "$@"
+
 # Main script logic
-case "${1:-start}" in
+case "$COMMAND" in
     "start")
         check_prerequisites
         setup_directories
@@ -524,23 +801,35 @@ case "${1:-start}" in
         done
         log_success "Initialization complete!"
         ;;
+    "regenerate-consensus")
+        log_info "Regenerating consensus node configuration files..."
+        
+        # Regenerate files for all consensus nodes
+        for i in {1..4}; do
+            generate_consensus_files "$i"
+            generate_consensus_node_config "$i"
+        done
+        
+        log_success "Consensus configuration files regenerated for all nodes!"
+        ;;
+    "prefund")
+        prefund_genesis
+        ;;
+    "regenerate-genesis")
+        log_info "Regenerating prefunded genesis.json..."
+        
+        check_prerequisites
+        setup_directories
+        build_project
+        prefund_genesis
+        
+        log_success "Prefunded genesis.json regenerated!"
+        log_info "Genesis file: $GENESIS_OUTPUT_DIR/genesis.json"
+        log_info "Account count: $ACCOUNT_COUNT"
+        log_info "Amount per account: $ACCOUNT_AMOUNT wei"
+        ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|logs|cleanup|init}"
-        echo
-        echo "Commands:"
-        echo "  start        - Start the local network (default)"
-        echo "  stop         - Stop the local network"
-        echo "  restart      - Restart the local network"
-        echo "  status       - Show network status"
-        echo "  logs [service] - Show logs (all services or specific service)"
-        echo "  cleanup      - Clean up all data and stop network"
-        echo "  init         - Initialize node data without starting"
-        echo
-        echo "Examples:"
-        echo "  $0 start"
-        echo "  $0 logs execution-node1"
-        echo "  $0 logs consensus-node1"
-        echo "  $0 status"
+        show_help
         exit 1
         ;;
 esac

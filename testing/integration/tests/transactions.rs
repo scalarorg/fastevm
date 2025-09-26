@@ -10,8 +10,9 @@
 //! to be running and properly configured with test accounts.
 
 use alloy::hex::ToHexExt;
-use alloy_primitives::Address;
+use alloy_primitives::{hex, Address};
 use alloy_provider::{Provider, ProviderBuilder};
+use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
 use rand::Rng;
 use std::env;
@@ -186,12 +187,13 @@ async fn broadcast_transaction() -> Result<()> {
     println!("nonce: {:?}", &nonce);
     // Create and sign the transfer transaction
     // In evm network nonce start from 0
+    let private_key = hex::decode_to_array::<_, 32>(&sender_privkey)?;
     let tx_envelope = match create_transfer_transaction(
-        &sender_privkey,
+        &private_key,
         &recipient_addr,
         chain_id,
         gwei_amount,
-        nonce,
+        Some(nonce),
     )
     .await
     {
@@ -545,12 +547,13 @@ async fn test_multi_transactions() -> Result<()> {
                 };
 
                 // Create and sign the transaction
+                let private_key = hex::decode_to_array::<_, 32>(private_key)?;
                 let tx_envelope = match create_transfer_transaction(
-                    private_key,
+                    &private_key,
                     &recipient_address.to_string(),
                     chain_id,
                     *amount,
-                    nonce,
+                    Some(nonce),
                 )
                 .await
                 {
@@ -691,10 +694,10 @@ async fn test_bulk_transactions() -> Result<()> {
 
     // Define node configurations (RPC endpoints)
     let node_urls = vec![
-        "http://localhost:8545",
-        "http://localhost:8547",
-        "http://localhost:8549",
-        "http://localhost:8555",
+        env::var("RPC_URL1")?,
+        env::var("RPC_URL2")?,
+        env::var("RPC_URL3")?,
+        env::var("RPC_URL4")?,
     ];
 
     // Get number of recipients to generate (default 100, max 1000)
@@ -717,6 +720,7 @@ async fn test_bulk_transactions() -> Result<()> {
     let mut providers = Vec::new();
     for (node_idx, rpc_url) in node_urls.iter().enumerate() {
         // Attempt to connect to the Ethereum provider
+        println!("Connecting to Ethereum network at {:?}", &rpc_url);
         let provider = match ProviderBuilder::new().connect(&rpc_url).await {
             Ok(provider) => provider,
             Err(e) => {
@@ -732,7 +736,7 @@ async fn test_bulk_transactions() -> Result<()> {
         };
         providers.push(provider);
     }
-    let mut address_nonces = get_nonces(&addresses, &node_urls).await;
+    let mut address_nonces = get_nonces(&addresses, &node_urls[0]).await;
     println!("Initial nonces: {:?}", address_nonces);
 
     // Generate recipient addresses from mnemonic
@@ -772,12 +776,13 @@ async fn test_bulk_transactions() -> Result<()> {
             current_nonce
         );
         // Create and sign the transfer transaction
+        let private_key = hex::decode_to_array::<_, 32>(sender_privkey)?;
         let tx_envelope = match create_transfer_transaction(
-            &sender_privkey,
+            &private_key,
             &recipient.to_string(),
             chain_id,
             transaction_amount,
-            current_nonce,
+            Some(current_nonce),
         )
         .await
         {
@@ -860,7 +865,7 @@ async fn test_bulk_transactions() -> Result<()> {
     println!("Final nonces: {:?}", address_nonces);
     println!("Sleeping for 30 seconds");
     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-    let address_nonces = get_nonces(&addresses, &node_urls).await;
+    let address_nonces = get_nonces(&addresses, &node_urls[0]).await;
     println!("Address nonces from network: {:?}", address_nonces);
     // Test passes if we have at least some successful transactions
     if successful_transactions > 0 {

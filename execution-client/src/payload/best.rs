@@ -41,7 +41,7 @@ pub struct BestMysticetiTransactions<T: PoolTransaction> {
 
 impl<T: PoolTransaction> BestMysticetiTransactions<T> {
     pub fn new(
-        pooled_transactions: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
+        reth_best_txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
         subdag_transactions: Vec<T>,
     ) -> Self {
         let mut best_transactions = Self {
@@ -55,19 +55,23 @@ impl<T: PoolTransaction> BestMysticetiTransactions<T> {
             "Create best transactions with {} subdag transactions",
             subdag_transactions.len()
         );
-        best_transactions.populate_transactions(pooled_transactions, subdag_transactions);
+        let added_count =
+            best_transactions.populate_transactions(reth_best_txs, subdag_transactions);
+        debug!("Added {} subdag transactions to pool", added_count);
         best_transactions
     }
     pub(crate) fn populate_transactions(
         &mut self,
-        mut pooled_transactions: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
+        mut reth_best_txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
         subdag_transactions: Vec<T>,
-    ) {
+    ) -> usize {
+        let mut added_count = 0;
         for commtted_tx in subdag_transactions {
             //let tx_hash = TxHash::from_slice(&tx_bytes);
-            if let Some(tx) = pooled_transactions
+            if let Some(tx) = reth_best_txs
                 .find(|pool_tx: &Arc<ValidPoolTransaction<T>>| pool_tx.hash() == commtted_tx.hash())
             {
+                added_count += 1;
                 self.add_transaction(Arc::clone(&tx));
             } else {
                 //This branch must not happen
@@ -77,6 +81,7 @@ impl<T: PoolTransaction> BestMysticetiTransactions<T> {
                 );
             }
         }
+        added_count
     }
 }
 impl<T: PoolTransaction> BestMysticetiTransactions<T> {
