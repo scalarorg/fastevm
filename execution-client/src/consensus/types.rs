@@ -1,5 +1,6 @@
 use reth_ethereum::node::api::PayloadTypes;
 use reth_ethereum_engine_primitives::EthPayloadTypes;
+use reth_extension::CommittedTransactions;
 use reth_payload_builder::PayloadId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,4 +51,25 @@ where
     pub fn is_executed(&self) -> bool {
         self.status == ProposalBlockStatus::Executed
     }
+}
+
+// #[derive(Debug, Clone, Copy)]
+// pub struct CommittedSugDagInfo {
+//     index: u32,
+//     timestamp: u64,
+//     round: u32,
+// }
+
+// impl<Transaction> From<&CommittedTransactions<Transaction>> for CommittedSugDagInfo {
+//     fn from(committed_transactions: &CommittedTransactions<Transaction>) -> Self {
+//         Self {
+//             index: committed_transactions.commit_ref.index,
+//             timestamp: committed_transactions.timestamp_ms,
+//             round: committed_transactions.leader.round,
+//         }
+//     }
+// }
+pub struct BatchCommittedSubDag<Transaction> {
+    pub first_committed_subdag: CommittedTransactions<Transaction>,
+    pub last_committed_subdag: CommittedTransactions<Transaction>,
 }

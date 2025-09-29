@@ -17,17 +17,6 @@ use reth_extension::{encode_transactions, TxpoolListenerApiServer};
 const BATCH_SIZE_THRESHOLD: usize = 10; // Send batch when we have 10 transactions
 const BATCH_TIMEOUT_MS: u64 = 1000; // Send batch after 1 second even if not full
 
-/// Our custom cli args extension that adds one flag to reth default CLI.
-#[derive(Debug, Clone, Copy, Default, clap::Args)]
-pub(crate) struct CliTxpoolListener {
-    /// CLI flag to enable the txpool extension namespace
-    #[arg(long)]
-    pub enable_txpool_listener: bool,
-    /// Number of transactions to send in a batch
-    #[arg(long)]
-    pub committed_subdags_per_block: usize,
-}
-
 /// The type that implements the `txpool` rpc namespace trait
 #[derive(Debug)]
 pub struct TxpoolListener<Pool> {
@@ -117,25 +106,6 @@ mod tests {
     use reth_ethereum::pool::noop::NoopTransactionPool;
     use reth_extension::TxpoolListenerApiClient;
     use reth_rpc_layer::{secret_to_bearer_header, JwtSecret};
-    #[test]
-    fn test_cli_txpool_listener_default() {
-        let cli = CliTxpoolListener::default();
-        assert!(!cli.enable_txpool_listener);
-    }
-
-    #[test]
-    fn test_cli_txpool_listener_debug() {
-        let cli = CliTxpoolListener::default();
-        let debug_str = format!("{:?}", cli);
-        assert!(debug_str.contains("CliTxpoolListener"));
-    }
-
-    #[test]
-    fn test_cli_txpool_listener_clone() {
-        let cli = CliTxpoolListener::default();
-        let cloned = cli;
-        assert_eq!(cli.enable_txpool_listener, cloned.enable_txpool_listener);
-    }
 
     #[test]
     fn test_transaction_listener_components() {

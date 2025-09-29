@@ -19,7 +19,7 @@ use clap::Parser;
 use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
-    rpc::{CliTxpoolListener, ConsensusTransactionsHandler, TxpoolListener},
+    rpc::{ConsensusTransactionsHandler, TxpoolListener},
 };
 
 use reth_ethereum::{
@@ -44,6 +44,20 @@ use secp256k1 as _;
 use serde_json as _;
 use sha2 as _;
 
+/// Our custom cli args extension that adds one flag to reth default CLI.
+#[derive(Debug, Clone, Copy, Default, clap::Args)]
+pub(crate) struct CliMysticetiArgs {
+    /// CLI flag to enable the txpool extension namespace
+    #[arg(long)]
+    pub enable_txpool_listener: bool,
+    /// Number of transactions to send in a batch
+    #[arg(long)]
+    pub committed_subdags_per_block: usize,
+    /// Build interval in milliseconds
+    #[arg(long)]
+    pub block_build_interval_ms: u64,
+}
+
 /// Flow hook execution:
 /// on_component_initialized
 /// Exex
@@ -51,7 +65,7 @@ use sha2 as _;
 /// on_rpc_started
 /// on_node_started:
 fn main() {
-    Cli::<EthereumChainSpecParser, CliTxpoolListener>::parse()
+    Cli::<EthereumChainSpecParser, CliMysticetiArgs>::parse()
         .run(|builder, args| async move {
             //Create a channel for sending subdag received from rpc server to BeaconConsensusEngineHandle
             // let (subdag_tx, subdag_rx) = unbounded_channel();
@@ -102,6 +116,7 @@ fn main() {
                         node.provider,
                         payload_builder_handle,
                         engine_handle,
+                        args.block_build_interval_ms,
                     );
                     node.task_executor.spawn(async move {
                         mysticeti_consensus.start().await;
