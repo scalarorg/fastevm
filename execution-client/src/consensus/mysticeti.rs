@@ -19,8 +19,6 @@ use tracing::{debug, error, info};
 
 use crate::consensus::{ConsensusPool, ProposalBlock};
 
-const BLOCK_INTERVAL: u64 = 3000; //3 second
-
 // const WAITING_PENDING_TXS_TIMEOUT: u64 = 3000; // 10 second timeout
 // const WAITING_PENDING_TXS_INTERVAL: u64 = 100; // 1 second interval
 
@@ -39,6 +37,7 @@ where
     //Keep track of the last payload
     //This payload is used to build new forkchoice state and next payloadAttribute
     proposal_block: Option<ProposalBlock<Payload>>,
+    block_build_interval: u64,
 }
 
 impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
@@ -52,6 +51,7 @@ where
         provider: Provider,
         payload_builder_handle: PayloadBuilderHandle<Payload>,
         engine_handle: BeaconConsensusEngineHandle<Payload>,
+        block_build_interval: u64,
     ) -> Self {
         Self {
             consensus_pool,
@@ -59,6 +59,7 @@ where
             engine_handle,
             provider,
             proposal_block: None,
+            block_build_interval,
         }
     }
 }
@@ -176,8 +177,9 @@ where
 {
     pub async fn start(&mut self) {
         //TODO: Add configurable interval
-        let mut interval =
-            tokio::time::interval(tokio::time::Duration::from_millis(BLOCK_INTERVAL));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(
+            self.block_build_interval,
+        ));
         loop {
             //Try process proposal block
             let has_proposal_block = self.has_proposal_block();
@@ -222,35 +224,42 @@ where
         &mut self,
         last_built_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
     ) -> Result<Option<PayloadId>> {
-        let committed_transactions = self.consensus_pool.last_committed_transaction_in_batch();
-        if let Some(committed_transactions) = committed_transactions {
+        let next_committed_subdag_batch = self.consensus_pool.next_committed_subdag_batch();
+        // let committed_transactions = self.consensus_pool.last_committed_transaction_in_batch();
+        if let Some(committed_batch) = next_committed_subdag_batch {
             debug!(
-                "Create proposal block with committed transactions: Round: {:?}, Author: {:?}, Leader Digest: {:?}, Timestamp: {:?}, Number of transactions: {:?}",
-                committed_transactions.leader.round,
-                committed_transactions.leader.author,
-                hex::encode(committed_transactions.leader.digest.as_ref()),
-                committed_transactions.timestamp_ms,
-                committed_transactions.transactions.len()
+                "Create proposal block with committed batch size: {:?}:
+                FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
+                 LastCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}
+                 Queue size: {:?}",
+                committed_batch.last_committed_subdag.commit_ref.index
+                    - committed_batch.first_committed_subdag.commit_ref.index
+                    + 1,
+                committed_batch.first_committed_subdag.commit_ref.index,
+                committed_batch.first_committed_subdag.timestamp_ms,
+                committed_batch.first_committed_subdag.leader.round,
+                committed_batch.last_committed_subdag.commit_ref.index,
+                committed_batch.last_committed_subdag.timestamp_ms,
+                committed_batch.last_committed_subdag.leader.round,
+                self.consensus_pool.queue_size(),
             );
             let last_block_hash = last_built_payload
                 .as_ref()
                 .map(|payload| payload.block().hash());
             let forkchoice_state = self.create_forkchoice_state(last_block_hash).await;
-            //Create payload attributes with timestamp in seconds
-            let leader_digest: [u8; 32] = committed_transactions
+            let leader_digest: [u8; 32] = committed_batch
+                .last_committed_subdag
                 .leader
                 .digest
                 .as_ref()
                 .try_into()
                 .expect("Leader digest must be exactly 32 bytes");
-
-            let payload_attributes = self
-                .create_payload_attributes(
-                    committed_transactions.timestamp_ms / 1000,
-                    leader_digest,
-                    last_built_payload,
-                )
-                .await;
+            //Create payload attributes with timestamp in seconds
+            let payload_attributes = self.create_payload_attributes(
+                committed_batch.last_committed_subdag.timestamp_ms / 1000,
+                leader_digest,
+                last_built_payload,
+            );
             debug!(
                 "Forkchoice state: {:?}, Payload attributes: {:?}",
                 forkchoice_state, payload_attributes
@@ -288,7 +297,7 @@ where
     }
     /// Create next payload attributes
     /// This attributes must be equals on all the nodes
-    async fn create_payload_attributes(
+    fn create_payload_attributes(
         &self,
         timestamp: u64,
         leader_digest: [u8; 32],
@@ -342,7 +351,7 @@ where
         let proposal_block_executed = self.proposal_block_executed();
         if proposal_block_executed == Some(true) {
             let proposal_block = self.proposal_block.as_ref().unwrap();
-            debug!(
+            trace!(
                 "Current proposal block with payload id {:?} is executed. Try to build next one.",
                 proposal_block.payload_id
             );

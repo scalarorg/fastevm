@@ -13,6 +13,8 @@ use std::{
 };
 use tracing::debug;
 
+use crate::consensus::BatchCommittedSubDag;
+
 /// Struct to store committed transactions and pooled transactions
 /// Pooled transactions are transactions from committed transactions that are added to the reth pool
 // struct PooledCommittedTransactions<Transaction: PoolTransaction> {
@@ -48,6 +50,34 @@ where
             commited_queue: RwLock::new(BTreeMap::new()),
             pending_transactions: RwLock::new(Vec::new()),
             lock: Mutex::new(()),
+        }
+    }
+    pub fn next_committed_subdag_batch(&self) -> Option<BatchCommittedSubDag<Pool::Transaction>> {
+        let next_committed_index = *self.next_committed_index.read().unwrap();
+        let last_index = next_committed_index + self.committed_subdags_per_block as u64 - 1;
+        let commited_queue = self.commited_queue.read().unwrap();
+        let mut first_committed_transactions = None;
+        let mut last_committed_transactions = None;
+        for i in next_committed_index..=last_index {
+            let committed_transactions = commited_queue.get(&i);
+            if committed_transactions.is_none() {
+                return None;
+            }
+            if i == next_committed_index {
+                first_committed_transactions = committed_transactions;
+            }
+            if i == last_index {
+                last_committed_transactions = committed_transactions;
+            }
+        }
+        match (first_committed_transactions, last_committed_transactions) {
+            (Some(first_committed_transactions), Some(last_committed_transactions)) => {
+                Some(BatchCommittedSubDag {
+                    first_committed_subdag: first_committed_transactions.clone(),
+                    last_committed_subdag: last_committed_transactions.clone(),
+                })
+            }
+            _ => None,
         }
     }
     /// Get last committed transactions in the next committed batch

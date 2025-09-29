@@ -172,7 +172,7 @@ async fn send_transaction_with_check_nonce(
         .await?;
     // check if all transactions are mined
     let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let expected_duration = (account_number as u64) * number_of_transactions * 1000;
+    let expected_duration = (account_number as u64) * number_of_transactions * 1;
     let timeout = Duration::from_millis(expected_duration);
     let start_time = Instant::now();
     let mut success_count = 0;
@@ -404,13 +404,13 @@ async fn send_batch_transfer_transactions(
                 }
             }
 
-            // Small delay between transactions to avoid overwhelming the nodes
-            if transaction_counter % 20 == 0 {
+            // Small delay between transactions to avoid overwhelming the nodesx
+            if transaction_counter % 100 == 0 {
                 println!(
                     "   ⏸️  Pausing briefly after {} transactions...",
                     transaction_counter
                 );
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             }
         }
     }

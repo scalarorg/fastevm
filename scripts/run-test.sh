@@ -13,6 +13,8 @@ batch_txs() {
     elif [ "$number_of_txs" -eq 100 ]; then
         cargo test --test batch test_batch_transfer_100  -- --show-output
     fi
+    
+    check_nonces
 }
 
 bulk_txs() {

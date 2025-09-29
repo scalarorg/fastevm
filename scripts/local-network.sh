@@ -463,7 +463,8 @@ start_execution_node() {
         "--p2p-secret-key" "$data_dir/p2p/secret.key"
         "--bootnodes" "$bootnodes"
         "--enable-txpool-listener"
-        "--committed-subdags-per-block" "10"
+        "--committed-subdags-per-block" "30"
+        "--block-build-interval-ms" "100"
         "-vvvv"
     )
     
