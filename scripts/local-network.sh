@@ -31,7 +31,7 @@ EXECUTION_CLIENT=$PROJECT_ROOT/target/release/fastevm-execution
 CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
 
 # Default values for account generation
-DEFAULT_ACCOUNT_NUMBER=100
+DEFAULT_ACCOUNT_NUMBER=1000
 DEFAULT_ACCOUNT_AMOUNT="1000000000000000000000"  # 1000 ETH in wei
 DEFAULT_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -470,7 +470,13 @@ start_execution_node() {
     
     # Add --txpool.max-account-slots
     cmd_args+=(
-        "--txpool.max-account-slots" "32"
+        "--txpool.max-account-slots" "10240"
+        "--txpool.max-pending-txns" "10240"
+        --txpool.pending-max-count "10240"
+        --txpool.pending-max-size "128"
+        "--txpool.max-new-txns" "10240"
+        --txpool.max-new-pending-txs-notifications "10240"
+
     )
     # Start the node
     nohup "$EXECUTION_CLIENT" "${cmd_args[@]}" > "$log_file" 2>&1 &
@@ -594,7 +600,20 @@ stop_network() {
     
     # Clean up PID files
     rm -f "$PIDS_DIR"/*.pid
-    
+    # Stop mysticeti process
+    # List of ports you want to kill
+    PORTS=(26657 26658 26659 26660)
+
+    for PORT in "${PORTS[@]}"; do
+        PID=$(lsof -ti :$PORT)
+        if [ -n "$PID" ]; then
+            echo "🔪 Killing process $PID on port $PORT"
+            kill -9 $PID
+        else
+            echo "✅ No process found on port $PORT"
+        fi
+    done
+
     log_success "Network stopped!"
 }
 

@@ -5,10 +5,10 @@
 use alloy_consensus::Transaction;
 use alloy_primitives::{keccak256, Bytes, TxHash, B256};
 use reth_ethereum::rpc::types::engine::ExecutionPayload;
-use reth_extension::CommittedTransactions;
+use reth_extension::MysticetiCommittedSubdag;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex, RwLock},
 };
 use tracing::debug;
@@ -30,7 +30,7 @@ where
     committed_subdags_per_block: usize,
     next_committed_index: RwLock<u64>,
     //Store committed transactions (converted from subdag) in queue
-    commited_queue: RwLock<BTreeMap<u64, CommittedTransactions<Pool::Transaction>>>,
+    commited_queue: RwLock<BTreeMap<u64, MysticetiCommittedSubdag<Pool::Transaction>>>,
     // Transactions are not included into last payload due to missing of ancestors
     pending_transactions: RwLock<Vec<Arc<Pool::Transaction>>>,
 
@@ -80,41 +80,6 @@ where
             _ => None,
         }
     }
-    /// Get last committed transactions in the next committed batch
-    pub fn last_committed_transaction_in_batch(
-        &self,
-    ) -> Option<CommittedTransactions<Pool::Transaction>> {
-        let next_committed_index = *self.next_committed_index.read().unwrap();
-        let committed_transactions = {
-            let last_index = next_committed_index + self.committed_subdags_per_block as u64 - 1;
-            let commited_queue = self.commited_queue.read().unwrap();
-            let committed_transactions = commited_queue.get(&last_index).map(|tx| tx.clone());
-            if committed_transactions.is_none() {
-                if commited_queue.len() < self.committed_subdags_per_block {
-                    debug!(
-                        "Next committed index: {}. Queue size: {}. Waiting for next batch.",
-                        next_committed_index,
-                        commited_queue.len()
-                    );
-                } else {
-                    //Find all missing committed transactions
-                    let mut missing_committed_transactions = Vec::new();
-                    for i in next_committed_index..=last_index {
-                        let committed_transactions = commited_queue.get(&i);
-                        if committed_transactions.is_none() {
-                            missing_committed_transactions.push(i);
-                        }
-                    }
-                    debug!(
-                        "Next committed index: {}. Missing committed transactions: {:?}.",
-                        next_committed_index, missing_committed_transactions
-                    );
-                }
-            }
-            committed_transactions
-        };
-        committed_transactions
-    }
     /// Get queue size
     pub fn queue_size(&self) -> usize {
         self.commited_queue.read().unwrap().len()
@@ -125,21 +90,27 @@ impl<Pool: TransactionPool> ConsensusPool<Pool>
 where
     Pool: TransactionPool,
 {
-    pub fn add_committed_transactions(
+    pub fn add_committed_subdags(
         &self,
-        committed_transactions: CommittedTransactions<Pool::Transaction>,
+        committed_subdags: Vec<MysticetiCommittedSubdag<Pool::Transaction>>,
     ) {
-        self.commited_queue.write().unwrap().insert(
-            committed_transactions.commit_ref.index as u64,
-            committed_transactions,
+        let len = committed_subdags.len();
+        let mut committed_queue = self.commited_queue.write().unwrap();
+        for committed_subdag in committed_subdags {
+            committed_queue.insert(committed_subdag.commit_ref.index as u64, committed_subdag);
+        }
+        debug!(
+            "Added {} committed subdags to queue. Queue size: {:?}",
+            len,
+            committed_queue.len()
         );
     }
     /// Append transactions from next committed subdags to pending transactions
-    /// TODO: Add some system transaction
+    /// Sort transactions by nonce-based ordering
     pub fn append_proposal_transactions(
         &self,
         pending_transactions: &mut Vec<Arc<Pool::Transaction>>,
-        next_committed_subdags_batch: Vec<CommittedTransactions<Pool::Transaction>>,
+        next_committed_subdags_batch: Vec<MysticetiCommittedSubdag<Pool::Transaction>>,
     ) {
         let first_committed_transactions = next_committed_subdags_batch.first().unwrap();
         let last_committed_transactions = next_committed_subdags_batch.last().unwrap();
@@ -149,83 +120,37 @@ where
             first_committed_transactions.commit_ref.index,
             last_committed_transactions.commit_ref.index,
         );
-        for committed_transactions in next_committed_subdags_batch {
-            pending_transactions.extend(committed_transactions.transactions);
+        //Map keep all sender's transactions
+        let mut map_sender_txs = HashMap::new();
+        for tx in pending_transactions.iter() {
+            map_sender_txs
+                .entry(tx.sender())
+                .or_insert(BTreeMap::new())
+                .insert(tx.nonce(), Arc::clone(tx));
+        }
+        for committed_transactions in next_committed_subdags_batch.iter() {
+            for tx in committed_transactions.transactions.iter() {
+                map_sender_txs
+                    .entry(tx.sender())
+                    .or_insert(BTreeMap::new())
+                    .insert(tx.nonce(), Arc::clone(tx));
+            }
         }
 
-        // Sort transactions by nonce-based ordering:
-        // 1. Find minimum expected nonce for each sender
-        // 2. Pick transactions with minimum nonce for each sender
-        // 3. Repeat until no more transactions can be picked
-        // 4. Put remaining transactions at the end
-        self.sort_transactions_by_nonce(pending_transactions);
-    }
-
-    /// Sort transactions by nonce-based ordering:
-    /// 1. Find minimum expected nonce for each sender
-    /// 2. Pick transactions with minimum nonce for each sender
-    /// 3. Repeat until no more transactions can be picked
-    /// 4. Put remaining transactions at the end
-    fn sort_transactions_by_nonce(&self, pending_transactions: &mut Vec<Arc<Pool::Transaction>>) {
-        if pending_transactions.is_empty() {
-            return;
-        }
-
+        // Get all transaction by order of nonce
         let mut sorted_transactions = Vec::new();
-        let mut remaining_transactions = pending_transactions.clone();
-
-        // Track expected nonce for each sender, start with minimun nonce in the pending transactions
-        // Some senders may have missing nonce, their transactions will be marked as invalid
-        let mut sender_expected_nonce: BTreeMap<alloy_primitives::Address, u64> = BTreeMap::new();
-
-        // Find minimum nonce for each sender
-        for tx in &remaining_transactions {
-            let sender = tx.sender();
-            let nonce = tx.nonce();
-            sender_expected_nonce
-                .entry(sender)
-                .and_modify(|expected| *expected = (*expected).min(nonce))
-                .or_insert(nonce);
+        for tx in pending_transactions.iter() {
+            if let Some((_, tx)) = map_sender_txs.get_mut(&tx.sender()).unwrap().pop_first() {
+                sorted_transactions.push(tx);
+            }
         }
-
-        loop {
-            let mut picked_any = false;
-            let mut picked_indices = Vec::new();
-
-            // Pick transactions with minimum expected nonce for each sender
-            for (i, tx) in remaining_transactions.iter().enumerate() {
-                let sender = tx.sender();
-                let nonce = tx.nonce();
-
-                if let Some(&expected_nonce) = sender_expected_nonce.get(&sender) {
-                    if nonce == expected_nonce {
-                        sorted_transactions.push(tx.clone());
-                        picked_indices.push(i);
-                        picked_any = true;
-
-                        // Increment expected nonce for this sender
-                        *sender_expected_nonce.get_mut(&sender).unwrap() += 1;
-                    }
+        for committed_transactions in next_committed_subdags_batch {
+            for tx in committed_transactions.transactions.iter() {
+                if let Some((_, tx)) = map_sender_txs.get_mut(&tx.sender()).unwrap().pop_first() {
+                    sorted_transactions.push(tx);
                 }
             }
-
-            // Remove picked transactions from remaining (in reverse order to maintain indices)
-            for &i in picked_indices.iter().rev() {
-                remaining_transactions.remove(i);
-            }
-
-            // If no transactions were picked in this iteration, we're done
-            if !picked_any {
-                break;
-            }
         }
-        if !remaining_transactions.is_empty() {
-            debug!("Remaining transactions: {:?}", remaining_transactions.len());
-            // Add remaining transactions at the end
-            sorted_transactions.extend(remaining_transactions);
-        }
-
-        // Replace the original vector with sorted transactions
         *pending_transactions = sorted_transactions;
     }
 

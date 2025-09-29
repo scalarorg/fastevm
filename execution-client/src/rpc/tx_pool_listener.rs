@@ -3,19 +3,17 @@ use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     PendingSubscriptionSink,
 };
-
 use reth_ethereum::pool::TransactionPool;
 use reth_transaction_pool::{NewTransactionEvent, ValidPoolTransaction};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::interval;
 use tracing::info;
 
 use reth_extension::{encode_transactions, TxpoolListenerApiServer};
 
 // Configuration constants for transaction batching
-const BATCH_SIZE_THRESHOLD: usize = 10; // Send batch when we have 10 transactions
-const BATCH_TIMEOUT_MS: u64 = 1000; // Send batch after 1 second even if not full
+const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 10 transactions
+const BATCH_TIMEOUT_MS: u64 = 10; // Send batch after 1 second even if not full
 
 /// The type that implements the `txpool` rpc namespace trait
 #[derive(Debug)]
@@ -42,9 +40,6 @@ where
         pending_subscription_sink: PendingSubscriptionSink,
     ) -> SubscriptionResult {
         let pool = self.pool.clone();
-        // let pending_transactions = pool.pending_transactions_listener();
-        // // Convert Receiver to Stream
-        // let mut stream = ReceiverStream::new(pending_transactions);
         let mut stream = pool.new_pending_pool_transactions_listener();
         // Spawn an async block to listen for transactions.
         tokio::spawn(Box::pin(async move {
@@ -61,20 +56,63 @@ where
                 Vec::new();
 
             // Create a periodic timer for batch timeout
-            let mut batch_timer = interval(Duration::from_millis(BATCH_TIMEOUT_MS));
-
+            let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
+            let mut total_send_txs = 0_u64;
+            //let mut last_sent = std::timeInstant::now();
             // Waiting for new transactions
+            // let mut disconnected = false;
+            // while !disconnected {
+            //     // Try to get all transactions from stream
+            //     match stream.try_recv() {
+            //         Ok(NewTransactionEvent { transaction, .. }) => {
+            //             if transaction.is_local() {
+            //                 info!("Received local transaction: {:?}", transaction.hash());
+            //                 buffer.push(transaction);
+            //             } else {
+            //                 info!("Received peer transaction: {:?}", transaction.hash());
+            //             }
+            //         }
+            //         Err(e) => match e {
+            //             TryRecvError::Disconnected => {
+            //                 error!("Transaction stream disconnected.");
+            //                 disconnected = true;
+            //             }
+            //             TryRecvError::Empty => {
+            //                 // Do nothing
+            //             }
+            //         },
+            //     }
+            //     if buffer.len() >= BATCH_SIZE_THRESHOLD
+            //         || buffer.len() > 0
+            //             && (last_sent.elapsed() >= Duration::from_millis(BATCH_TIMEOUT_MS)
+            //                 || !disconnected)
+            //     {
+            //         total_send_txs += buffer.len() as u64;
+            //         info!(
+            //             "Sending batch of {} transactions. Total sent transactions: {}",
+            //             buffer.len(),
+            //             total_send_txs
+            //         );
+            //         let batch = std::mem::take(&mut buffer);
+            //         let msg = encode_transactions(batch);
+            //         let _ = sink.send(msg).await;
+            //         last_sent = std::time::Instant::now();
+            //     }
+            //     // Sleep to avoid busy waiting
+            //     std::thread::sleep(Duration::from_millis(10));
+            //     //End loop
+            // }
             loop {
                 tokio::select! {
                     // Handle new transaction events
                     Some(NewTransactionEvent { transaction, .. }) = stream.next() => {
-                        info!("Transaction received: {transaction:?}");
                         if transaction.is_local() {
                             // because of this push, buffer has at least 1 transaction
                             buffer.push(transaction);
                             // Send batch if threshold is reached
                             if buffer.len() >= BATCH_SIZE_THRESHOLD {
-                                info!("Sending batch of {} transactions", buffer.len());
+                                total_send_txs += buffer.len() as u64;
+                                info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                                 let batch = std::mem::take(&mut buffer);
                                 let msg = encode_transactions(batch);
                                 let _ = sink.send(msg).await;
@@ -84,13 +122,16 @@ where
                     // Handle batch timeout
                     _ = batch_timer.tick() => {
                         if !buffer.is_empty() {
-                            info!("Sending batch of {} transactions", buffer.len());
+                            total_send_txs += buffer.len() as u64;
+                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
                             let msg = encode_transactions(batch);
                             let _ = sink.send(msg).await;
                         }
+                        batch_timer.reset();
                     }
                 }
+                //End loop
             }
         }));
         Ok(())

@@ -15,7 +15,7 @@ use reth_ethereum_engine_primitives::EthEngineTypes;
 use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
 use reth_transaction_pool::TransactionPool;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 use crate::consensus::{ConsensusPool, ProposalBlock};
 
@@ -202,7 +202,6 @@ where
                     }
                 }
             } else {
-                debug!("No proposal block. Try build next one.");
                 match self.build_next_proposal_block(None).await {
                     Ok(Some(payload_id)) => {
                         debug!(

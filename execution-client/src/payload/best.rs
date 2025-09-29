@@ -47,12 +47,6 @@ impl<T: PoolTransaction> Iterator for BestMysticetiTransactions<T> {
     fn next(&mut self) -> Option<Self::Item> {
         //1 Pick first transaction from mysticeti transactions
         let consensus_tx = self.mysticeti_txs.pop_front()?;
-        debug!(
-            "BestMysticetiTransactions# Pick transaction: {:?}, sender {:?}, nonce {:?}",
-            consensus_tx.hash(),
-            consensus_tx.sender_ref(),
-            consensus_tx.nonce()
-        );
         Some(consensus_tx)
     }
 }

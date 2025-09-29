@@ -44,7 +44,7 @@ use tokio::time::sleep;
 const TEST_MNEMONIC: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
-const NUMBER_OF_SENDERS: usize = 100;
+const NUMBER_OF_SENDERS: usize = 1000;
 /// Test that generates 100 sender addresses and sends batch transactions.
 ///
 /// This test performs the following steps:
@@ -405,13 +405,13 @@ async fn send_batch_transfer_transactions(
             }
 
             // Small delay between transactions to avoid overwhelming the nodesx
-            if transaction_counter % 100 == 0 {
-                println!(
-                    "   ⏸️  Pausing briefly after {} transactions...",
-                    transaction_counter
-                );
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            }
+            // if transaction_counter % 100 == 0 {
+            //     println!(
+            //         "   ⏸️  Pausing briefly after {} transactions...",
+            //         transaction_counter
+            //     );
+            //     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            // }
         }
     }
 
