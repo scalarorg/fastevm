@@ -12,6 +12,9 @@ use reth_rpc_layer::{secret_to_bearer_header, AuthClientLayer, JwtSecret};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
+const BATCH_SIZE: usize = 10;
+const SEND_INTERVAL: u64 = 500; //In milliseconds
+
 pub type PayloadItem = Vec<Bytes>;
 pub struct ExecutionClient {
     config: NodeConfig,
@@ -129,83 +132,112 @@ impl ExecutionClient {
             .await
             .expect("failed to subscribe");
 
-        // Test connection by exchanging capabilities
-        // let capabilities =
-        //     match EngineApiClient::<EthEngineTypes>::exchange_capabilities(&http_client, vec![])
-        //         .await
-        //     {
-        //         Ok(caps) => {
-        //             info!(
-        //                 "Successfully connected to execution client. Capabilities: {:?}",
-        //                 caps
-        //             );
-        //             caps
-        //         }
-        //         Err(e) => {
-        //             error!("Failed to connect to execution client: {:?}", e);
-        //             error!(
-        //                 "Execution URL: {}, JWT Secret: {}...",
-        //                 self.config.execution_url,
-        //                 &self.config.jwt_secret[..10]
-        //             );
-        //             return Err(anyhow!("Failed to connect to execution client: {:?}", e));
-        //         }
-        //     };
-
-        // let mut interval = time::interval(Duration::from_secs(self.config.poll_interval));
-        // let mut payload_id: Option<PayloadId> = None;
-        // let mut consecutive_errors = 0;
-        // const MAX_CONSECUTIVE_ERRORS: u32 = 5;
-
         info!(
             "Engine API client started successfully. Polling every {}ms",
             self.config.poll_interval
         );
-
-        loop {
-            tokio::select! {
-                may_tx = txpool_subscriber.next() => {
-                        match may_tx {
-                            Some(Ok(tx)) => {
-                                info!("Received transactions: {:?}", tx.len());
-                                if let Err(e) = self.send_transaction(tx).await {
-                                    error!("Error sending transaction to consensus: {:?}", e);
-                                }
-                            }
-                            Some(Err(err)) => {
-                                error!("Error receiving transaction: {:?}", err);
-                            }
-                            None => {
-                                info!("Transaction channel closed, stopping Engine API loop");
-                                break;
+        let txs_sender = self.payload_tx.clone();
+        let transaction_handler = tokio::spawn(async move {
+            let mut total_received_txs = 0;
+            loop {
+                if let Some(may_txs) = txpool_subscriber.next().await {
+                    match may_txs {
+                        Ok(txs) => {
+                            total_received_txs += txs.len();
+                            info!(
+                                "Received transactions: {:?}. Total received transactions: {:?}",
+                                txs.len(),
+                                total_received_txs
+                            );
+                            if let Err(e) = txs_sender.send(txs) {
+                                error!("Error sending transaction to consensus: {:?}", e);
                             }
                         }
-                }
-               // ---- Incoming message from Mysticeti consensus ----
-                maybe_msg = commit_receiver.recv() => {
-                    match maybe_msg {
-                        Some(subdag) => {
-                            //TODO: findout why timestamp_ms is 0
-                            info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Commit Digest {:?}, Leader round {:?}, Leader Digest {:?}",
-                            subdag.timestamp_ms,
-                            subdag.commit_ref.index,
-                            format!("{:?}", subdag.commit_ref.digest),
-                            subdag.leader.round,
-                            hex::encode(subdag.leader.digest.as_ref()));
-                            let reth_subdag = RethCommittedSubDag::from(subdag);
-                            let res = ConsensusTransactionApiClient::submit_committed_subdag(&http_client, reth_subdag).await;
-                            if res.is_err() {
-                                error!("submit_committed_transactions failed: {:?}", res);
-                            }
-                        }
-                        None => {
-                            info!("Consensus channel closed, stopping Engine API loop");
-                            break;
+                        Err(e) => {
+                            error!("Error receiving transaction: {:?}", e);
                         }
                     }
                 }
             }
-        }
+        });
+        let subdag_handler = tokio::spawn(async move {
+            let mut total_committed_txs = 0;
+            let mut buffer = Vec::new();
+            let mut last_sent = std::time::Instant::now();
+            loop {
+                if let Some(subdag) = commit_receiver.recv().await {
+                    //TODO: findout why timestamp_ms is 0
+                    info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Commit Digest {:?}, Leader round {:?}, Leader Digest {:?}",
+                                        subdag.timestamp_ms,
+                                        subdag.commit_ref.index,
+                                        format!("{:?}", subdag.commit_ref.digest),
+                                        subdag.leader.round,
+                                        hex::encode(subdag.leader.digest.as_ref()));
+                    let reth_subdag = RethCommittedSubDag::from(subdag);
+                    total_committed_txs += reth_subdag.len();
+                    info!("Total committed transactions: {:?}", total_committed_txs);
+                    buffer.push(reth_subdag);
+                }
+                if buffer.len() >= BATCH_SIZE
+                    || buffer.len() > 0
+                        && last_sent.elapsed() >= std::time::Duration::from_millis(SEND_INTERVAL)
+                {
+                    let batch = std::mem::take(&mut buffer);
+                    if let Err(e) =
+                        ConsensusTransactionApiClient::submit_committed_subdags(&http_client, batch)
+                            .await
+                    {
+                        error!("submit_committed_subdags failed: {:?}", e);
+                    }
+                    last_sent = std::time::Instant::now();
+                }
+            }
+        });
+        let _ = tokio::join!(transaction_handler, subdag_handler);
+        // loop {
+        //     tokio::select! {
+        //         may_tx = txpool_subscriber.next() => {
+        //                 match may_tx {
+        //                     Some(Ok(tx)) => {
+        //                         info!("Received transactions: {:?}", tx.len());
+        //                         if let Err(e) = self.send_transaction(tx).await {
+        //                             error!("Error sending transaction to consensus: {:?}", e);
+        //                         }
+        //                     }
+        //                     Some(Err(err)) => {
+        //                         error!("Error receiving transaction: {:?}", err);
+        //                     }
+        //                     None => {
+        //                         info!("Transaction channel closed, stopping Engine API loop");
+        //                         break;
+        //                     }
+        //                 }
+        //         }
+        //        // ---- Incoming message from Mysticeti consensus ----
+        //         maybe_msg = commit_receiver.recv() => {
+        //             match maybe_msg {
+        //                 Some(subdag) => {
+        //                     //TODO: findout why timestamp_ms is 0
+        //                     info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Commit Digest {:?}, Leader round {:?}, Leader Digest {:?}",
+        //                     subdag.timestamp_ms,
+        //                     subdag.commit_ref.index,
+        //                     format!("{:?}", subdag.commit_ref.digest),
+        //                     subdag.leader.round,
+        //                     hex::encode(subdag.leader.digest.as_ref()));
+        //                     let reth_subdag = RethCommittedSubDag::from(subdag);
+        //                     let res = ConsensusTransactionApiClient::submit_committed_subdag(&http_client, reth_subdag).await;
+        //                     if res.is_err() {
+        //                         error!("submit_committed_transactions failed: {:?}", res);
+        //                     }
+        //                 }
+        //                 None => {
+        //                     info!("Consensus channel closed, stopping Engine API loop");
+        //                     break;
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
 
         info!("Engine API client stopped");
         Ok(())

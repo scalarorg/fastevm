@@ -1,17 +1,18 @@
 #!/bin/bash
 
 batch_txs() {
-    local number_of_txs=${1:-1}
+    local number_of_txs=${1:-10}
+    echo "Running batch transaction test with $number_of_txs txs/sender transactions"
     if [ "$number_of_txs" -eq 1 ]; then
-        cargo test --test batch test_batch_transfer_one_transaction  -- --show-output
+        cargo test --test batch test_batch_transfer_one_transaction  -- --exact --show-output
     elif [ "$number_of_txs" -eq 2 ]; then
-        cargo test --test batch test_batch_transfer_two_transaction  -- --show-output
+        cargo test --test batch test_batch_transfer_two_transaction  -- --exact --show-output
     elif [ "$number_of_txs" -eq 10 ]; then
-        cargo test --test batch test_batch_transfer_10  -- --show-output
+        cargo test --test batch test_batch_transfer_10  -- --exact --show-output
     elif [ "$number_of_txs" -eq 20 ]; then
-        cargo test --test batch test_batch_transfer_20  -- --show-output    
+        cargo test --test batch test_batch_transfer_20  -- --exact --show-output    
     elif [ "$number_of_txs" -eq 100 ]; then
-        cargo test --test batch test_batch_transfer_100  -- --show-output
+        cargo test --test batch test_batch_transfer_100  -- --exact --show-output
     fi
     
     check_nonces
@@ -37,6 +38,10 @@ check_send_txs() {
         cat .local-logs/consensus-node$node.log | grep 'Received transactions'
         echo "--------------------------------"
     done
+}
+
+scan_blocks() {
+    cargo test test_scan_all_blocks -- --show-output
 }
 
 $@

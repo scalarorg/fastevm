@@ -10,7 +10,7 @@ use std::{cmp::Ordering, sync::Arc};
 use crate::CommittedSubDag;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommittedTransactions<Transaction> {
+pub struct MysticetiCommittedSubdag<Transaction> {
     pub leader: BlockRef,
     pub transactions: Vec<Arc<Transaction>>,
     pub timestamp_ms: u64,
@@ -18,7 +18,7 @@ pub struct CommittedTransactions<Transaction> {
     pub reputation_scores_desc: Vec<(AuthorityIndex, u64)>,
 }
 
-impl<Transaction> TryFrom<CommittedSubDag> for CommittedTransactions<Transaction>
+impl<Transaction> TryFrom<CommittedSubDag> for MysticetiCommittedSubdag<Transaction>
 where
     Transaction: PoolTransaction,
 {

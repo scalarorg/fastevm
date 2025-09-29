@@ -1,6 +1,6 @@
 use reth_ethereum::node::api::PayloadTypes;
 use reth_ethereum_engine_primitives::EthPayloadTypes;
-use reth_extension::CommittedTransactions;
+use reth_extension::MysticetiCommittedSubdag;
 use reth_payload_builder::PayloadId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +70,6 @@ where
 //     }
 // }
 pub struct BatchCommittedSubDag<Transaction> {
-    pub first_committed_subdag: CommittedTransactions<Transaction>,
-    pub last_committed_subdag: CommittedTransactions<Transaction>,
+    pub first_committed_subdag: MysticetiCommittedSubdag<Transaction>,
+    pub last_committed_subdag: MysticetiCommittedSubdag<Transaction>,
 }

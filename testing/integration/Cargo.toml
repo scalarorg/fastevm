@@ -70,3 +70,5 @@ bip39 = "2.2.0"
 k256 = "0.13.4"
 tiny-keccak = "2.0.2"
 rand.workspace = true
+clap = { version = "4.0", features = ["derive"] }
+chrono.workspace = true

@@ -25,8 +25,8 @@ pub trait TxpoolListenerApi {
 pub trait ConsensusTransactionApi {
     /// Submit commited transactions
     #[method(name = "submitCommittedSubdag")]
-    fn submit_committed_subdag(
+    fn submit_committed_subdags(
         &self,
-        #[argument(rename = "subdag")] subdag: CommittedSubDag,
+        #[argument(rename = "subdag")] subdags: Vec<CommittedSubDag>,
     ) -> RpcResult<()>;
 }
