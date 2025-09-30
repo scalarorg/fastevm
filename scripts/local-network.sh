@@ -409,6 +409,10 @@ start_execution_node() {
     
     # Build bootnodes string
     local bootnodes=""
+    local debug_level="-vvvv"
+    # if [ "$node_index" = "1" ]; then
+    #     debug_level="-vvvvv"
+    # fi
     for i in {1..4}; do
         if [ $i -ne $node_index ]; then
             local peer_hex_file="$DATA_DIR/execution$i/p2p/secret.hex"
@@ -465,18 +469,20 @@ start_execution_node() {
         "--enable-txpool-listener"
         "--committed-subdags-per-block" "30"
         "--block-build-interval-ms" "100"
-        "-vvvv"
+        "$debug_level"
     )
+
     
     # Add --txpool.max-account-slots
     cmd_args+=(
-        "--txpool.max-account-slots" "10240"
-        "--txpool.max-pending-txns" "10240"
-        --txpool.pending-max-count "10240"
-        --txpool.pending-max-size "128"
-        "--txpool.max-new-txns" "10240"
-        --txpool.max-new-pending-txs-notifications "10240"
-
+        "--txpool.max-new-txns" "102400"
+        "--txpool.max-account-slots" "102400"
+        "--txpool.max-pending-txns" "102400"
+        "--txpool.pending-max-count" "102400"
+        "--txpool.pending-max-size" "128"       
+        "--txpool.max-new-pending-txs-notifications" "102400"
+        "--txpool.queued-max-count" "102400"
+        "--txpool.queued-max-size" "128"
     )
     # Start the node
     nohup "$EXECUTION_CLIENT" "${cmd_args[@]}" > "$log_file" 2>&1 &
@@ -602,7 +608,7 @@ stop_network() {
     rm -f "$PIDS_DIR"/*.pid
     # Stop mysticeti process
     # List of ports you want to kill
-    PORTS=(26657 26658 26659 26660)
+    PORTS=(8545 8544 8543 8542 26657 26658 26659 26660)
 
     for PORT in "${PORTS[@]}"; do
         PID=$(lsof -ti :$PORT)

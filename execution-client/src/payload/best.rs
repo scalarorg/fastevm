@@ -23,13 +23,13 @@ impl<T: PoolTransaction> BestMysticetiTransactions<T> {
 
 impl<T: PoolTransaction> BestTransactions for BestMysticetiTransactions<T> {
     fn mark_invalid(&mut self, transaction: &Self::Item, kind: InvalidPoolTransactionError) {
-        debug!(
-            "Mark invalid transaction {:?}: sender {:?}, nonce {:?}, Invalid reason: {:?}",
-            transaction.hash(),
-            transaction.sender_ref(),
-            transaction.nonce(),
-            kind
-        );
+        // debug!(
+        //     "Mark invalid transaction {:?}: sender {:?}, nonce {:?}, Invalid reason: {:?}",
+        //     transaction.hash(),
+        //     transaction.sender_ref(),
+        //     transaction.nonce(),
+        //     kind
+        // );
         self.reth_best_txs.mark_invalid(transaction, kind);
     }
 

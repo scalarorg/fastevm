@@ -33,7 +33,7 @@ use eyre::Result;
 use rand::Rng;
 use std::env;
 use std::time::Instant;
-use std::{collections::HashMap, time::Duration};
+use std::{collections::BTreeMap, collections::HashMap, time::Duration};
 use testing::{
     address::{generate_account_from_seed, Account},
     rpc::get_nonces,
@@ -123,6 +123,13 @@ async fn test_batch_transfer_100() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
+async fn test_batch_transfer_1000() -> Result<(), Box<dyn std::error::Error>> {
+    let account_number = NUMBER_OF_SENDERS;
+    let number_of_transactions = 1000;
+    send_transaction_with_check_nonce(account_number, number_of_transactions).await
+}
+
+#[tokio::test]
 async fn check_nonces() -> Result<(), Box<dyn std::error::Error>> {
     let account_number = NUMBER_OF_SENDERS;
     let accounts = generate_accounts(account_number)?;
@@ -132,11 +139,11 @@ async fn check_nonces() -> Result<(), Box<dyn std::error::Error>> {
         .map(|account| account.address)
         .collect::<Vec<_>>();
     let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let address_nonces = get_nonces(addresses.as_slice(), url.as_str()).await;
+    let address_nonces = get_nonces(addresses.as_slice(), 0, account_number, url.as_str()).await;
 
     // Count sender addresses by nonce
     let mut nonce_counts: HashMap<u64, usize> = HashMap::new();
-    for (address, nonce) in address_nonces.iter() {
+    for (_address, nonce) in address_nonces.iter() {
         *nonce_counts.entry(*nonce).or_insert(0) += 1;
     }
 
@@ -179,7 +186,8 @@ async fn send_transaction_with_check_nonce(
     while start_time.elapsed() < timeout {
         sleep(Duration::from_secs(10)).await;
         success_count = 0;
-        let address_nonces = get_nonces(addresses.as_slice(), url.as_str()).await;
+        let address_nonces =
+            get_nonces(addresses.as_slice(), 0, account_number, url.as_str()).await;
         for (_, nonce) in address_nonces.iter() {
             if nonce == &number_of_transactions {
                 success_count += 1;
@@ -223,7 +231,7 @@ fn generate_accounts(number_of_senders: usize) -> Result<Vec<Account>, Box<dyn s
     }
     Ok(accounts)
 }
-/// Common function to send batch transfer transactions
+/// Common function to send batch transfer transactions with parallel processing
 async fn send_batch_transfer_transactions(
     accounts: &[Account],
     transactions_per_sender: usize,
@@ -236,6 +244,7 @@ async fn send_batch_transfer_transactions(
         transactions_per_sender
     );
     let number_of_senders = accounts.len();
+
     // Extract network configuration from environment variables
     let chain_id = env::var("CHAIN_ID")
         .unwrap_or("202501".to_string())
@@ -296,150 +305,112 @@ async fn send_batch_transfer_transactions(
 
     println!("Connected to {} RPC endpoints", providers.len());
 
-    // Get initial nonces for all sender addresses
-    println!("Getting initial nonces for sender addresses...");
-    let mut address_nonces = get_nonces(
-        &sender_accounts
-            .iter()
-            .map(|account| account.address)
-            .collect::<Vec<_>>()
-            .as_slice(),
-        &available_urls[0],
-    )
-    .await;
+    // Determine optimal number of parallel workers (chunks)
+    let num_workers = std::cmp::min(8, number_of_senders); // Cap at 8 workers
+    let chunk_size = (number_of_senders + num_workers - 1) / num_workers; // Ceiling division
+
     println!(
-        "Initial nonces retrieved for {} addresses: {:?}",
-        address_nonces.len(),
-        address_nonces
+        "\n🚀 Starting parallel batch transaction sending with {} workers (chunk size: {})...",
+        num_workers, chunk_size
     );
 
-    // Statistics tracking
-    let mut successful_transactions = 0;
-    let mut failed_transactions = 0;
-    let mut rpc_usage_stats = HashMap::new();
+    // Create shared data for parallel processing
+    let accounts_arc = std::sync::Arc::new(sender_accounts);
+    let providers_arc = std::sync::Arc::new(providers);
+    let available_urls_arc = std::sync::Arc::new(available_urls);
 
-    // Send transactions (2 per sender)
-    println!(
-        "\nStarting batch transaction sending ({} per sender)...",
-        transactions_per_sender
-    );
-    let mut transaction_counter = 0;
+    // Spawn parallel workers
+    let mut handles = Vec::new();
 
-    for tx_in_sender in 0..transactions_per_sender {
-        for (sender_idx, account) in sender_accounts.iter().enumerate() {
-            transaction_counter += 1;
+    for worker_id in 0..num_workers {
+        let start_idx = worker_id * chunk_size;
+        let end_idx = std::cmp::min(start_idx + chunk_size, number_of_senders);
 
-            // Randomly select a recipient from the sender addresses (excluding self)
-            let mut recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
-            while recipient_idx == sender_idx {
-                recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
-            }
-            let recipient_account = sender_accounts.get(recipient_idx).unwrap();
+        if start_idx >= number_of_senders {
+            break;
+        }
 
-            // Randomly select an RPC provider
-            let provider_idx = rand::thread_rng().gen_range(0..providers.len());
-            let provider = &providers[provider_idx];
-            let rpc_url = &available_urls[provider_idx];
+        let accounts_clone = accounts_arc.clone();
+        let providers_clone = providers_arc.clone();
+        let urls_clone = available_urls_arc.clone();
 
-            // Track RPC usage
-            *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += 1;
-
-            // Get current nonce for the sender
-            let current_nonce = address_nonces.get(&account.address).copied();
-
-            // println!(
-            //     "📤 Transaction {} of {} (Sender {}: tx {}): {} -> {} (nonce: {:?}, RPC: {})",
-            //     transaction_counter,
-            //     total_transactions,
-            //     sender_idx + 1,
-            //     tx_in_sender + 1,
-            //     account.address,
-            //     recipient_account.address,
-            //     current_nonce,
-            //     rpc_url
-            // );
-
-            // Create and sign the transfer transaction
-            let tx_envelope = match create_transfer_transaction(
-                &account.private_key,
-                &recipient_account.address.to_string(),
+        let handle = tokio::spawn(async move {
+            process_account_chunk(
+                worker_id,
+                start_idx,
+                end_idx,
+                accounts_clone,
+                providers_clone,
+                urls_clone,
                 chain_id,
                 transaction_amount,
-                current_nonce,
+                transactions_per_sender,
             )
             .await
-            {
-                Ok(envelope) => envelope,
-                Err(e) => {
-                    println!("   ❌ Failed to create transaction: {:?}", e);
-                    failed_transactions += 1;
-                    continue;
-                }
-            };
+        });
 
-            // Update nonce for next transaction from this sender
-            address_nonces.insert(account.address, current_nonce.unwrap_or(0) + 1);
+        handles.push(handle);
+    }
 
-            // Broadcast the transaction to the network
-            match provider.send_tx_envelope(tx_envelope).await {
-                Ok(pending_tx) => {
-                    // println!(
-                    //     "   ✅ Transaction sent successfully (hash: {:?})",
-                    //     pending_tx.tx_hash()
-                    // );
-                    successful_transactions += 1;
-                }
-                Err(e) => {
-                    let error_msg = format!("{e:?}");
-                    if error_msg.contains("already known") {
-                        println!("   ⚠️  Transaction already known (duplicate nonce)");
-                    } else if error_msg.contains("insufficient funds") {
-                        println!("   ⚠️  Insufficient funds for transaction");
-                    } else if error_msg.contains("gas") {
-                        println!("   ⚠️  Gas-related error: {:?}", e);
-                    } else {
-                        println!("   ❌ Failed to send transaction: {:?}", e);
+    // Collect results from all workers
+    let mut total_successful = 0;
+    let mut total_failed = 0;
+    let mut total_rpc_usage = HashMap::new();
+
+    for (worker_id, handle) in handles.into_iter().enumerate() {
+        match handle.await {
+            Ok(worker_result) => {
+                match worker_result {
+                    Ok((successful, failed, rpc_usage)) => {
+                        total_successful += successful;
+                        total_failed += failed;
+
+                        // Merge RPC usage statistics
+                        for (url, count) in rpc_usage {
+                            *total_rpc_usage.entry(url).or_insert(0) += count;
+                        }
+
+                        println!(
+                            "Worker {} completed: {} successful, {} failed",
+                            worker_id, successful, failed
+                        );
                     }
-                    failed_transactions += 1;
+                    Err(e) => {
+                        println!("Worker {} failed with error: {:?}", worker_id, e);
+                    }
                 }
             }
-
-            // Small delay between transactions to avoid overwhelming the nodesx
-            // if transaction_counter % 100 == 0 {
-            //     println!(
-            //         "   ⏸️  Pausing briefly after {} transactions...",
-            //         transaction_counter
-            //     );
-            //     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            // }
+            Err(e) => {
+                println!("Worker {} panicked: {:?}", worker_id, e);
+            }
         }
     }
 
     // Test summary
-    println!("\n📊 Batch Transfer Two Transactions Test Summary");
-    println!("==============================================");
+    println!("\n📊 Parallel Batch Transfer Test Summary");
+    println!("======================================");
     println!("Total transactions attempted: {}", total_transactions);
-    println!("Successful transactions: {}", successful_transactions);
-    println!("Failed transactions: {}", failed_transactions);
+    println!("Successful transactions: {}", total_successful);
+    println!("Failed transactions: {}", total_failed);
     println!(
         "Success rate: {:.1}%",
         if total_transactions > 0 {
-            (successful_transactions as f64 / total_transactions as f64) * 100.0
+            (total_successful as f64 / total_transactions as f64) * 100.0
         } else {
             0.0
         }
     );
 
     println!("\nRPC Usage Statistics:");
-    for (url, count) in rpc_usage_stats.iter() {
+    for (url, count) in total_rpc_usage.iter() {
         println!("  {}: {} transactions", url, count);
     }
 
     // Test passes if we have at least some successful transactions
-    if successful_transactions > 0 {
+    if total_successful > 0 {
         println!(
-            "🎉 Test passed! Successfully sent {} batch transactions ({} per sender).",
-            successful_transactions, transactions_per_sender
+            "🎉 Test passed! Successfully sent {} batch transactions ({} per sender) using parallel processing.",
+            total_successful, transactions_per_sender
         );
         Ok(())
     } else {
@@ -453,4 +424,130 @@ async fn send_batch_transfer_transactions(
         // Return Ok to avoid test failure, but log the issue
         Ok(())
     }
+}
+
+/// Process a chunk of accounts in parallel
+async fn process_account_chunk<P>(
+    worker_id: usize,
+    start_idx: usize,
+    end_idx: usize,
+    accounts: std::sync::Arc<Vec<Account>>,
+    providers: std::sync::Arc<Vec<P>>,
+    available_urls: std::sync::Arc<Vec<String>>,
+    chain_id: u64,
+    transaction_amount: u64,
+    transactions_per_sender: usize,
+) -> Result<(usize, usize, HashMap<String, usize>), Box<dyn std::error::Error + Send + Sync>>
+where
+    P: Provider + Send + Sync,
+{
+    let mut successful_transactions = 0;
+    let mut failed_transactions = 0;
+    let mut rpc_usage_stats = HashMap::new();
+
+    println!(
+        "Worker {} processing accounts {} to {}",
+        worker_id,
+        start_idx,
+        end_idx - 1
+    );
+    // Get initial nonces for all sender addresses
+    println!("Getting initial nonces for sender addresses...");
+    let mut address_nonces = get_nonces(
+        &accounts
+            .iter()
+            .map(|account| account.address)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        start_idx,
+        end_idx,
+        &available_urls[0],
+    )
+    .await;
+    println!(
+        "Initial nonces retrieved for {} addresses",
+        address_nonces.len()
+    );
+
+    for _tx_in_sender in 0..transactions_per_sender {
+        for sender_idx in start_idx..end_idx {
+            let account = &accounts[sender_idx];
+            let number_of_senders = accounts.len();
+
+            // Randomly select a recipient from the sender addresses (excluding self)
+            let mut recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+            while recipient_idx == sender_idx {
+                recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+            }
+            let recipient_account = &accounts[recipient_idx];
+
+            // Randomly select an RPC provider
+            let provider_idx = rand::thread_rng().gen_range(0..providers.len());
+            let provider = &providers[provider_idx];
+            let rpc_url = &available_urls[provider_idx];
+
+            // Track RPC usage
+            *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += 1;
+
+            // Get current nonce for the sender
+            let current_nonce = address_nonces.get(&account.address).copied();
+            // Create and sign the transfer transaction
+            let tx_envelope = match create_transfer_transaction(
+                &account.private_key,
+                &recipient_account.address.to_string(),
+                chain_id,
+                transaction_amount,
+                current_nonce,
+            )
+            .await
+            {
+                Ok(envelope) => envelope,
+                Err(e) => {
+                    println!(
+                        "Worker {}: ❌ Failed to create transaction: {:?}",
+                        worker_id, e
+                    );
+                    failed_transactions += 1;
+                    continue;
+                }
+            };
+
+            // Broadcast the transaction to the network
+            match provider.send_tx_envelope(tx_envelope).await {
+                Ok(_) => {
+                    successful_transactions += 1;
+                    // Update nonce for next transaction from this sender
+                    address_nonces.insert(account.address, current_nonce.unwrap_or(0) + 1);
+                }
+                Err(e) => {
+                    let error_msg = format!("{e:?}");
+                    if error_msg.contains("already known") {
+                        // Transaction already known - count as success since it was processed
+                        successful_transactions += 1;
+                    } else if error_msg.contains("insufficient funds") {
+                        println!(
+                            "Worker {}: ⚠️  Insufficient funds for transaction",
+                            worker_id
+                        );
+                        failed_transactions += 1;
+                    } else if error_msg.contains("gas") {
+                        println!("Worker {}: ⚠️  Gas-related error: {:?}", worker_id, e);
+                        failed_transactions += 1;
+                    } else {
+                        println!(
+                            "Worker {}: ❌ Failed to send transaction: {:?}",
+                            worker_id, e
+                        );
+                        failed_transactions += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((
+        successful_transactions,
+        failed_transactions,
+        rpc_usage_stats,
+    ))
 }

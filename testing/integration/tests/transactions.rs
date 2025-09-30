@@ -736,7 +736,7 @@ async fn test_bulk_transactions() -> Result<()> {
         };
         providers.push(provider);
     }
-    let mut address_nonces = get_nonces(&addresses, &node_urls[0]).await;
+    let mut address_nonces = get_nonces(&addresses, 0, addresses.len(), &node_urls[0]).await;
     println!("Initial nonces: {:?}", address_nonces);
 
     // Generate recipient addresses from mnemonic
@@ -865,7 +865,7 @@ async fn test_bulk_transactions() -> Result<()> {
     println!("Final nonces: {:?}", address_nonces);
     println!("Sleeping for 30 seconds");
     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-    let address_nonces = get_nonces(&addresses, &node_urls[0]).await;
+    let address_nonces = get_nonces(&addresses, 0, addresses.len(), &node_urls[0]).await;
     println!("Address nonces from network: {:?}", address_nonces);
     // Test passes if we have at least some successful transactions
     if successful_transactions > 0 {

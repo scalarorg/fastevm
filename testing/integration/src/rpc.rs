@@ -9,7 +9,12 @@ use alloy_provider::{Provider, ProviderBuilder};
 use std::collections::BTreeMap;
 
 /// Gets the transaction nonces for the given addresses from the specified RPC URLs.
-pub async fn get_nonces(addresses: &[Address], url: &str) -> BTreeMap<Address, u64> {
+pub async fn get_nonces(
+    addresses: &[Address],
+    start_idx: usize,
+    end_idx: usize,
+    url: &str,
+) -> BTreeMap<Address, u64> {
     let mut nonces = BTreeMap::new();
     // Get the initial nonce for the sender address
     let provider = match ProviderBuilder::new().connect(url).await {
@@ -24,7 +29,9 @@ pub async fn get_nonces(addresses: &[Address], url: &str) -> BTreeMap<Address, u
             return nonces;
         }
     };
-    for address in addresses.iter() {
+
+    for sender_idx in start_idx..end_idx {
+        let address = &addresses[sender_idx];
         let address_nonce = match provider.get_transaction_count(*address).await {
             Ok(nonce) => nonce,
             Err(e) => {
