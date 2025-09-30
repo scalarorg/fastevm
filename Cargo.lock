@@ -3919,6 +3919,7 @@ name = "fastevm-execution"
 version = "0.1.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
  "alloy-rpc-types-engine",
  "anyhow",
@@ -3937,8 +3938,12 @@ dependencies = [
  "reth-evm",
  "reth-extension",
  "reth-network-peers",
+ "reth-node-api",
+ "reth-node-builder",
  "reth-payload-builder",
+ "reth-provider",
  "reth-rpc-layer",
+ "reth-tracing",
  "reth-transaction-pool",
  "secp256k1 0.30.0",
  "serde_json",

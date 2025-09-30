@@ -6,10 +6,10 @@
 
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types_eth::{BlockId, BlockNumberOrTag, BlockTransactions};
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use eyre::Result;
 use std::env;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// Configuration for block scanning
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ impl BlockScanStats {
             self.blocks_with_transactions
         );
         println!("Empty blocks: {}", self.empty_blocks);
-        println!("Total transactions: {}", self.total_transactions);
+        println!("🎯 Total transactions found: {}", self.total_transactions);
 
         if let Some(first) = self.first_block {
             println!("First block: {}", first);
@@ -138,10 +138,12 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
     };
 
     println!("Scanning blocks from 0 to {}", max_block_to_scan);
+    println!("🔍 Looking for transactions in each block...");
     println!();
 
     let mut stats = BlockScanStats::default();
     let mut blocks_with_tx_count = 0;
+    let mut last_logged_block = 0;
 
     // Scan blocks from 0 to max_block_to_scan
     for block_number in 0..=max_block_to_scan {
@@ -178,10 +180,14 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
                     // Format timestamp
                     let timestamp_str = format_timestamp(block.header.timestamp);
 
-                    // Print block information
+                    // Print block information with enhanced transaction logging
                     println!(
-                        "Block #{} | {} | {} transactions | Hash: {:?}",
-                        block_number, timestamp_str, transaction_count, block.header.hash
+                        "🔹 Block #{} | {} | 📊 {} transactions | Total so far: {} | Hash: {:?}",
+                        block_number,
+                        timestamp_str,
+                        transaction_count,
+                        stats.total_transactions,
+                        block.header.hash
                     );
 
                     // Print transaction details (first few transactions)
@@ -227,12 +233,24 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
                     }
                 }
 
-                // Progress indicator
+                // Progress indicator with enhanced transaction statistics
                 if block_number % 100 == 0 && block_number > 0 {
                     println!(
-                        "📈 Progress: Scanned {} blocks, found {} blocks with transactions",
-                        block_number, blocks_with_tx_count
+                        "📈 Progress: Scanned {} blocks | Found {} blocks with transactions | Total transactions: {}",
+                        block_number, blocks_with_tx_count, stats.total_transactions
                     );
+                }
+
+                // More frequent logging for transaction counts (every 10 blocks with transactions)
+                if blocks_with_tx_count > 0
+                    && blocks_with_tx_count % 10 == 0
+                    && blocks_with_tx_count != last_logged_block
+                {
+                    println!(
+                        "💎 Transaction Milestone: {} blocks with transactions found, {} total transactions",
+                        blocks_with_tx_count, stats.total_transactions
+                    );
+                    last_logged_block = blocks_with_tx_count;
                 }
             }
             Ok(None) => {
@@ -246,6 +264,10 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
     }
 
     println!("✅ Block scan completed!");
+    println!(
+        "🎯 Final Results: Found {} transactions across {} blocks",
+        stats.total_transactions, stats.blocks_with_transactions
+    );
     stats.print_summary();
 
     Ok(stats)

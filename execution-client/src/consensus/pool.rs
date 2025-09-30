@@ -188,15 +188,6 @@ where
             pending_transactions.len(),
             last_committed_index
         );
-        //Log pending transactions for debug purposes
-        for tx in pending_transactions.iter() {
-            debug!(
-                "transaction: {:?}, sender: {:?}, nonce: {:?}",
-                tx.hash(),
-                tx.sender_ref(),
-                tx.nonce()
-            );
-        }
         //Clone pending transactions for building a BestTransactions iterator
         return pending_transactions;
     }

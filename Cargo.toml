@@ -65,6 +65,8 @@ reth-ethereum-payload-builder = { git = "https://github.com/paradigmxyz/reth.git
 reth-revm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-revm", features = ["std", "witness"] }
 reth-evm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm" }
 reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm-ethereum" }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-node-api" }
+reth-node-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-node-builder" }
 reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives-traits" }
 reth-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-provider", features = ["test-utils"] }

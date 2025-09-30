@@ -12,6 +12,7 @@
 use alloy_consensus as _;
 mod consensus;
 mod payload;
+mod pool;
 mod rpc;
 
 use clap::Parser;
@@ -19,6 +20,7 @@ use clap::Parser;
 use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
+    pool::MysticetiPoolBuilder,
     rpc::{ConsensusTransactionsHandler, TxpoolListener},
 };
 
@@ -56,6 +58,9 @@ pub(crate) struct CliMysticetiArgs {
     /// Build interval in milliseconds
     #[arg(long)]
     pub block_build_interval_ms: u64,
+    /// Maximum number of accounts to reload during pool maintenance
+    #[arg(long, default_value = "500")]
+    pub max_reload_accounts: u64,
 }
 
 /// Flow hook execution:
@@ -73,11 +78,16 @@ fn main() {
             let mysticeti_payload_builder = BasicPayloadServiceBuilder::new(
                 MysticetiPayloadBuilderFactory::new(consensus_pool.clone()),
             );
+
             let handle = builder
                 .with_types::<EthereumNode>()
                 // Configure the components of the node
                 // use default ethereum components but use our custom payload builder
-                .with_components(EthereumNode::components().payload(mysticeti_payload_builder))
+                .with_components(
+                    EthereumNode::components()
+                        .payload(mysticeti_payload_builder)
+                        .pool(MysticetiPoolBuilder::default()),
+                )
                 .with_add_ons(EthereumAddOns::default())
                 .extend_rpc_modules({
                     let consensus_pool = consensus_pool.clone();
@@ -107,10 +117,7 @@ fn main() {
                         reth_ethereum::node::EthEngineTypes,
                     > = node.payload_builder_handle.clone();
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
-                    // let engine_events = node.add_ons_handle.engine_events.new_listener();
-                    // use reth_ethereum::chainspec::ChainSpecProvider;
-                    // node.provider.chain_spec();
-                    // let transaction_pool = node.pool.clone();
+
                     let mut mysticeti_consensus = MysticetiConsensus::new(
                         consensus_pool,
                         node.provider,
