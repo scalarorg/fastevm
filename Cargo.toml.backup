@@ -144,10 +144,6 @@ reth-extension = { path = "reth-extension" }
 fastevm-execution = { path = "execution-client" }
 fastevm-consensus = { path = "consensus-client" }
 
-# Patch to fix Copy trait issue in reth
-[patch.crates-io]
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum" }
-
 [profile.release]
 opt-level = 3
 lto = true

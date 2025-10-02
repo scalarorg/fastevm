@@ -1,14 +1,24 @@
+use crate::txpool::config::TxPoolConfig;
+
 use super::TxPool;
 use alloy_eips::eip7594::BlobTransactionSidecarVariant;
 use alloy_primitives::{Address, TxHash};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use reth_ethereum::primitives::Recovered;
+use reth_primitives_traits::Block;
 use reth_provider::ChangedAccount;
 use reth_transaction_pool::{
     error::{PoolError, PoolErrorKind},
     identifier::{SenderId, SenderIdentifiers, TransactionId},
     metrics::BlobStoreMetrics,
-    pool::{AddedPendingTransaction, AddedTransaction},
+    pool::{
+        listener::{
+            BlobTransactionSidecarListener, PendingTransactionHashListener, PoolEventBroadcast,
+            TransactionListener,
+        },
+        AddedPendingTransaction, AddedTransaction, OnNewCanonicalStateOutcome, SenderInfo,
+        UpdateOutcome,
+    },
     validate::ValidTransaction,
     AllTransactionsEvents, BlobStore, BlockInfo, CanonicalStateUpdate, EthPoolTransaction,
     GetPooledTransactionLimit, NewBlobSidecar, NewTransactionEvent, PoolConfig, PoolResult,
@@ -16,7 +26,7 @@ use reth_transaction_pool::{
     TransactionOrigin, TransactionValidationOutcome, TransactionValidator, ValidPoolTransaction,
 };
 use rustc_hash::FxHashMap;
-use std::{collections::HashSet, fmt, sync::Arc};
+use std::{collections::HashSet, fmt, sync::Arc, time::Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, trace};
 
@@ -41,7 +51,7 @@ where
     /// The internal pool that manages all transactions.
     pool: RwLock<TxPool<T>>,
     /// Pool settings.
-    config: PoolConfig,
+    config: TxPoolConfig,
     /// Manages listeners for transaction state change events.
     event_listener: RwLock<PoolEventBroadcast<T::Transaction>>,
     /// Listeners for new _full_ pending transactions.
@@ -63,7 +73,7 @@ where
     S: BlobStore,
 {
     /// Create a new transaction pool instance.
-    pub fn new(validator: V, ordering: T, blob_store: S, config: PoolConfig) -> Self {
+    pub fn new(validator: V, ordering: T, blob_store: S, config: TxPoolConfig) -> Self {
         Self {
             identifiers: Default::default(),
             validator,
@@ -139,7 +149,7 @@ where
     }
 
     /// Get the config the pool was configured with.
-    pub const fn config(&self) -> &PoolConfig {
+    pub const fn config(&self) -> &TxPoolConfig {
         &self.config
     }
 
@@ -425,30 +435,29 @@ where
                     authority_ids: authorities.map(|auths| self.get_sender_ids(auths)),
                 };
 
-                let added = pool.add_transaction(tx, balance, state_nonce, bytecode_hash)?;
-                let hash = *added.hash();
+                let hash = pool.add_transaction(tx, balance, state_nonce, bytecode_hash)?;
 
                 // transaction was successfully inserted into the pool
-                if let Some(sidecar) = maybe_sidecar {
-                    // notify blob sidecar listeners
-                    self.on_new_blob_sidecar(&hash, &sidecar);
-                    // store the sidecar in the blob store
-                    self.insert_blob(hash, sidecar);
-                }
+                // if let Some(sidecar) = maybe_sidecar {
+                //     // notify blob sidecar listeners
+                //     self.on_new_blob_sidecar(&hash, &sidecar);
+                //     // store the sidecar in the blob store
+                //     self.insert_blob(hash, sidecar);
+                // }
 
-                if let Some(replaced) = added.replaced_blob_transaction() {
-                    debug!(target: "txpool", "[{:?}] delete replaced blob sidecar", replaced);
-                    // delete the replaced transaction from the blob store
-                    self.delete_blob(replaced);
-                }
+                // if let Some(replaced) = added.replaced_blob_transaction() {
+                //     debug!(target: "txpool", "[{:?}] delete replaced blob sidecar", replaced);
+                //     // delete the replaced transaction from the blob store
+                //     self.delete_blob(replaced);
+                // }
 
                 // Notify about new pending transactions
-                if let Some(pending) = added.as_pending() {
-                    self.on_new_pending_transaction(pending);
-                }
+                // if let Some(pending) = added.as_pending() {
+                //     self.on_new_pending_transaction(pending);
+                // }
 
                 // Notify tx event listeners
-                self.notify_event_listeners(&added);
+                self.notify_event_listeners(&hash);
                 // TODO: handle event listeners
                 // if let Some(discarded) = added.discarded_transactions() {
                 //     self.delete_discarded_blobs(discarded.iter());

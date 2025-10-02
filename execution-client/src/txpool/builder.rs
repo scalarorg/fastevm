@@ -91,12 +91,12 @@ where
         //     .with_validator(validator)
         //     .build_and_spawn_maintenance_task(blob_store, pool_config)?;
 
-        // let transaction_pool = reth_transaction_pool::Pool::new(
-        //     validator,
-        //     CoinbaseTipOrdering::default(),
-        //     blob_store,
-        //     pool_config.clone(),
-        // );
+        let transaction_pool = reth_transaction_pool::Pool::new(
+            validator,
+            CoinbaseTipOrdering::default(),
+            blob_store,
+            pool_config.clone(),
+        );
 
         let transaction_pool = MysticetiPool::new(
             validator,

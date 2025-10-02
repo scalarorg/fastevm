@@ -1,5 +1,7 @@
 mod builder;
+mod config;
 mod consensus;
+mod metrics;
 mod pool;
 use alloy_eips::{eip4844::BlobAndProofV2, eip7594::BlobTransactionSidecarVariant};
 use alloy_primitives::{Address, TxHash, B256};
