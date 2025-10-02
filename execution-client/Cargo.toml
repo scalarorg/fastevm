@@ -26,14 +26,16 @@ tracing = { workspace = true }
 clap = { version = "4.0", features = ["derive"] }  
 hex = { workspace = true }
 secp256k1 = { workspace = true }
-# rustc-hash = { workspace = true }
+rustc-hash = { workspace = true }
 # Reth
 reth-network-peers = { workspace = true }
 reth-basic-payload-builder = { workspace = true }
 reth-ethereum = { workspace = true }
 reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
+reth-eth-wire-types = { workspace = true }
 reth-evm = { workspace = true }
+reth-primitives-traits = { workspace = true }
 reth-provider = { workspace = true }
 reth-rpc-layer = { workspace = true }
 reth-transaction-pool = { workspace = true }
@@ -47,7 +49,7 @@ jsonrpsee = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 # tokio-stream = "0.1"
-
+parking_lot = { workspace = true }
 # Dependencies for mnemonic and account generation
 bip39 = "2.0"
 hdwallet = "0.3"

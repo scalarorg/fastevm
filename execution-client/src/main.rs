@@ -12,16 +12,16 @@
 use alloy_consensus as _;
 mod consensus;
 mod payload;
-mod pool;
 mod rpc;
+mod txpool;
 
 use clap::Parser;
 // Suppress warnings for dependencies used by CLI binary
 use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
-    pool::MysticetiPoolBuilder,
     rpc::{ConsensusTransactionsHandler, TxpoolListener},
+    txpool::MysticetiPoolBuilder,
 };
 
 use reth_ethereum::{

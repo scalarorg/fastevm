@@ -17,6 +17,8 @@ use reth_transaction_pool::{
 };
 use std::time::SystemTime;
 
+use crate::txpool::MysticetiPool;
+
 /// A basic mysticeti transaction pool.
 ///
 /// This contains various settings that can be configured and take precedence over the node's
@@ -36,7 +38,8 @@ where
     >,
     Node: FullNodeTypes<Types = Types>,
 {
-    type Pool = EthTransactionPool<Node::Provider, DiskFileBlobStore>;
+    // type Pool = EthTransactionPool<Node::Provider, DiskFileBlobStore>;
+    type Pool = MysticetiPool<Node::Provider, DiskFileBlobStore>;
 
     async fn build_pool(self, ctx: &BuilderContext<Node>) -> eyre::Result<Self::Pool> {
         let pool_config = ctx.pool_config();
@@ -88,12 +91,20 @@ where
         //     .with_validator(validator)
         //     .build_and_spawn_maintenance_task(blob_store, pool_config)?;
 
-        let transaction_pool = reth_transaction_pool::Pool::new(
+        // let transaction_pool = reth_transaction_pool::Pool::new(
+        //     validator,
+        //     CoinbaseTipOrdering::default(),
+        //     blob_store,
+        //     pool_config.clone(),
+        // );
+
+        let transaction_pool = MysticetiPool::new(
             validator,
             CoinbaseTipOrdering::default(),
             blob_store,
             pool_config.clone(),
         );
+
         // Spawn maintenance tasks using standalone functions
         spawn_maintenance_tasks(ctx, transaction_pool.clone(), &pool_config)?;
         info!(target: "reth::cli", "Transaction pool initialized");
