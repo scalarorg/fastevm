@@ -1,4 +1,5 @@
 use crate::consensus::ConsensusPool;
+use crate::pool::MysticetiPool;
 use anyhow::Result;
 use jsonrpsee::core::RpcResult;
 use reth_ethereum::chainspec::EthChainSpec;
@@ -11,7 +12,11 @@ use tokio::sync::Mutex;
 use tracing::{debug, error};
 
 /// The type that implements the `txpool` rpc namespace trait
-pub struct ConsensusTransactionsHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
+pub struct ConsensusTransactionsHandler<Pool, ChainSpec>
+where
+    Pool: TransactionPool + MysticetiPool,
+    ChainSpec: EthChainSpec,
+{
     /// Consensus pool keep committed transactions from mysticeti
     consensus_pool: Arc<ConsensusPool<Pool>>,
     /// Transaction pool keep transactions from reth
@@ -20,7 +25,10 @@ pub struct ConsensusTransactionsHandler<Pool: TransactionPool, ChainSpec: EthCha
     // For debugging
     total_txs: Arc<Mutex<u64>>,
 }
-impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandler<Pool, ChainSpec> {
+impl<Pool, ChainSpec: EthChainSpec> ConsensusTransactionsHandler<Pool, ChainSpec>
+where
+    Pool: TransactionPool + MysticetiPool,
+{
     pub fn new(
         consensus_pool: Arc<ConsensusPool<Pool>>,
         tx_pool: Pool,
@@ -42,7 +50,9 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandle
         }
     }
 }
-impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandler<Pool, ChainSpec> {
+impl<Pool: TransactionPool + MysticetiPool, ChainSpec: EthChainSpec>
+    ConsensusTransactionsHandler<Pool, ChainSpec>
+{
     /// Process a single subdag
     /// We add committed transactions to consensus pool
     /// Add missing transactions from consensus pool to transaction pool
@@ -64,6 +74,8 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandle
             );
             committed_subdags.push(committed_subdag);
         }
+        self.tx_pool
+            .add_committed_subdags(committed_subdags.clone());
         self.consensus_pool.add_committed_subdags(committed_subdags);
 
         Ok(())
@@ -109,8 +121,11 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandle
         Ok(added_count)
     }
 }
-impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static>
-    ConsensusTransactionApiServer for ConsensusTransactionsHandler<Pool, ChainSpec>
+impl<Pool, ChainSpec> ConsensusTransactionApiServer
+    for ConsensusTransactionsHandler<Pool, ChainSpec>
+where
+    Pool: TransactionPool + MysticetiPool + 'static,
+    ChainSpec: EthChainSpec + 'static,
 {
     #[doc = " Submit commited subdag"]
     fn submit_committed_subdags(&self, subdags: Vec<CommittedSubDag>) -> RpcResult<()> {

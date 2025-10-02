@@ -30,6 +30,7 @@ where
     Payload: PayloadTypes,
     Pool: TransactionPool,
 {
+    pool: Pool,
     consensus_pool: Arc<ConsensusPool<Pool>>,
     payload_builder_handle: PayloadBuilderHandle<Payload>,
     engine_handle: BeaconConsensusEngineHandle<Payload>,
@@ -47,6 +48,7 @@ where
     Pool: TransactionPool,
 {
     pub fn new(
+        pool: Pool,
         consensus_pool: Arc<ConsensusPool<Pool>>,
         provider: Provider,
         payload_builder_handle: PayloadBuilderHandle<Payload>,
@@ -54,6 +56,7 @@ where
         block_build_interval: u64,
     ) -> Self {
         Self {
+            pool,
             consensus_pool,
             payload_builder_handle,
             engine_handle,

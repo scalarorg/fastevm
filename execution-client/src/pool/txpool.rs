@@ -1,34 +1,93 @@
-use crate::txpool::config::TxPoolConfig;
-use crate::txpool::metrics::TxPoolMetrics;
+use super::MysticetiPoolConfig;
+use crate::pool::{metrics::TxPoolMetrics, MysticetiPool};
 use alloy_eips::{
     eip1559::{ETHEREUM_BLOCK_GAS_LIMIT_30M, MIN_PROTOCOL_BASE_FEE},
     eip4844::BLOB_TX_MIN_BLOB_GASPRICE,
 };
 use alloy_primitives::{Address, TxHash, B256, U256};
+use parking_lot::RwLock;
 use reth_extension::MysticetiCommittedSubdag;
 use reth_transaction_pool::{
-    error::{PoolError, PoolErrorKind},
+    error::{InvalidPoolTransactionError, PoolError, PoolErrorKind},
     validate::ValidPoolTransaction,
-    BlockInfo, PoolResult, PoolTransaction, TransactionOrdering,
+    AllPoolTransactions, AllTransactionsEvents, BestTransactions, BestTransactionsAttributes,
+    BlobStoreError, BlockInfo, EthPoolTransaction, GetPooledTransactionLimit, NewBlobSidecar,
+    NewTransactionEvent, PoolResult, PoolSize, PoolTransaction, PropagatedTransactions,
+    TransactionEvents, TransactionListenerKind, TransactionOrdering, TransactionOrigin,
+    TransactionPool,
 };
 use rustc_hash::FxHashMap;
-use std::sync::RwLock;
-use std::{cmp::Ordering, fmt};
+use std::fmt;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::Arc,
 };
+use tokio::sync::mpsc;
+use tracing::debug;
 
 /// Guarantees max transactions for one sender, compatible with geth/erigon
 pub const TXPOOL_MAX_ACCOUNT_SLOTS_PER_SENDER: usize = 16;
 
-pub struct TxPool<T: TransactionOrdering> {
+/// Simple implementation of BestTransactions iterator
+pub struct SimpleBestTransactions<T: TransactionOrdering> {
+    transactions: Vec<Arc<ValidPoolTransaction<T::Transaction>>>,
+    index: usize,
+    skip_blobs: bool,
+}
+
+impl<T: TransactionOrdering> SimpleBestTransactions<T> {
+    pub fn new(transactions: Vec<Arc<ValidPoolTransaction<T::Transaction>>>) -> Self {
+        Self {
+            transactions,
+            index: 0,
+            skip_blobs: false,
+        }
+    }
+}
+
+impl<T: TransactionOrdering> Iterator for SimpleBestTransactions<T> {
+    type Item = Arc<ValidPoolTransaction<T::Transaction>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.index < self.transactions.len() {
+            let tx = &self.transactions[self.index];
+            self.index += 1;
+
+            // Skip blob transactions if requested
+            if self.skip_blobs && tx.is_eip4844() {
+                continue;
+            }
+
+            return Some(tx.clone());
+        }
+        None
+    }
+}
+
+impl<T: TransactionOrdering> BestTransactions for SimpleBestTransactions<T> {
+    fn mark_invalid(&mut self, _transaction: &Self::Item, _kind: InvalidPoolTransactionError) {
+        // TODO: Implement proper invalidation logic
+        // For now, we'll just continue to the next transaction
+    }
+
+    fn no_updates(&mut self) {
+        // TODO: Implement no updates logic
+    }
+
+    fn set_skip_blobs(&mut self, skip_blobs: bool) {
+        self.skip_blobs = skip_blobs;
+    }
+}
+
+pub struct TxPool<T: PoolTransaction> {
     /// Pool settings to enforce limits etc.
-    config: TxPoolConfig,
+    config: MysticetiPoolConfig,
     //Store committed transactions (converted from subdag) in queue
     commited_queue: RwLock<BTreeMap<u64, MysticetiCommittedSubdag<T>>>,
-    //Store subdat for next block
-    proposal_pool: VecDeque<MysticetiCommittedSubdag<T>>,
+    //Next committed index expected for next proposal block
+    next_committed_index: RwLock<u64>,
+    //Store subdag for next block
+    proposal_pool: RwLock<VecDeque<MysticetiCommittedSubdag<T>>>,
     /// pending subpool
     ///
     /// Holds transactions that are tried to execute on evm but is marked as invalid in last execution.
@@ -46,22 +105,22 @@ pub struct TxPool<T: TransactionOrdering> {
     // queued_pool: ParkedPool<QueuedOrd<T::Transaction>>,
     queued_pool: VecDeque<T>,
     /// All transactions in the pool.
-    all_transactions: AllTransactions<T::Transaction>,
+    all_transactions: AllTransactions<T>,
     /// Transaction pool metrics
     metrics: TxPoolMetrics,
 }
 
-impl<T: TransactionOrdering> TxPool<T> {
+impl<T: PoolTransaction> TxPool<T> {
     /// Create a new graph pool instance.
-    pub fn new(ordering: T, config: TxPoolConfig) -> Self {
+    pub fn new(_ordering: T, config: MysticetiPoolConfig) -> Self {
         Self {
             config,
             commited_queue: RwLock::new(BTreeMap::new()),
-            proposal_pool: VecDeque::new(),
+            next_committed_index: RwLock::new(1),
+            proposal_pool: RwLock::new(VecDeque::new()),
             pending_pool: Vec::new(),
             queued_pool: VecDeque::new(),
             all_transactions: AllTransactions::new(),
-
             metrics: Default::default(),
         }
     }
@@ -207,8 +266,8 @@ impl<T: TransactionOrdering> TxPool<T> {
             block_gas_limit,
             last_seen_block_hash,
             last_seen_block_number,
-            pending_basefee,
-            pending_blob_fee,
+            pending_basefee: _,
+            pending_blob_fee: _,
         } = info;
         self.all_transactions.last_seen_block_hash = last_seen_block_hash;
         self.all_transactions.last_seen_block_number = last_seen_block_number;
@@ -224,8 +283,8 @@ impl<T: TransactionOrdering> TxPool<T> {
 
     pub(crate) fn add_transaction(
         &mut self,
-        tx: ValidPoolTransaction<T::Transaction>,
-        on_chain_balance: U256,
+        tx: ValidPoolTransaction<T>,
+        _on_chain_balance: U256,
         on_chain_nonce: u64,
         on_chain_code_hash: Option<B256>,
     ) -> PoolResult<TxHash> {
@@ -299,9 +358,9 @@ impl<T: TransactionOrdering> TxPool<T> {
     ///    transactions.
     fn validate_auth(
         &self,
-        transaction: &ValidPoolTransaction<T::Transaction>,
-        on_chain_nonce: u64,
-        on_chain_code_hash: Option<B256>,
+        _transaction: &ValidPoolTransaction<T>,
+        _on_chain_nonce: u64,
+        _on_chain_code_hash: Option<B256>,
     ) -> Result<(), PoolError> {
         //TODO: implement this
         // Allow at most one in-flight tx for delegated accounts or those with a
@@ -343,7 +402,7 @@ impl<T: TransactionOrdering> TxPool<T> {
 
     /// Mission method - processes transactions for consensus
     pub fn mission(&mut self) -> PoolResult<Vec<TxHash>> {
-        let mut processed_hashes = Vec::new();
+        let processed_hashes = Vec::new();
 
         // This is where consensus-specific logic would go
         // For now, return an empty vector
@@ -356,16 +415,52 @@ impl<T: TransactionOrdering> TxPool<T> {
     }
 
     /// Remove a transaction from the pool
-    pub fn remove_transaction(
-        &mut self,
-        hash: &TxHash,
-    ) -> Option<ValidPoolTransaction<T::Transaction>> {
+    pub fn remove_transaction(&mut self, _hash: &TxHash) -> Option<ValidPoolTransaction<T>> {
         // Simple implementation - in reality this would remove from the appropriate pool
         None
     }
 }
+impl<T: PoolTransaction> MysticetiPool for TxPool<T> {
+    /// Add committed subdags to queue and proposal pool
+    /// If the committed index is the same as the next committed index, add to proposal pool
+    /// Otherwise, add to committed queue
+    /// Update next committed index
+    fn add_committed_subdags(&self, committed_subdags: Vec<MysticetiCommittedSubdag<T>>) {
+        let len = committed_subdags.len();
+        let mut committed_queue = self.commited_queue.write();
 
-impl<T: TransactionOrdering> fmt::Debug for TxPool<T> {
+        let (mut next_committed_index, mut proposal_pool_size) = {
+            let proposal_pool = self.proposal_pool.read();
+            let pool_size = proposal_pool.len();
+            let next_index = proposal_pool
+                .back()
+                .map(|subdag| subdag.commit_ref.index as u64)
+                .unwrap_or_else(|| {
+                    let next_committed_index = self.next_committed_index.read();
+                    *next_committed_index
+                });
+            (next_index, pool_size)
+        };
+        for committed_subdag in committed_subdags {
+            if proposal_pool_size < self.config.committed_subdags_per_block
+                && committed_subdag.commit_ref.index as u64 == next_committed_index
+            {
+                self.proposal_pool.write().push_back(committed_subdag);
+                next_committed_index += 1;
+                proposal_pool_size += 1;
+            } else {
+                committed_queue.insert(committed_subdag.commit_ref.index as u64, committed_subdag);
+            }
+        }
+        *self.next_committed_index.write() = next_committed_index;
+        debug!(
+            "Added {} committed subdags to queue. Queue size: {:?}",
+            len,
+            committed_queue.len()
+        );
+    }
+}
+impl<T: PoolTransaction> fmt::Debug for TxPool<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TxPool")
             .field("config", &self.config)
@@ -454,5 +549,116 @@ impl Default for PendingFees {
             base_fee: Default::default(),
             blob_fee: BLOB_TX_MIN_BLOB_GASPRICE,
         }
+    }
+}
+
+// Additional methods for TxPool to support the TransactionPool trait
+impl<T: PoolTransaction> TxPool<T> {
+    /// Get transactions by sender
+    pub fn get_transactions_by_sender(&self, sender: Address) -> Vec<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions
+            .by_hash
+            .values()
+            .filter(|tx| tx.sender() == sender)
+            .cloned()
+            .collect()
+    }
+
+    /// Get pending transactions with predicate
+    pub fn get_pending_transactions_with_predicate(
+        &self,
+        mut predicate: impl FnMut(&ValidPoolTransaction<T>) -> bool,
+    ) -> Vec<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions
+            .by_hash
+            .values()
+            .filter(|tx| predicate(tx))
+            .cloned()
+            .collect()
+    }
+
+    /// Get pending transactions by sender
+    pub fn get_pending_transactions_by_sender(
+        &self,
+        sender: Address,
+    ) -> Vec<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions
+            .by_hash
+            .values()
+            .filter(|tx| tx.sender() == sender)
+            .cloned()
+            .collect()
+    }
+
+    /// Get queued transactions by sender
+    pub fn get_queued_transactions_by_sender(
+        &self,
+        sender: Address,
+    ) -> Vec<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions
+            .by_hash
+            .values()
+            .filter(|tx| tx.sender() == sender)
+            .cloned()
+            .collect()
+    }
+
+    /// Get highest transaction by sender
+    pub fn get_highest_transaction_by_sender(
+        &self,
+        sender: Address,
+    ) -> Option<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions
+            .by_hash
+            .values()
+            .filter(|tx| tx.sender() == sender)
+            .max_by_key(|tx| tx.nonce())
+            .cloned()
+    }
+
+    /// Get highest consecutive transaction by sender
+    pub fn get_highest_consecutive_transaction_by_sender(
+        &self,
+        sender: Address,
+        on_chain_nonce: u64,
+    ) -> Option<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions
+            .by_hash
+            .values()
+            .filter(|tx| tx.sender() == sender && tx.nonce() == on_chain_nonce)
+            .next()
+            .cloned()
+    }
+
+    /// Get transactions by origin
+    pub fn get_transactions_by_origin(
+        &self,
+        _origin: TransactionOrigin,
+    ) -> Vec<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions.by_hash.values().cloned().collect()
+    }
+
+    /// Get pending transactions by origin
+    pub fn get_pending_transactions_by_origin(
+        &self,
+        _origin: TransactionOrigin,
+    ) -> Vec<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions.by_hash.values().cloned().collect()
+    }
+
+    /// Get queued transactions max
+    pub fn get_queued_transactions_max(&self, max: usize) -> Vec<Arc<ValidPoolTransaction<T>>> {
+        self.all_transactions
+            .by_hash
+            .values()
+            .take(max)
+            .cloned()
+            .collect()
+    }
+
+    /// Get sender ID
+    pub fn get_sender_id(&self, _sender: Address) -> reth_transaction_pool::identifier::SenderId {
+        // Simplified implementation - you may need to expand this
+        reth_transaction_pool::identifier::SenderId::from(1)
     }
 }

@@ -12,16 +12,17 @@
 use alloy_consensus as _;
 mod consensus;
 mod payload;
+mod pool;
 mod rpc;
-mod txpool;
 
 use clap::Parser;
+use reth_transaction_pool::PoolConfig;
 // Suppress warnings for dependencies used by CLI binary
 use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
+    pool::{MysticetiPoolBuilder, MysticetiPoolConfig},
     rpc::{ConsensusTransactionsHandler, TxpoolListener},
-    txpool::MysticetiPoolBuilder,
 };
 
 use reth_ethereum::{
@@ -78,15 +79,16 @@ fn main() {
             let mysticeti_payload_builder = BasicPayloadServiceBuilder::new(
                 MysticetiPayloadBuilderFactory::new(consensus_pool.clone()),
             );
-
+            let mysticeti_pool_config =
+                MysticetiPoolConfig::new(PoolConfig::default(), args.committed_subdags_per_block);
             let handle = builder
                 .with_types::<EthereumNode>()
                 // Configure the components of the node
                 // use default ethereum components but use our custom payload builder
                 .with_components(
                     EthereumNode::components()
-                        .payload(mysticeti_payload_builder)
-                        .pool(MysticetiPoolBuilder::default()),
+                        .pool(MysticetiPoolBuilder::new(mysticeti_pool_config))
+                        .payload(mysticeti_payload_builder),
                 )
                 .with_add_ons(EthereumAddOns::default())
                 .extend_rpc_modules({
@@ -119,6 +121,7 @@ fn main() {
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
 
                     let mut mysticeti_consensus = MysticetiConsensus::new(
+                        node.pool.clone(),
                         consensus_pool,
                         node.provider,
                         payload_builder_handle,

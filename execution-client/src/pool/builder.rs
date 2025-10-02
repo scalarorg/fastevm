@@ -12,12 +12,12 @@ use reth_ethereum::{
 use reth_node_api::TxTy;
 use reth_tracing::tracing::{debug, info};
 use reth_transaction_pool::{
-    blobstore::DiskFileBlobStore, CoinbaseTipOrdering, EthTransactionPool, PoolConfig,
-    PoolTransaction, TransactionPool, TransactionValidationTaskExecutor,
+    blobstore::DiskFileBlobStore, CoinbaseTipOrdering, PoolConfig, PoolTransaction,
+    TransactionPool, TransactionValidationTaskExecutor,
 };
 use std::time::SystemTime;
 
-use crate::txpool::MysticetiPool;
+use crate::pool::{config::MysticetiPoolConfig, MysticetiTransactionPool};
 
 /// A basic mysticeti transaction pool.
 ///
@@ -27,7 +27,15 @@ use crate::txpool::MysticetiPool;
 #[non_exhaustive]
 pub struct MysticetiPoolBuilder {
     // TODO add options for txpool args
-    pool_config: PoolConfig,
+    mysticeti_pool_config: MysticetiPoolConfig,
+}
+
+impl MysticetiPoolBuilder {
+    pub fn new(mysticeti_pool_config: MysticetiPoolConfig) -> Self {
+        Self {
+            mysticeti_pool_config,
+        }
+    }
 }
 
 impl<Types, Node> PoolBuilder<Node> for MysticetiPoolBuilder
@@ -39,7 +47,7 @@ where
     Node: FullNodeTypes<Types = Types>,
 {
     // type Pool = EthTransactionPool<Node::Provider, DiskFileBlobStore>;
-    type Pool = MysticetiPool<Node::Provider, DiskFileBlobStore>;
+    type Pool = MysticetiTransactionPool<Node::Provider, DiskFileBlobStore>;
 
     async fn build_pool(self, ctx: &BuilderContext<Node>) -> eyre::Result<Self::Pool> {
         let pool_config = ctx.pool_config();
@@ -91,18 +99,16 @@ where
         //     .with_validator(validator)
         //     .build_and_spawn_maintenance_task(blob_store, pool_config)?;
 
-        let transaction_pool = reth_transaction_pool::Pool::new(
+        let transaction_pool = MysticetiTransactionPool::new(
             validator,
             CoinbaseTipOrdering::default(),
             blob_store,
-            pool_config.clone(),
-        );
-
-        let transaction_pool = MysticetiPool::new(
-            validator,
-            CoinbaseTipOrdering::default(),
-            blob_store,
-            pool_config.clone(),
+            MysticetiPoolConfig::new(
+                pool_config.clone(),
+                self.mysticeti_pool_config
+                    .committed_subdags_per_block
+                    .clone(),
+            ),
         );
 
         // Spawn maintenance tasks using standalone functions
