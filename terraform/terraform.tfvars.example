@@ -1,0 +1,76 @@
+# FastEVM Terraform Variables Example
+# Copy this file to terraform.tfvars and customize the values
+
+# Required: GCP Project ID
+project_id = "your-gcp-project-id"
+
+# Optional: Project name prefix for all resources
+project_name = "fastevm"
+
+# Optional: GCP Region and Zone
+region = "us-central1"
+zone = "us-central1-a"
+
+# Optional: Number of nodes to deploy
+node_count = 4
+
+# Optional: Machine type for instances
+machine_type = "e2-standard-4"
+
+# Optional: Disk configuration
+disk_type = "pd-ssd"
+disk_size = 100
+
+# Optional: Boot disk image
+image = "ubuntu-os-cloud/ubuntu-2204-lts"
+
+# Optional: Network configuration
+subnet_cidr = "10.0.0.0/24"
+
+# Optional: GitHub repository configuration
+github_repo = "https://github.com/scalarorg/fastevm.git"
+github_branch = "main"
+
+# Optional: Feature flags
+enable_monitoring = true
+enable_load_balancer = true
+
+# Optional: Node labels
+node_labels = {
+  environment = "production"
+  project     = "fastevm"
+  managed-by  = "terraform"
+}
+
+# Optional: Additional firewall tags
+additional_tags = []
+
+# Optional: SSH keys for access (if needed)
+ssh_keys = []
+
+# Optional: Custom startup script
+custom_startup_script = ""
+
+# Optional: Consensus parameters
+consensus_parameters = {
+  leader_timeout_ms     = 200
+  min_round_delay_ms    = 100
+  max_forward_time_drift_ms = 500
+  max_blocks_per_sync   = 32
+  max_blocks_per_fetch  = 1000
+}
+
+# Optional: Execution client configuration
+execution_config = {
+  http_port_start   = 8545
+  ws_port_start     = 8546
+  engine_port_start = 8551
+  p2p_port_start    = 30303
+  log_level         = "info"
+}
+
+# Optional: Consensus client configuration
+consensus_config = {
+  port_start = 26657
+  log_level  = "info"
+}
