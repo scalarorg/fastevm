@@ -77,7 +77,7 @@ resource "google_compute_firewall" "fastevm_internal" {
 
   allow {
     protocol = "tcp"
-    ports    = ["22", "80", "443", "8545-8556", "26657", "30303"]
+    ports    = ["22", "80", "443", "8545", "8546", "8551", "26657", "30303"]
   }
 
   allow {
@@ -95,7 +95,7 @@ resource "google_compute_firewall" "fastevm_external" {
 
   allow {
     protocol = "tcp"
-    ports    = ["22", "80", "443", "8545-8556", "26657", "30303"]
+    ports    = ["22", "80", "443", "8545", "8546", "8551", "26657", "30303"]
   }
 
   allow {
@@ -133,6 +133,9 @@ resource "google_compute_instance" "fastevm_nodes" {
   name         = "${var.project_name}-node-${count.index + 1}"
   machine_type = var.machine_type
   zone         = var.zone
+
+  # Allow stopping instances for updates (required for machine type changes)
+  allow_stopping_for_update = true
 
   tags = ["fastevm-node"]
 

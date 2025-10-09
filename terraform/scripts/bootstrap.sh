@@ -60,12 +60,14 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 # Install Rust
 echo "Installing Rust..."
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:$PATH"
-rustup default stable
-rustup update
+export PATH="$HOME/.cargo/bin:$PATH" && rustup default stable && rustup update
 
 # Add docker group and user
 usermod -aG docker ubuntu
+
+# Configure passwordless sudo for ubuntu user
+echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/ubuntu
+chmod 440 /etc/sudoers.d/ubuntu
 
 # Create FastEVM directory
 FASTEVM_DIR="/opt/fastevm"
@@ -74,13 +76,18 @@ cd $FASTEVM_DIR
 
 # Clone the repository
 echo "Cloning FastEVM repository..."
+echo "GitHub Repo: $GITHUB_REPO"
+echo "GitHub Branch: $GITHUB_BRANCH"
+if [ -z "$GITHUB_REPO" ]; then
+    echo "ERROR: GITHUB_REPO is not set!"
+    exit 1
+fi
 git clone $GITHUB_REPO .
 git checkout $GITHUB_BRANCH
 
 # Build the project
 echo "Building FastEVM..."
-export PATH="$HOME/.cargo/bin:$PATH"
-cargo build --release
+export PATH="$HOME/.cargo/bin:$PATH" && cargo build --release
 
 # Create data directories
 echo "Creating data directories..."

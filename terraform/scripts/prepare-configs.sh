@@ -282,11 +282,11 @@ declare -a CONSENSUS_PORTS
 declare -a P2P_PORTS
 
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-    HTTP_PORTS[$i]=$((8545 + i * 2))
-    WS_PORTS[$i]=$((8546 + i * 2))
-    ENGINE_PORTS[$i]=$((8551 + i))
-    CONSENSUS_PORTS[$i]=$((26657 + i))
-    P2P_PORTS[$i]=$((30303 + i))
+    HTTP_PORTS[$i]=8545
+    WS_PORTS[$i]=8546
+    ENGINE_PORTS[$i]=8551
+    CONSENSUS_PORTS[$i]=26657
+    P2P_PORTS[$i]=30303
 done
 
 # Generate JWT secrets
@@ -511,242 +511,230 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     cp "$CONFIG_DIR/committees.yml" "$NODE_DIR/"
     cp "$CONFIG_DIR/parameters.yml" "$NODE_DIR/"
     
-    # Create deployment script
-    cat > "$NODE_DIR/deploy.sh" << EOF
+    # Copy service.sh to each node directory
+    cp "$SCRIPT_DIR/service.sh" "$NODE_DIR/"
+    
+    # Create deploy.sh script that uses service.sh
+cat > "$NODE_DIR/deploy.sh" << 'EOF'
 #!/bin/bash
-# FastEVM Node $i Deployment Script
+# FastEVM Node Deployment Script
 
 set -e
 
-NODE_INDEX=$i
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Get node index from environment or default to 0
+NODE_INDEX=${NODE_INDEX:-0}
+
+# Set environment variables
 NODE_COUNT=$NODE_COUNT
 PROJECT_NAME="$PROJECT_NAME"
-GITHUB_REPO="$GITHUB_REPO"
-GITHUB_BRANCH="$GITHUB_BRANCH"
+GITHUB_REPO="${GITHUB_REPO:-https://github.com/scalarorg/fastevm.git}"
+GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
 
-echo "=== Deploying FastEVM Node \$NODE_INDEX ==="
+# Debug information
+log_info "Environment variables:"
+log_info "  NODE_INDEX: $NODE_INDEX"
+log_info "  NODE_COUNT: $NODE_COUNT"
+log_info "  PROJECT_NAME: $PROJECT_NAME"
+log_info "  GITHUB_REPO: $GITHUB_REPO"
+log_info "  GITHUB_BRANCH: $GITHUB_BRANCH"
+
+log_info "Starting FastEVM node $NODE_INDEX deployment..."
 
 # Update system packages
-echo "Updating system packages..."
-apt-get update -y
-apt-get upgrade -y
+log_info "Updating system packages..."
+sudo apt-get update -y
+sudo apt-get upgrade -y
 
 # Install required packages
-echo "Installing required packages..."
-apt-get install -y \\
-    curl \\
-    wget \\
-    git \\
-    build-essential \\
-    pkg-config \\
-    libssl-dev \\
-    libclang-dev \\
-    cmake \\
-    jq \\
-    htop \\
-    vim \\
-    unzip \\
-    software-properties-common \\
-    apt-transport-https \\
-    ca-certificates \\
-    gnupg \\
+log_info "Installing required packages..."
+sudo apt-get install -y \
+    curl \
+    wget \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libclang-dev \
+    cmake \
+    jq \
+    htop \
+    vim \
+    unzip \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
+    gnupg \
     lsb-release
 
 # Install Docker
-echo "Installing Docker..."
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=\$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \$(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+log_info "Installing Docker..."
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update -y
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
 # Install Rust
-echo "Installing Rust..."
+log_info "Installing Rust..."
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+source $HOME/.cargo/env
 rustup default stable
 rustup update
 
 # Add docker group and user
-usermod -aG docker ubuntu
+sudo usermod -aG docker ubuntu
 
 # Create FastEVM directory
 FASTEVM_DIR="/opt/fastevm"
-mkdir -p \$FASTEVM_DIR
-cd \$FASTEVM_DIR
+sudo mkdir -p $FASTEVM_DIR
+sudo chown -R ubuntu:ubuntu $FASTEVM_DIR
+cd $FASTEVM_DIR
 
-# Clone the repository
-echo "Cloning FastEVM repository..."
-git clone \$GITHUB_REPO .
-git checkout \$GITHUB_BRANCH
+# Clone or update the repository
+if [ -d ".git" ]; then
+    log_info "Repository already exists, pulling latest changes..."
+    git fetch origin
+    git checkout $GITHUB_BRANCH
+    git pull origin $GITHUB_BRANCH
+else
+    log_info "Cloning FastEVM repository..."
+    log_info "GitHub Repo: $GITHUB_REPO"
+    log_info "GitHub Branch: $GITHUB_BRANCH"
+    if [ -z "$GITHUB_REPO" ]; then
+        log_error "GITHUB_REPO is not set!"
+        exit 1
+    fi
+    git clone $GITHUB_REPO .
+    git checkout $GITHUB_BRANCH
+fi
 
 # Build the project
-echo "Building FastEVM..."
-export PATH="\$HOME/.cargo/bin:\$PATH"
+log_info "Building FastEVM..."
+export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
 cargo build --release
 
-# Create data directories
-echo "Creating data directories..."
-mkdir -p /data/execution
-mkdir -p /data/consensus
-mkdir -p /data/logs
-mkdir -p /data/config
+# Stop services before updating binaries
+log_info "Stopping services before updating binaries..."
+if systemctl is-active --quiet fastevm-execution; then
+    log_info "Stopping execution client..."
+    sudo systemctl stop fastevm-execution
+fi
 
-# Mount the persistent disk
-echo "Mounting persistent disk..."
-DISK_DEVICE="/dev/sdb"
-if [ -b "\$DISK_DEVICE" ]; then
-    # Check if disk is already formatted
-    if ! blkid \$DISK_DEVICE; then
-        echo "Formatting persistent disk..."
-        mkfs.ext4 \$DISK_DEVICE
-    fi
-    
-    # Mount the disk
-    echo "Mounting persistent disk to /data..."
-    mount \$DISK_DEVICE /data
-    echo "\$DISK_DEVICE /data ext4 defaults 0 0" >> /etc/fstab
+if systemctl is-active --quiet fastevm-consensus; then
+    log_info "Stopping consensus client..."
+    sudo systemctl stop fastevm-consensus
+fi
+
+# Wait a moment for services to stop
+sleep 5
+
+# Install binaries to system location
+log_info "Installing FastEVM binaries..."
+sudo cp $FASTEVM_DIR/target/release/fastevm-execution /usr/local/bin/
+sudo cp $FASTEVM_DIR/target/release/fastevm-consensus /usr/local/bin/
+sudo cp $FASTEVM_DIR/target/release/cli /usr/local/bin/
+sudo chmod +x /usr/local/bin/fastevm-execution
+sudo chmod +x /usr/local/bin/fastevm-consensus
+sudo chmod +x /usr/local/bin/cli
+
+# Create data directories
+log_info "Creating data directories..."
+sudo mkdir -p /data/execution
+sudo mkdir -p /data/execution/p2p
+sudo mkdir -p /data/execution/db
+sudo mkdir -p /data/logs
+sudo mkdir -p /data/config
+
+# Set proper ownership for database directory
+sudo chown -R ubuntu:ubuntu /data/execution
+
+# Generate JWT secret
+log_info "Generating JWT secret..."
+openssl rand -hex 32 | tr -d '\n' | sudo tee /data/execution/jwt.hex > /dev/null
+
+# Generate P2P secret key
+log_info "Generating P2P secret key..."
+NODE_SEED="fastevm-node-${NODE_INDEX}-p2p-secret-2025"
+echo "$NODE_SEED" | openssl dgst -sha256 -hex | cut -d' ' -f2 | tr -d '\n' | sudo tee /data/execution/p2p/secret.key > /dev/null
+
+# Generate peer ID from secret key
+log_info "Generating peer ID..."
+if [ -f "/usr/local/bin/cli" ]; then
+    # Set proper permissions for CLI to write
+    sudo chown -R ubuntu:ubuntu /data/execution/p2p
+    sudo -u ubuntu /usr/local/bin/cli show-peer-id --file /data/execution/p2p/secret.key --output /data/execution/p2p/secret.hex
+    # Remove 0x prefix if present
+    sudo sed -i 's/^0x//' /data/execution/p2p/secret.hex
+else
+    # Fallback: use the secret key directly as peer ID
+    sudo cp /data/execution/p2p/secret.key /data/execution/p2p/secret.hex
 fi
 
 # Copy configuration files
-echo "Copying configuration files..."
-cp /tmp/fastevm-config/* /data/
+log_info "Copying configuration files..."
+sudo cp /tmp/fastevm-config/* /data/
 
-# Create systemd service for execution client
-cat > /etc/systemd/system/fastevm-execution.service << 'EOL'
-[Unit]
-Description=FastEVM Execution Client
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=\$FASTEVM_DIR
-ExecStart=\$FASTEVM_DIR/target/release/fastevm-execution \\
-    --config /data/execution.toml \\
-    --datadir /data/execution \\
-    --log-level info
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-# Create systemd service for consensus client
-cat > /etc/systemd/system/fastevm-consensus.service << 'EOL'
-[Unit]
-Description=FastEVM Consensus Client
-After=network.target fastevm-execution.service
-
-[Service]
-Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=\$FASTEVM_DIR
-ExecStart=\$FASTEVM_DIR/target/release/fastevm-consensus \\
-    start \\
-    --config /data/node.yml
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-# Create health check script
-cat > /usr/local/bin/fastevm-health-check.sh << 'EOL'
-#!/bin/bash
-# Health check script for FastEVM nodes
-
-NODE_INDEX=\${1:-0}
-HTTP_PORT=\$((8545 + NODE_INDEX * 2))
-ENGINE_PORT=\$((8551 + NODE_INDEX))
-
-# Check execution client
-if curl -s -f "http://localhost:\$HTTP_PORT" > /dev/null; then
-    echo "Execution client healthy"
-else
-    echo "Execution client unhealthy"
-    exit 1
+# Initialize execution node with genesis
+log_info "Initializing execution node with genesis..."
+if [ -f "/data/genesis.json" ]; then
+    sudo /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/genesis.json || true
 fi
 
-# Check engine API
-if curl -s -f "http://localhost:\$ENGINE_PORT" > /dev/null; then
-    echo "Engine API healthy"
-else
-    echo "Engine API unhealthy"
-    exit 1
-fi
+# Install systemd services
+log_info "Installing systemd services..."
+sudo bash /tmp/fastevm-config/service.sh install
 
-echo "All services healthy"
-exit 0
-EOL
-
-chmod +x /usr/local/bin/fastevm-health-check.sh
-
-# Create status script
-cat > /usr/local/bin/fastevm-status.sh << 'EOL'
-#!/bin/bash
-# Status script for FastEVM nodes
-
-echo "=== FastEVM Node Status ==="
-echo "Node Index: \$NODE_INDEX"
-echo "Node IP: \$(hostname -I | awk '{print \$1}')"
-echo ""
-
-echo "=== Service Status ==="
-systemctl status fastevm-execution --no-pager -l
-echo ""
-systemctl status fastevm-consensus --no-pager -l
-echo ""
-
-echo "=== Network Ports ==="
-netstat -tlnp | grep -E "(8545|8551|26657)"
-echo ""
-
-echo "=== Recent Logs ==="
-journalctl -u fastevm-execution --no-pager -n 10
-echo ""
-journalctl -u fastevm-consensus --no-pager -n 10
-EOL
-
-chmod +x /usr/local/bin/fastevm-status.sh
+# No need to set NODE_INDEX since we're using fixed ports
 
 # Set proper permissions
-chown -R ubuntu:ubuntu /data
-chown -R ubuntu:ubuntu \$FASTEVM_DIR
+log_info "Setting permissions..."
+sudo chown -R ubuntu:ubuntu /data
 
-# Enable and start services
-echo "Enabling and starting services..."
-systemctl daemon-reload
-systemctl enable fastevm-execution
-systemctl enable fastevm-consensus
+# Ensure database directory has proper permissions
+log_info "Setting database permissions..."
+sudo chmod -R 755 /data/execution/db
 
-# Start execution client first
-systemctl start fastevm-execution
-
-# Wait for execution client to be ready
-echo "Waiting for execution client to be ready..."
-sleep 30
-
-# Start consensus client
-systemctl start fastevm-consensus
+# Restart services if they exist, otherwise start them
+log_info "Restarting/Starting services..."
+if systemctl is-active --quiet fastevm-execution; then
+    log_info "Restarting services..."
+    sudo bash /tmp/fastevm-config/service.sh restart
+else
+    log_info "Starting services..."
+    sudo bash /tmp/fastevm-config/service.sh start
+fi
 
 # Create completion marker
-echo "FastEVM node \$NODE_INDEX deployment completed successfully at \$(date)" > /var/log/fastevm-deployment-complete
+echo "FastEVM node $NODE_INDEX deployment completed successfully at $(date)" | sudo tee /var/log/fastevm-deployment-complete
 
-echo "=== FastEVM Node \$NODE_INDEX Deployment Completed Successfully ==="
-echo "Services started: fastevm-execution, fastevm-consensus"
-echo "Use 'fastevm-status' to check status"
-echo "Use 'fastevm-health-check' to verify health"
+log_success "=== FastEVM Node $NODE_INDEX Deployment Completed Successfully ==="
+log_info "Services started: fastevm-execution, fastevm-consensus"
+log_info "Use 'fastevm-status' to check status"
+log_info "Use 'fastevm-health-check' to verify health"
 EOF
     
+    # Make scripts executable
     chmod +x "$NODE_DIR/deploy.sh"
+    chmod +x "$NODE_DIR/service.sh"
     
     log_success "Generated deployment package for node $i"
 done
@@ -793,7 +781,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     container_name: ${PROJECT_NAME}-consensus$i
     hostname: consensus$i
     ports:
-      - "$CONSENSUS_PORT:26657"
+      - "26657:26657"
     volumes:
       - consensus-data$i:/app/data
       - ./node$i.yml:/app/data/node.yml
@@ -953,7 +941,7 @@ log_success "All nodes deployed successfully!"
 log_info "Testing node connectivity..."
 for i in \$(seq 0 \$((NODE_COUNT - 1))); do
     node_ip="\${NODE_IPS[\$i]}"
-    http_port=\$((8545 + i * 2))
+    http_port=8545
     
     log_info "Testing node \$i (\$node_ip:$http_port)..."
     if curl -s -f "http://\$node_ip:\$http_port" > /dev/null; then
@@ -1029,7 +1017,7 @@ docker-compose up -d
 # Test RPC endpoints
 for i in \$(seq 0 $((NODE_COUNT-1))); do
     node_ip="$BASE_IP.$((START_IP + i))"
-    http_port=\$((8545 + i * 2))
+    http_port=8545
     echo "Testing node \$i: http://\$node_ip:\$http_port"
     curl -X POST http://\$node_ip:\$http_port \\
       -H "Content-Type: application/json" \\

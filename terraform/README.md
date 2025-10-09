@@ -4,6 +4,59 @@ This directory contains Terraform configurations to deploy FastEVM nodes on Goog
 
 ## 🚀 Quick Start
 
+### Single Command Deployment (Recommended)
+
+The easiest way to deploy FastEVM is using the single command that handles everything:
+
+```bash
+# 1. Prerequisites
+brew install terraform gcloud jq  # macOS
+# or
+sudo apt install terraform google-cloud-cli jq  # Ubuntu
+
+# 2. Authenticate with GCP
+gcloud auth login
+gcloud auth application-default login
+
+# 3. Deploy everything in one command
+cd terraform
+make deploy-all
+```
+
+This single command will:
+- ✅ Create GCP infrastructure (VMs, networking, disks)
+- ✅ Prepare all node configurations locally
+- ✅ Deploy and configure all nodes remotely
+- ✅ Start all FastEVM services
+- ✅ Verify deployment health
+
+### Examples
+
+```bash
+# Basic deployment with 4 nodes
+make deploy-all
+
+# Deploy with 6 nodes
+make deploy-nodes NODE_COUNT=6
+
+# Deploy with custom project name
+make deploy-project PROJECT_NAME=my-fastevm-network
+
+# Deploy to different region
+make deploy-region REGION=us-west1 ZONE=us-west1-a
+
+# Deploy with larger machines
+make deploy-machine MACHINE_TYPE=e2-standard-8
+
+# Deploy to existing infrastructure (skip Terraform)
+make deploy-existing
+
+# Destroy and redeploy everything
+make redeploy
+```
+
+### Alternative: Step-by-Step Deployment
+
 1. **Prerequisites**
    ```bash
    # Install required tools
@@ -13,7 +66,9 @@ This directory contains Terraform configurations to deploy FastEVM nodes on Goog
    
    # Authenticate with GCP
    gcloud auth login
-   gcloud auth application-default login
+   gcloud auth application-default login \
+      --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
+
    ```
 
 2. **Configure Variables**
@@ -25,8 +80,13 @@ This directory contains Terraform configurations to deploy FastEVM nodes on Goog
 
 3. **Deploy Infrastructure**
    ```bash
+   # Single command deployment (recommended):
+   make deploy-all
+   
+   # Or use the original quick-start:
    make quick-start
-   # or manually:
+   
+   # Or manually:
    make init
    make plan
    make apply
@@ -148,13 +208,15 @@ deploy/
 - **Load Balancer**: External access (optional)
 
 ### Port Configuration
-| Service | Port Range | Description |
-|---------|------------|-------------|
-| HTTP RPC | 8545-8555 | Ethereum RPC endpoints |
-| WebSocket RPC | 8546-8556 | WebSocket RPC endpoints |
-| Engine API | 8551-8554 | Engine API endpoints |
-| Consensus API | 26657-26660 | Consensus client APIs |
-| P2P | 30303-30306 | Peer-to-peer networking |
+| Service | Port | Description |
+|---------|------|-------------|
+| HTTP RPC | 8545 | Ethereum RPC endpoints (all nodes) |
+| WebSocket RPC | 8546 | WebSocket RPC endpoints (all nodes) |
+| Engine API | 8551 | Engine API endpoints (all nodes) |
+| Consensus API | 26657 | Consensus client APIs (all nodes) |
+| P2P | 30303 | Peer-to-peer networking (all nodes) |
+
+**Note**: All nodes use the same fixed ports for consistency and easier management.
 
 ## 🐳 Docker Compose Deployment
 
@@ -217,6 +279,19 @@ make backup            # Backup configuration
 make costs             # Show estimated costs
 ```
 
+### Single Command Deployment
+```bash
+make deploy-all        # Complete deployment: infrastructure + configs + deploy
+make deploy-existing   # Deploy to existing infrastructure (skip Terraform)
+make redeploy          # Destroy existing infrastructure and redeploy
+
+# Custom deployment options
+make deploy-nodes NODE_COUNT=6           # Deploy with 6 nodes
+make deploy-project PROJECT_NAME=mynet   # Deploy with custom project name
+make deploy-region REGION=us-west1 ZONE=us-west1-a  # Deploy to different region
+make deploy-machine MACHINE_TYPE=e2-standard-8      # Deploy with larger machines
+```
+
 ## 📊 Monitoring
 
 ### Health Checks
@@ -233,6 +308,27 @@ make costs             # Show estimated costs
 - `fastevm-health-check.sh`: Health check script
 - `fastevm-monitor.sh`: System monitoring
 - `fastevm-status.sh`: Detailed status
+
+### Service Management
+The deployment includes a comprehensive service management script (`service.sh`) that provides:
+
+```bash
+# Service management commands (run on remote nodes)
+sudo bash /tmp/fastevm-config/service.sh install     # Install systemd services
+sudo bash /tmp/fastevm-config/service.sh start       # Start services
+sudo bash /tmp/fastevm-config/service.sh restart     # Restart services
+sudo bash /tmp/fastevm-config/service.sh stop        # Stop services
+sudo bash /tmp/fastevm-config/service.sh status      # Check service status
+sudo bash /tmp/fastevm-config/service.sh logs        # View service logs
+sudo bash /tmp/fastevm-config/service.sh follow      # Follow live logs
+```
+
+**Key Features:**
+- **Fixed Ports**: All nodes use consistent ports (8545, 8546, 8551, 30303, 26657)
+- **Separate Log Files**: Each service writes to dedicated log files in `/data/logs/`
+- **Health Checks**: Built-in health monitoring for all services
+- **Service Control**: Easy start/stop/restart functionality
+- **Log Management**: Centralized logging with rotation support
 
 ## 🔐 Security
 
@@ -278,6 +374,14 @@ make costs             # Show estimated costs
    make logs
    make ssh-node NODE=1
    sudo journalctl -u fastevm-execution
+   sudo journalctl -u fastevm-consensus
+   
+   # Check service status
+   sudo bash /tmp/fastevm-config/service.sh status
+   
+   # View service logs
+   sudo bash /tmp/fastevm-config/service.sh logs execution
+   sudo bash /tmp/fastevm-config/service.sh logs consensus
    ```
 
 4. **Configuration Issues**
@@ -290,6 +394,19 @@ make costs             # Show estimated costs
    ```bash
    make health
    make test-rpc
+   ```
+
+6. **Port Conflicts (Fixed Ports)**
+   Since all nodes use the same fixed ports, ensure no conflicts:
+   ```bash
+   # Check if ports are in use
+   sudo netstat -tlnp | grep -E "(8545|8546|8551|30303|26657)"
+   
+   # Check service status
+   sudo bash /tmp/fastevm-config/service.sh status
+   
+   # Restart services if needed
+   sudo bash /tmp/fastevm-config/service.sh restart
    ```
 
 ### Debug Commands
