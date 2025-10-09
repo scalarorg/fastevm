@@ -163,19 +163,104 @@ test-rpc: ## Test RPC endpoints
 # Prepare local configurations
 prepare-configs: ## Prepare all configurations locally (auto-detects from Terraform)
 	@echo "Preparing FastEVM configurations locally..."
-	@./scripts/prepare-configs.sh
+	@GITHUB_REPO="$(GITHUB_REPO)" GITHUB_BRANCH="$(GITHUB_BRANCH)" ./scripts/prepare-configs.sh
 	@echo "Configurations prepared successfully!"
 
 # Deploy configurations to remote nodes
 deploy-configs: ## Deploy prepared configurations to remote nodes
 	@echo "Deploying configurations to remote nodes..."
 	@if [ ! -d "deploy" ]; then echo "No deploy directory found. Run 'make prepare-configs' first."; exit 1; fi
-	@cd deploy && ./deploy-all.sh
-	@echo "Deployment completed!"
+	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@chmod 600 fastevm-deploy-key
+	@echo "Getting node IPs from Terraform output..."
+	@if [ -f "../deployment-info.json" ]; then \
+		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
+		if [ -z "$$NODE_IPS" ]; then \
+			echo "Could not get node IPs from Terraform output"; \
+			exit 1; \
+		fi; \
+		echo "Deploying to nodes: $$NODE_IPS"; \
+		NODE_INDEX=0; \
+		for node_ip in $$NODE_IPS; do \
+			echo "Deploying node $$NODE_INDEX to $$node_ip..."; \
+			echo "Creating remote directory..."; \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key ubuntu@$$node_ip 'mkdir -p /tmp/fastevm-config'; \
+			echo "Copying configuration files..."; \
+			scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key -r deploy/node$$NODE_INDEX/* ubuntu@$$node_ip:/tmp/fastevm-config/; \
+			echo "Running deployment script..."; \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key ubuntu@$$node_ip 'bash /tmp/fastevm-config/deploy.sh' & \
+			NODE_INDEX=$$((NODE_INDEX + 1)); \
+		done; \
+		wait; \
+		echo "All nodes deployed successfully!"; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
 
 # Full local preparation workflow
 prepare-and-deploy: prepare-configs deploy-configs ## Prepare configs locally and deploy to remote nodes
 	@echo "Full preparation and deployment completed!"
+
+# Complete deployment (infrastructure + configs + deploy)
+deploy-all: check-prereqs init apply prepare-configs deploy-configs verify-deployment ## Complete deployment: create infrastructure, prepare configs, and deploy all nodes
+	@echo "=== FastEVM Complete Deployment Finished ==="
+	@echo "All nodes are being configured and started..."
+	@echo "Check status with: make status"
+	@echo "Test endpoints with: make test-rpc"
+
+# Deploy with existing infrastructure (skip Terraform)
+deploy-existing: check-prereqs prepare-configs deploy-configs verify-deployment ## Deploy to existing infrastructure (skip Terraform)
+	@echo "=== Deployment to Existing Infrastructure Finished ==="
+
+# Destroy and redeploy
+redeploy: destroy deploy-all ## Destroy existing infrastructure and redeploy
+	@echo "=== Redeploy Finished ==="
+
+# Verify deployment
+verify-deployment: ## Verify deployment health
+	@echo "Verifying deployment..."
+	@if [ -f "../deployment-info.json" ]; then \
+		echo "Waiting for services to start..."; \
+		sleep 30; \
+		echo "Testing node connectivity..."; \
+		for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
+			node_ip=$$(jq -r ".instance_external_ips.value[$$i]" ../deployment-info.json 2>/dev/null || jq -r ".instance_ips.value[$$i]" ../deployment-info.json 2>/dev/null); \
+			http_port=$$((8545 + i * 2)); \
+			echo "Testing node $$i ($$node_ip:$$http_port)..."; \
+			if curl -s -f "http://$$node_ip:$$http_port" > /dev/null; then \
+				echo "✓ Node $$i is responding"; \
+			else \
+				echo "⚠ Node $$i is not responding yet (services may still be starting)"; \
+			fi; \
+		done; \
+		echo "Deployment verification completed!"; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+	fi
+
+# Deploy with custom node count
+deploy-nodes: ## Deploy with custom node count (usage: make deploy-nodes NODE_COUNT=6)
+	@echo "Deploying with $(NODE_COUNT) nodes..."
+	@$(MAKE) deploy-all NODE_COUNT=$(NODE_COUNT)
+
+# Deploy with custom project name
+deploy-project: ## Deploy with custom project name (usage: make deploy-project PROJECT_NAME=myproject)
+	@echo "Deploying with project name: $(PROJECT_NAME)"
+	@$(MAKE) deploy-all PROJECT_NAME=$(PROJECT_NAME)
+
+# Deploy with custom region/zone
+deploy-region: ## Deploy with custom region/zone (usage: make deploy-region REGION=us-west1 ZONE=us-west1-a)
+	@echo "Deploying to region: $(REGION), zone: $(ZONE)"
+	@$(MAKE) deploy-all REGION=$(REGION) ZONE=$(ZONE)
+
+# Deploy with custom machine type
+deploy-machine: ## Deploy with custom machine type (usage: make deploy-machine MACHINE_TYPE=e2-standard-8)
+	@echo "Deploying with machine type: $(MACHINE_TYPE)"
+	@$(MAKE) deploy-all MACHINE_TYPE=$(MACHINE_TYPE)
 
 # Show prepared configurations
 show-configs: ## Show prepared configuration summary
