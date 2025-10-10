@@ -1,6 +1,9 @@
 # FastEVM GCP Terraform Deployment
 
 This directory contains Terraform configurations to deploy FastEVM nodes on Google Cloud Platform (GCP).
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
 
 ## 🚀 Quick Start
 
@@ -16,7 +19,8 @@ sudo apt install terraform google-cloud-cli jq  # Ubuntu
 
 # 2. Authenticate with GCP
 gcloud auth login
-gcloud auth application-default login
+cloud auth application-default login \
+      --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
 
 # 3. Deploy everything in one command
 cd terraform
@@ -359,7 +363,8 @@ sudo bash /tmp/fastevm-config/service.sh follow      # Follow live logs
 1. **Authentication Errors**
    ```bash
    gcloud auth login
-   gcloud auth application-default login
+   cloud auth application-default login \
+      --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
    ```
 
 2. **Permission Errors**
@@ -510,10 +515,251 @@ make restart          # Restart services
 4. Test with `make dev`
 5. Submit a pull request
 
-## 📄 License
+## 🧪 Client Node Testing
 
-This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
+FastEVM includes a dedicated client node for comprehensive testing of your deployed network. The client node is deployed separately and can test external FastEVM networks.
+
+### Quick Start with Client Node
+
+```bash
+# 1. Deploy your FastEVM network (main deployment)
+make deploy-all
+
+# 2. Deploy the client node (separate deployment)
+cd client-node
+make quick-start
+
+# 3. Wait for setup to complete (2-3 minutes)
+make status
+
+# 4. Setup test configuration
+make setup-config
+
+# 5. Configure test settings
+make connect
+# Edit /home/ubuntu/test-config/test.env with actual node IPs from main deployment
+
+# 6. Run tests
+make run-scan      # Block scan test
+make run-batch     # Batch transaction test
+make run-all       # All tests
+```
+
+### Client Node Features
+
+#### Standalone Deployment
+- ✅ Completely separate from main FastEVM network
+- ✅ Own VPC network and resources
+- ✅ Independent Terraform state
+- ✅ Can test external FastEVM networks
+
+#### Automatic Setup
+The client node automatically:
+- ✅ Installs Rust toolchain and dependencies
+- ✅ Clones FastEVM repository
+- ✅ Builds the test binary (`fastevm-test`)
+- ✅ Creates test configuration templates
+- ✅ Sets up log rotation and monitoring
+- ✅ Configures systemd service for health monitoring
+
+#### Comprehensive Test Runner
+- ✅ Color-coded output with progress tracking
+- ✅ Error handling and detailed logging
+- ✅ Configuration management via environment files
+- ✅ Multiple test types (scan, batch, range, all)
+- ✅ Real-time progress updates and ETA calculations
+
+### Client Node Commands
+
+#### Deployment Commands
+```bash
+cd client-node
+make init              # Initialize Terraform
+make plan              # Plan deployment
+make apply             # Deploy client node
+make destroy           # Destroy client node
+make status            # Show deployment status
+```
+
+#### Client Management
+```bash
+make connect           # Connect to client node via SSH
+make setup-config      # Setup test configuration
+make run-test TEST=<type>  # Run specific test type
+make run-scan          # Run block scan test
+make run-batch         # Run batch transaction test
+make run-all           # Run all tests
+```
+
+#### Maintenance Commands
+```bash
+make update-code       # Update code and rebuild
+make clean-logs        # Clean logs on client node
+make clean-all         # Clean all local files
+make outputs           # Show all outputs
+```
+
+### Client Node Configuration
+
+#### Test Configuration File
+The client node uses `/home/ubuntu/test-config/test.env` for configuration:
+
+```bash
+# RPC Endpoints (update with actual node IPs from main deployment)
+RPC_URL1=http://node1-ip:8545
+RPC_URL2=http://node2-ip:8545
+RPC_URL3=http://node3-ip:8545
+RPC_URL4=http://node4-ip:8545
+
+# Network Configuration
+CHAIN_ID=202501
+
+# Test Parameters
+TEST_SENDER_COUNT=100
+TEST_TRANSACTION_COUNT=1
+TEST_TRANSACTION_VALUE=1000000000000000
+TEST_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+TEST_WAITING_TIME_SECONDS=30
+TEST_FETCH_NONCE=false
+```
+
+#### Terraform Variables
+Key variables for client node configuration:
+
+```hcl
+variable "project_id" {
+  description = "The GCP project ID"
+  type        = string
+}
+
+variable "client_machine_type" {
+  description = "Machine type for the client instance"
+  type        = string
+  default     = "e2-standard-2"
+}
+
+variable "client_disk_size" {
+  description = "Size of persistent disk for client node in GB"
+  type        = number
+  default     = 50
+}
+
+variable "client_subnet_cidr" {
+  description = "CIDR block for the client subnet"
+  type        = string
+  default     = "10.1.0.0/24"
+}
+```
+
+### Client Node Architecture
+
+#### Network Configuration
+- Client node has its own VPC network (`10.1.0.0/24`)
+- Separate from main FastEVM network (`10.0.0.0/24`)
+- Firewall rules allow external testing
+- SSH access configured for management
+
+#### Security
+- Uses separate SSH key pair (`client-deploy-key`)
+- Service account with minimal required permissions
+- Firewall rules restrict access to necessary ports only
+
+#### Monitoring
+- Systemd service for basic monitoring
+- Log rotation configured
+- Status commands for health checking
+
+### Client Node Commands (On Remote Node)
+
+Once connected to the client node, you can use these commands:
+
+```bash
+# Test commands
+make test-scan      # Run block scan test
+make test-batch     # Run batch transaction test
+make test-all       # Run all tests
+make test-range     # Run range scan test
+
+# Maintenance commands
+make update-build   # Update code and rebuild
+make status         # Show system status
+make clean-logs     # Clean logs
+```
+
+### Client Node Troubleshooting
+
+#### Common Issues
+
+1. **Client node not found**
+   ```bash
+   cd client-node
+   make status
+   # If not found, deploy it
+   make apply
+   ```
+
+2. **Tests failing**
+   ```bash
+   make status
+   make update-code
+   make connect
+   cat /home/ubuntu/test-config/test.env
+   ```
+
+3. **Connection issues**
+   ```bash
+   chmod 600 client-deploy-key
+   make connect
+   ```
+
+#### Logs
+- Setup logs: `/var/log/client-setup.log`
+- Test output: Displayed in terminal
+- System logs: Standard systemd journal
+
+### Cost Optimization
+
+The client node uses minimal resources:
+- `e2-standard-2` machine type (2 vCPUs, 8GB RAM)
+- 50GB SSD disk
+- Estimated cost: ~$55/month
+
+You can adjust these in `client-node/variables.tf`:
+```hcl
+variable "client_machine_type" {
+  default = "e2-micro"  # Even smaller for basic testing
+}
+```
+
+### Integration with Main Deployment
+
+The client node is designed to test external FastEVM networks:
+
+1. **Deploy your FastEVM network** using the main Terraform configuration
+2. **Deploy the client node** using `cd client-node && make quick-start`
+3. **Configure test settings** with actual node IPs from your FastEVM deployment
+4. **Run comprehensive tests** to validate your deployment
+
+### Directory Structure
+
+```
+terraform/
+├── main.tf                 # Main FastEVM network
+├── variables.tf            # Main network variables
+├── outputs.tf             # Main network outputs
+├── Makefile               # Main network management
+├── README.md              # Main documentation
+└── client-node/           # Client node subfolder
+    ├── main.tf            # Client node Terraform
+    ├── variables.tf       # Client node variables
+    ├── Makefile          # Client node management
+    ├── README.md         # Client node documentation
+    └── scripts/
+        └── client-setup.sh # Client setup script
+```
 
 ---
 
 **Ready to deploy?** Run `make quick-start` to get started! 🚀
+
+**Want to test your deployment?** Deploy a client node with `cd client-node && make quick-start` and run comprehensive tests! 🧪

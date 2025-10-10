@@ -6,7 +6,7 @@
 tfplan
 .terraform/
 .terraform.lock.hcl
-terraform.tfvars
+# terraform.tfvars
 !terraform.tfvars.example
 
 # Terraform crash log files

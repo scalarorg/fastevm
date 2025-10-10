@@ -88,7 +88,8 @@ check_prerequisites() {
     # Check GCP authentication
     if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
         log_error "No active GCP authentication found"
-        log "Please run: gcloud auth login && gcloud auth application-default login"
+        log "Please run: gcloud auth login && cloud auth application-default login \
+            --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid""
         exit 1
     fi
     
