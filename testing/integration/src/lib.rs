@@ -9,4 +9,3 @@ pub mod transactions;
 
 // Re-export block scanning functionality
 pub mod block_scan;
-pub mod block_scanner_cli;

@@ -17,6 +17,10 @@ pub async fn get_nonces(
 ) -> BTreeMap<Address, u64> {
     let mut nonces = BTreeMap::new();
     // Get the initial nonce for the sender address
+    println!(
+        "Getting nonces from {} for addresses {} to {}",
+        url, start_idx, end_idx
+    );
     let provider = match ProviderBuilder::new().connect(url).await {
         Ok(provider) => provider,
         Err(e) => {
@@ -44,6 +48,7 @@ pub async fn get_nonces(
                 return nonces;
             }
         };
+        println!("Nonce for address {:?} is {:?}", address, address_nonce);
         nonces.insert(*address, address_nonce);
     }
     nonces
