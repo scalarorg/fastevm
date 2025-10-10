@@ -63,10 +63,10 @@ output "node_endpoints" {
     for i in range(var.node_count) : "node-${i + 1}" => {
       internal_ip   = google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip
       external_ip   = google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip
-      http_rpc      = "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip}:${8545 + i * 2}"
-      ws_rpc        = "ws://${google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip}:${8546 + i * 2}"
-      engine_api    = "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip}:${8551 + i}"
-      consensus_api = "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip}:${26657 + i}"
+      http_rpc      = "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}:8545"
+      ws_rpc        = "ws://${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}:8546"
+      engine_api    = "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}:8551"
+      consensus_api = "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}:26657"
     }
   }
 }
@@ -79,7 +79,7 @@ output "peer_configuration" {
         index         = i
         stake         = 1000
         hostname      = "fastevm-consensus${i}"
-        address       = "/ip4/${google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip}/udp/${26657 + i}"
+        address       = "/ip4/${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}/udp/26657"
         authority_key = "AuthorityPublicKey(placeholder-${i})"
         protocol_key  = "ProtocolPublicKey(placeholder-${i})"
         network_key   = "NetworkPublicKey(placeholder-${i})"
@@ -100,7 +100,7 @@ output "execution_bootnodes" {
   description = "Bootnode configuration for execution clients"
   value = [
     for i in range(var.node_count) :
-    "enode://${google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip}:${30303 + i}"
+    "enode://${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}:30303"
   ]
 }
 
@@ -110,7 +110,7 @@ output "monitoring_endpoints" {
     load_balancer_health = "http://${google_compute_global_address.fastevm_ip.address}/health"
     node_health_checks = [
       for i in range(var.node_count) :
-      "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].network_ip}:8545"
+      "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}:8545"
     ]
   }
 }

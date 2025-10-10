@@ -16,6 +16,11 @@ PROJECT_NAME=${PROJECT_NAME:-"fastevm"}
 GITHUB_REPO=${GITHUB_REPO:-"https://github.com/scalarorg/fastevm.git"}
 GITHUB_BRANCH=${GITHUB_BRANCH:-"main"}
 
+# Prefunded accounts configuration
+PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-10000}
+PREFUND_BALANCE=${PREFUND_BALANCE:-"1000000000000000000000"}
+TEST_MNEMONIC=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -295,37 +300,6 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || echo "placeholder-jwt-secret-$i")
     echo "0x$JWT_SECRET" > "$CONFIG_DIR/jwt$i.hex"
 done
-
-# Generate genesis file
-log_info "Generating genesis file..."
-cat > "$CONFIG_DIR/genesis.json" << EOF
-{
-  "config": {
-    "chainId": 1337,
-    "homesteadBlock": 0,
-    "eip150Block": 0,
-    "eip155Block": 0,
-    "eip158Block": 0,
-    "byzantiumBlock": 0,
-    "constantinopleBlock": 0,
-    "petersburgBlock": 0,
-    "istanbulBlock": 0,
-    "berlinBlock": 0,
-    "londonBlock": 0,
-    "arrowGlacierBlock": 0,
-    "grayGlacierBlock": 0,
-    "shanghaiTime": 0,
-    "cancunTime": 0
-  },
-  "difficulty": "0x0",
-  "gasLimit": "0x1c9c380",
-  "alloc": {
-    "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6": {
-      "balance": "0x1000000000000000000000000000000000000000000000000000000000000000"
-    }
-  }
-}
-EOF
 
 # Generate committees configuration
 log_info "Generating committees configuration..."
@@ -693,6 +667,80 @@ fi
 log_info "Copying configuration files..."
 sudo cp /tmp/fastevm-config/* /data/
 
+# Function to add prefunded accounts to genesis.json (Step 2)
+prefund_account() {
+    log_info "Adding prefunded accounts to genesis.json..."
+    
+    # Configuration for prefunded accounts (must be consistent across all nodes)
+    local PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-10000}
+    local PREFUND_BALANCE=${PREFUND_BALANCE:-"1000000000000000000000"}
+    local TEST_MNEMONIC=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
+    
+    log_info "Prefund configuration:"
+    log_info "  Account count: $PREFUND_ACCOUNT_COUNT"
+    log_info "  Balance per account: $PREFUND_BALANCE wei"
+    log_info "  Mnemonic: $TEST_MNEMONIC"
+    
+    # Check if CLI is available
+    if ! command -v cli >/dev/null 2>&1; then
+        log_error "CLI not found in system PATH"
+        return 1
+    fi
+    
+    # Check if genesis.json exists
+    if [ ! -f "/data/genesis.json" ]; then
+        log_error "Genesis file not found at /data/genesis.json"
+        return 1
+    fi
+    
+    # Create backup of original genesis
+    sudo cp /data/genesis.json /data/genesis.json.backup
+    
+    # Generate prefunded accounts using CLI
+    log_info "Generating prefunded accounts using CLI..."
+    
+    # Set default values if not provided
+    local count=${PREFUND_ACCOUNT_COUNT:-1000}
+    local mnemonic=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
+    local balance=${PREFUND_BALANCE:-"1000000000000000000000"}
+    
+    if cli allocate-funds \
+        --input /data/genesis.json \
+        --count "$count" \
+        --mnemonic "$mnemonic" \
+        --amount "$balance" \
+        --output /data; then
+        
+        log_success "Successfully added $PREFUND_ACCOUNT_COUNT prefunded accounts to genesis.json"
+        
+        # Verify the updated genesis file
+        local total_accounts=$(jq '.alloc | length' /data/genesis.json)
+        log_info "Total accounts in genesis.json: $total_accounts"
+        
+        # Show sample accounts
+        log_info "Sample prefunded accounts:"
+        jq -r '.alloc | keys[0:3] | .[]' /data/genesis.json | while read -r addr; do
+            local balance=$(jq -r ".alloc[\"$addr\"].balance" /data/genesis.json)
+            log_info "  $addr: $balance wei"
+        done
+        
+        return 0
+    else
+        log_error "Failed to add prefunded accounts to genesis.json"
+        # Restore backup
+        sudo cp /data/genesis.json.backup /data/genesis.json
+        return 1
+    fi
+}
+
+# Add prefunded accounts to genesis.json before initialization
+log_info "Adding prefunded accounts to genesis.json..."
+if prefund_account; then
+    log_success "Prefunded accounts added successfully"
+else
+    log_error "Failed to add prefunded accounts, using original genesis.json"
+fi
+
 # Initialize execution node with genesis
 log_info "Initializing execution node with genesis..."
 if [ -f "/data/genesis.json" ]; then
@@ -916,8 +964,8 @@ deploy_node() {
     # Copy configuration files to node
     scp \$SSH_OPTS -i "\$SSH_KEY_PATH" -r node\$node_index/* ubuntu@\$node_ip:/tmp/fastevm-config/
     
-    # Run deployment script on node
-    ssh \$SSH_OPTS -i "\$SSH_KEY_PATH" ubuntu@\$node_ip 'bash /tmp/fastevm-config/deploy.sh'
+    # Run deployment script on node with prefund environment variables
+    ssh \$SSH_OPTS -i "\$SSH_KEY_PATH" ubuntu@\$node_ip "PREFUND_ACCOUNT_COUNT='$PREFUND_ACCOUNT_COUNT' PREFUND_BALANCE='$PREFUND_BALANCE' TEST_MNEMONIC='$TEST_MNEMONIC' bash /tmp/fastevm-config/deploy.sh"
     
     log_success "Node \$node_index deployment completed"
 }

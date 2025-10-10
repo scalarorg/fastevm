@@ -1,25 +1,48 @@
 //! Batch transaction sending test for FastEVM
 //!
 //! This module contains tests that verify batch transaction sending capabilities
-//! of the FastEVM system. The test generates 100 sender addresses from the same
-//! mnemonic used in genesis.json and sends transactions to random recipients
-//! using randomly selected RPC endpoints.
+//! of the FastEVM system. The test generates sender addresses from a configurable
+//! mnemonic and sends transactions to random recipients using randomly selected RPC endpoints.
 //!
 //! # Test Overview
 //!
 //! The batch transaction test performs the following operations:
-//! 1. Generates 100 deterministic sender addresses using the test mnemonic
-//! 2. For each sender, creates a transfer transaction to a random recipient
+//! 1. Generates deterministic sender addresses using the test mnemonic
+//! 2. For each sender, creates a configurable number of transfer transactions to random recipients
 //! 3. Randomly selects one of 4 RPC endpoints to broadcast each transaction
 //! 4. Tracks success/failure statistics and RPC usage distribution
 //! 5. Provides detailed logging and error handling
 //!
 //! # Usage
 //!
-//! To run the batch transaction test:
+//! ## As a CLI Tool
 //! ```bash
-//! cargo test test_batch_transaction_sending
+//! # Run with default parameters
+//! cargo run --bin batch
+//!
+//! # Run with custom parameters
+//! cargo run --bin batch -- --sender-count 500 --transaction-count 5 --mnemonic "your mnemonic here"
+//!
+//! # Run with environment variables
+//! TEST_SENDER_COUNT=200 TEST_TRANSACTION_COUNT=10 cargo run --bin batch
 //! ```
+//!
+//! ## As a Test
+//! ```bash
+//! # Run the parameterized test
+//! cargo test test_batch_transfer_with_env_vars
+//!
+//! # Run with environment variables
+//! TEST_SENDER_COUNT=100 TEST_TRANSACTION_COUNT=2 cargo test test_batch_transfer_with_env_vars
+//! ```
+//!
+//! # Environment Variables
+//!
+//! - `TEST_SENDER_COUNT` - Number of sender accounts to generate (default: 1000)
+//! - `TEST_TRANSACTION_COUNT` - Number of transactions per sender (default: 1)
+//! - `TEST_MNEMONIC` - Test mnemonic phrase (default: test mnemonic)
+//! - `RPC_URL1` through `RPC_URL4` - RPC endpoints for the 4 execution nodes
+//! - `CHAIN_ID` - Network chain ID (defaults to 202501)
 //!
 //! # Requirements
 //!
@@ -29,11 +52,12 @@
 
 use alloy_provider::{Provider, ProviderBuilder};
 use bip39::Mnemonic;
+use clap::Parser;
 use eyre::Result;
 use rand::Rng;
 use std::env;
 use std::time::Instant;
-use std::{collections::BTreeMap, collections::HashMap, time::Duration};
+use std::{collections::HashMap, time::Duration};
 use testing::{
     address::{generate_account_from_seed, Account},
     rpc::get_nonces,
@@ -41,15 +65,32 @@ use testing::{
 };
 use tokio::time::sleep;
 
-const TEST_MNEMONIC: &str =
-    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+/// CLI arguments for batch transaction testing
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Number of sender accounts to generate
+    #[arg(short, long, default_value_t = 1000)]
+    sender_count: usize,
 
-const NUMBER_OF_SENDERS: usize = 1000;
-/// Test that generates 100 sender addresses and sends batch transactions.
+    /// Number of transactions per sender
+    #[arg(short, long, default_value_t = 1)]
+    transaction_count: usize,
+
+    /// Test mnemonic phrase
+    #[arg(
+        short,
+        long,
+        default_value = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    )]
+    mnemonic: String,
+}
+/// Main CLI function for batch transaction testing
 ///
-/// This test performs the following steps:
-/// 1. Generates 100 sender addresses using the same mnemonic as genesis.json
-/// 2. For each sender, creates a transfer transaction to a random recipient
+/// This function can be run as a standalone CLI tool or as a test.
+/// It performs the following steps:
+/// 1. Generates sender addresses using the provided mnemonic
+/// 2. For each sender, creates the specified number of transfer transactions to random recipients
 /// 3. Randomly selects an RPC URL to broadcast each transaction
 /// 4. Tracks success/failure statistics and provides detailed logging
 ///
@@ -57,89 +98,82 @@ const NUMBER_OF_SENDERS: usize = 1000;
 ///
 /// * `RPC_URL1` through `RPC_URL4` - RPC endpoints for the 4 execution nodes
 /// * `CHAIN_ID` - Network chain ID (defaults to 202501)
+/// * `TEST_SENDER_COUNT` - Number of sender accounts (defaults to 1000)
+/// * `TEST_TRANSACTION_COUNT` - Number of transactions per sender (defaults to 1)
+/// * `TEST_MNEMONIC` - Test mnemonic phrase (defaults to test mnemonic)
 ///
 /// # Test Behavior
 ///
 /// The test will:
-/// - Generate 100 deterministic sender addresses from the test mnemonic
+/// - Generate deterministic sender addresses from the test mnemonic
 /// - Create transfer transactions with random recipients
 /// - Distribute transactions across 4 RPC endpoints randomly
 /// - Track and report success/failure statistics
 /// - Skip gracefully if any RPC endpoint is unavailable
-#[tokio::test]
-async fn test_batch_transfer_one_transaction() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = NUMBER_OF_SENDERS;
-    let number_of_transactions = 1;
-    send_transaction_with_check_nonce(account_number, number_of_transactions).await
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    // Override with environment variables if set
+    let sender_count = env::var("TEST_SENDER_COUNT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(args.sender_count);
+
+    let transaction_count = env::var("TEST_TRANSACTION_COUNT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(args.transaction_count);
+
+    let mnemonic = env::var("TEST_MNEMONIC").unwrap_or(args.mnemonic);
+
+    println!("🚀 Starting batch transaction test with CLI parameters:");
+    println!("  Sender count: {}", sender_count);
+    println!("  Transaction count per sender: {}", transaction_count);
+    println!("  Mnemonic: {}...", &mnemonic[..20]);
+
+    send_transaction_with_check_nonce(sender_count, transaction_count as u64, &mnemonic).await
 }
 
-/// Test that generates 100 sender addresses and sends 2 transactions per sender.
-///
-/// This test performs the following steps:
-/// 1. Generates 100 sender addresses using the same mnemonic as genesis.json
-/// 2. For each sender, creates 2 transfer transactions to random recipients
-/// 3. Randomly selects an RPC URL to broadcast each transaction
-/// 4. Tracks success/failure statistics and provides detailed logging
-///
-/// # Environment Variables Required
-///
-/// * `RPC_URL1` through `RPC_URL4` - RPC endpoints for the 4 execution nodes
-/// * `CHAIN_ID` - Network chain ID (defaults to 202501)
-///
-/// # Test Behavior
-///
-/// The test will:
-/// - Generate 100 deterministic sender addresses from the test mnemonic
-/// - Create 2 transfer transactions per sender with random recipients
-/// - Distribute transactions across 4 RPC endpoints randomly
-/// - Track and report success/failure statistics
-/// - Skip gracefully if any RPC endpoint is unavailable
+/// Test function that uses environment variables for configuration
 #[tokio::test]
-async fn test_batch_transfer_two_transactions() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = NUMBER_OF_SENDERS;
-    let number_of_transactions = 2;
-    send_transaction_with_check_nonce(account_number, number_of_transactions).await
-}
+async fn test_batch_transfer_with_env_vars() -> Result<(), Box<dyn std::error::Error>> {
+    let sender_count = env::var("TEST_SENDER_COUNT")
+        .unwrap_or_else(|_| "1000".to_string())
+        .parse::<usize>()?;
 
-#[tokio::test]
-async fn test_batch_transfer_10() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = NUMBER_OF_SENDERS;
-    let number_of_transactions = 10;
-    send_transaction_with_check_nonce(account_number, number_of_transactions).await
-}
+    let transaction_count = env::var("TEST_TRANSACTION_COUNT")
+        .unwrap_or_else(|_| "1".to_string())
+        .parse::<usize>()?;
 
-#[tokio::test]
-async fn test_batch_transfer_20() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = NUMBER_OF_SENDERS;
-    let number_of_transactions = 20;
-    send_transaction_with_check_nonce(account_number, number_of_transactions).await
-}
+    let mnemonic = env::var("TEST_MNEMONIC")
+        .unwrap_or_else(|_| "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string());
 
-#[tokio::test]
-async fn test_batch_transfer_100() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = NUMBER_OF_SENDERS;
-    let number_of_transactions = 100;
-    send_transaction_with_check_nonce(account_number, number_of_transactions).await
-}
+    println!("🧪 Running test with environment variables:");
+    println!("  Sender count: {}", sender_count);
+    println!("  Transaction count per sender: {}", transaction_count);
+    println!("  Mnemonic: {}...", &mnemonic[..20]);
 
-#[tokio::test]
-async fn test_batch_transfer_1000() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = NUMBER_OF_SENDERS;
-    let number_of_transactions = 1000;
-    send_transaction_with_check_nonce(account_number, number_of_transactions).await
+    send_transaction_with_check_nonce(sender_count, transaction_count as u64, &mnemonic).await
 }
 
 #[tokio::test]
 async fn check_nonces() -> Result<(), Box<dyn std::error::Error>> {
-    let account_number = NUMBER_OF_SENDERS;
-    let accounts = generate_accounts(account_number)?;
+    let sender_count = env::var("TEST_SENDER_COUNT")
+        .unwrap_or_else(|_| "1000".to_string())
+        .parse::<usize>()?;
+
+    let mnemonic = env::var("TEST_MNEMONIC")
+        .unwrap_or_else(|_| "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string());
+
+    let accounts = generate_accounts(sender_count, &mnemonic)?;
 
     let addresses = accounts
         .iter()
         .map(|account| account.address)
         .collect::<Vec<_>>();
     let url = env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string());
-    let address_nonces = get_nonces(addresses.as_slice(), 0, account_number, url.as_str()).await;
+    let address_nonces = get_nonces(addresses.as_slice(), 0, sender_count, url.as_str()).await;
 
     // Count sender addresses by nonce
     let mut nonce_counts: HashMap<u64, usize> = HashMap::new();
@@ -168,8 +202,9 @@ async fn check_nonces() -> Result<(), Box<dyn std::error::Error>> {
 async fn send_transaction_with_check_nonce(
     account_number: usize,
     number_of_transactions: u64,
+    mnemonic: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let accounts = generate_accounts(account_number)?;
+    let accounts = generate_accounts(account_number, mnemonic)?;
 
     let addresses = accounts
         .iter()
@@ -210,13 +245,16 @@ async fn send_transaction_with_check_nonce(
     );
     Ok(())
 }
-fn generate_accounts(number_of_senders: usize) -> Result<Vec<Account>, Box<dyn std::error::Error>> {
+fn generate_accounts(
+    number_of_senders: usize,
+    mnemonic_str: &str,
+) -> Result<Vec<Account>, Box<dyn std::error::Error>> {
     println!(
         "Generating {} sender addresses from mnemonic...",
         number_of_senders
     );
     let mnemonic =
-        Mnemonic::parse(TEST_MNEMONIC).map_err(|e| eyre::eyre!("Invalid mnemonic: {}", e))?;
+        Mnemonic::parse(mnemonic_str).map_err(|e| eyre::eyre!("Invalid mnemonic: {}", e))?;
     let seed = mnemonic.to_seed("");
     let seed_bytes = &seed[..];
     let mut accounts = Vec::new();
@@ -273,7 +311,9 @@ async fn send_batch_transfer_transactions(
     println!("  RPC URLs: {:?}", rpc_urls);
 
     // Generate sender addresses from mnemonic
-    let sender_accounts = generate_accounts(number_of_senders)?;
+    let mnemonic = env::var("TEST_MNEMONIC")
+        .unwrap_or_else(|_| "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string());
+    let sender_accounts = generate_accounts(number_of_senders, &mnemonic)?;
     println!("Generated {} sender accounts", sender_accounts.len());
 
     // Connect to all RPC endpoints

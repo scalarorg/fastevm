@@ -72,3 +72,7 @@ tiny-keccak = "2.0.2"
 rand.workspace = true
 clap = { version = "4.0", features = ["derive"] }
 chrono.workspace = true
+
+[[bin]]
+name = "fastevm-test"
+path = "src/bin/fastevm-test.rs"

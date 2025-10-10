@@ -69,7 +69,7 @@ pub async fn create_transfer_transaction(
     recipient: &str,
     chain_id: ChainId,
     gwei_amount: u64,
-    nonce: Option<u64>,
+    nonce: u64,
 ) -> Result<<Ethereum as Network>::TxEnvelope> {
     // Parse the recipient address from string to Address type
     let recipient_addr = Address::from_str(recipient)
@@ -92,9 +92,7 @@ pub async fn create_transfer_transaction(
         .with_gas_limit(21_000) // Standard gas limit for ETH transfers
         .with_max_priority_fee_per_gas(1_000_000_000) // 1 Gwei
         .with_max_fee_per_gas(20_000_000_000); // 20 Gwei
-    if let Some(nonce) = nonce {
-        tx = tx.with_nonce(nonce);
-    }
+    tx = tx.with_nonce(nonce);
     // Convert the LocalSigner to an EthereumWallet to satisfy the NetworkWallet trait bound
     let ethereum_wallet = EthereumWallet::from(wallet);
 
