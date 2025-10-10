@@ -1,0 +1,26 @@
+# FastEVM Client Node Configuration
+# Copy this file to terraform.tfvars and update with your values
+
+# Required: Your GCP project ID
+project_id = "your-gcp-project-id"
+
+# Optional: Customize these as needed
+project_name = "fastevm-client"
+region       = "us-central1"
+zone         = "us-central1-a"
+
+# Client node configuration
+client_machine_type = "e2-standard-2"
+client_disk_size    = 50
+disk_type          = "pd-ssd"
+image              = "ubuntu-os-cloud/ubuntu-2204-lts"
+
+# Network configuration
+client_subnet_cidr = "10.1.0.0/24"
+
+# SSH configuration
+ssh_user = "ubuntu"
+
+# Repository configuration
+github_repo   = "https://github.com/scalarorg/fastevm.git"
+github_branch = "main"
