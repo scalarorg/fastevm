@@ -1,7 +1,7 @@
 # FastEVM Client Node Management Makefile
 # Standalone client node deployment and management
 
-.PHONY: help init plan apply destroy status connect setup-config run-test run-scan run-batch run-all update-code clean-logs clean-all
+.PHONY: help init plan apply destroy status connect setup-config run-test run-scan run-batch run-all update-code clean-logs clean-all bootstrap quick-start
 
 # Default target
 help: ## Show available commands
@@ -15,6 +15,11 @@ help: ## Show available commands
 	@echo "  destroy           Destroy client node"
 	@echo "  status            Show deployment status"
 	@echo ""
+	@echo "Configuration Commands:"
+	@echo "  prepare-configs   Prepare configurations locally"
+	@echo "  deploy-configs   Deploy configurations to remote client"
+	@echo "  setup            Run setup script on remote client (bootstrap + configure)"
+	@echo ""
 	@echo "Client Management:"
 	@echo "  connect           Connect to client node via SSH"
 	@echo "  setup-config      Setup test configuration"
@@ -26,7 +31,7 @@ help: ## Show available commands
 	@echo "Maintenance Commands:"
 	@echo "  update-code       Update code and rebuild on client node"
 	@echo "  clean-logs        Clean logs on client node"
-	@echo "  clean-all         Clean all local files"
+	@echo "  quick-start       Quick start: complete client node setup"
 	@echo ""
 
 # Configuration
@@ -74,7 +79,7 @@ status: ## Show deployment status
 	@echo "📊 Client Node Status"
 	@echo "===================="
 	@if [ -f "terraform.tfstate" ]; then \
-		CLIENT_IP=$$(terraform output -json client_node_info | jq -r '.external_ip'); \
+		CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 		if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 			echo "❌ Client node not found. Run 'make apply' first."; \
 		else \
@@ -82,46 +87,87 @@ status: ## Show deployment status
 			echo "SSH Command: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP"; \
 			echo ""; \
 			echo "Setup Status:"; \
-			SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /var/log/client-setup-complete 2>/dev/null && echo "yes" || echo "no"'); \
+			ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+			ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+			SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /var/log/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
 			if [ "$$SETUP_COMPLETE" = "yes" ]; then \
 				echo "✅ Setup completed"; \
 				echo ""; \
 				echo "Test Binary:"; \
-				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la /home/ubuntu/fastevm/testing/integration/target/release/fastevm-test 2>/dev/null && echo "✅ Binary ready" || echo "❌ Binary not found"'; \
+				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la /usr/local/bin/fastevm-test 2>/dev/null && echo "✅ Binary ready" || echo "❌ Binary not found"'; \
 				echo ""; \
 				echo "Configuration:"; \
 				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la $(CLIENT_CONFIG_DIR)/test.env 2>/dev/null && echo "✅ Config ready" || echo "❌ Config not found"'; \
 			else \
 				echo "⏳ Setup still running..."; \
 				echo "Recent setup log:"; \
-				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -3 /var/log/client-setup.log 2>/dev/null || echo "No log found"'; \
+				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -3 /var/log/client-bootstrap.log 2>/dev/null || echo "No log found"'; \
 			fi; \
 		fi; \
 	else \
 		echo "❌ No Terraform state found. Run 'make apply' first."; \
 	fi
 
-# Connect to client node
-connect: ## Connect to client node via SSH
-	@echo "🔗 Connecting to client node..."
-	@CLIENT_IP=$$(terraform output -json client_node_info | jq -r '.external_ip'); \
+# Terraform command detection
+TERRAFORM_CMD := $(shell which terraform 2>/dev/null || echo "/opt/homebrew/bin/terraform")
+ifeq ($(wildcard $(TERRAFORM_CMD)),)
+TERRAFORM_CMD := $(shell which terraform 2>/dev/null || echo "/usr/local/bin/terraform")
+endif
+ifeq ($(wildcard $(TERRAFORM_CMD)),)
+TERRAFORM_CMD := terraform
+endif
+
+# Common variables and macros
+CLIENT_IP_CMD = $(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'
+SSH_OPTS = -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
+SSH_CMD = ssh $(SSH_OPTS) -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@
+
+# Get client IP and validate it exists
+define GET_CLIENT_IP
+	CLIENT_IP=$$($(CLIENT_IP_CMD)); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found. Run 'make apply' first."; \
 		exit 1; \
-	fi; \
-	echo "Connecting to $$CLIENT_IP..."; \
-	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP
+	fi
+endef
+
+# Execute test command on client with timeout and error handling
+define RUN_TEST
+	echo "$(1)"; \
+	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source /home/ubuntu/test-config/test.env && timeout $(2) $(3)'; \
+	if [ $$? -eq 0 ]; then \
+		echo "✅ $(4)"; \
+	else \
+		echo "$(5)"; \
+	fi
+endef
+
+# SSH connection helper - handles host key management
+define SSH_CONNECT
+	$(GET_CLIENT_IP); \
+	echo "🔑 Managing SSH host keys for $$CLIENT_IP..."; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	$(SSH_CMD)$$CLIENT_IP $(1)
+endef
+
+# Connect to client node
+connect: ## Connect to client node via SSH
+	@echo "🔗 Connecting to client node..."
+	$(call SSH_CONNECT)
 
 # Setup client configuration
 setup-config: ## Setup test configuration on client node
 	@echo "⚙️  Setting up client configuration..."
-	@CLIENT_IP=$$(terraform output -json client_node_info | jq -r '.external_ip'); \
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found. Run 'make apply' first."; \
 		exit 1; \
 	fi; \
 	echo "Setting up configuration on $$CLIENT_IP..."; \
-	SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /var/log/client-setup-complete 2>/dev/null && echo "yes" || echo "no"'); \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /var/log/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
 	if [ "$$SETUP_COMPLETE" = "no" ]; then \
 		echo "⏳ Client setup is still running. Please wait for it to complete."; \
 		echo "You can check progress with: make status"; \
@@ -150,11 +196,13 @@ run-test: ## Run specific test on client node (usage: make run-test TEST=scan)
 		exit 1; \
 	fi
 	@echo "🧪 Running $(TEST) test on client node..."
-	@CLIENT_IP=$$(terraform output -json client_node_info | jq -r '.external_ip'); \
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found. Run 'make apply' first."; \
 		exit 1; \
 	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
 	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && make test-$(TEST)'
 
 # Run remote scan test
@@ -172,22 +220,26 @@ run-all: ## Run all tests on client node
 # Update client code
 update-code: ## Update code and rebuild on client node
 	@echo "🔄 Updating client code..."
-	@CLIENT_IP=$$(terraform output -json client_node_info | jq -r '.external_ip'); \
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found. Run 'make apply' first."; \
 		exit 1; \
 	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
 	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && make update-build'
 	@echo "✅ Client code updated successfully"
 
 # Clean client logs
 clean-logs: ## Clean logs on client node
 	@echo "🧹 Cleaning client logs..."
-	@CLIENT_IP=$$(terraform output -json client_node_info | jq -r '.external_ip'); \
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found. Run 'make apply' first."; \
 		exit 1; \
 	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
 	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'make clean-logs'
 	@echo "✅ Client logs cleaned"
 
@@ -199,13 +251,105 @@ clean-all: ## Clean all local files
 	@rm -rf .terraform/
 	@echo "✅ All local files cleaned"
 
-# Quick start (init + apply)
-quick-start: init apply ## Quick start: initialize and deploy client node
+# Prepare client configurations locally
+prepare-configs: ## Prepare client node configurations locally (auto-detects from main deployment)
+	@echo "🔧 Preparing client node configurations locally..."
+	@GITHUB_REPO="$(GITHUB_REPO)" GITHUB_BRANCH="$(GITHUB_BRANCH)" ./scripts/prepare-configs.sh
+	@echo "✅ Client configurations prepared successfully!"
+
+# Deploy configurations to remote client node
+deploy-configs: ## Deploy prepared configurations to remote client node
+	@echo "📦 Deploying configurations to remote client node..."
+	@if [ ! -d "config" ]; then echo "No config directory found. Run 'make prepare-configs' first."; exit 1; fi
+	@if [ ! -f "client-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@./scripts/deploy-configs.sh
+	@echo "✅ Configurations deployed successfully!"
+
+# Run setup script on remote client (bootstrap + configure)
+setup: ## Run setup script on remote client node (bootstrap + configure)
+	@echo "🚀 Running setup script on client node..."
+	@$(GET_CLIENT_IP); \
+	echo "Executing setup script on $$CLIENT_IP..."; \
+	$(SSH_CMD)$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && sudo bash ~/client-config/setup.sh'; \
+	if [ $$? -eq 0 ]; then \
+		echo "✅ Setup script executed successfully"; \
+		echo "⏳ Waiting for setup to complete..."; \
+		TIMEOUT=600; \
+		ELAPSED=0; \
+		while [ $$ELAPSED -lt $$TIMEOUT ]; do \
+			COMPLETE=$$($(SSH_CMD)$$CLIENT_IP 'ls /var/log/client-bootstrap-complete /var/log/client-config-complete 2>/dev/null && echo "yes" || echo "no"'); \
+			if [ "$$COMPLETE" = "yes" ]; then \
+				echo "✅ Setup completed successfully"; \
+				break; \
+			fi; \
+			echo "⏳ Waiting for setup completion... ($$ELAPSED/$$TIMEOUT seconds)"; \
+			sleep 10; \
+			ELAPSED=$$((ELAPSED + 10)); \
+		done; \
+		if [ $$ELAPSED -ge $$TIMEOUT ]; then \
+			echo "⚠️ Setup timeout - check logs manually"; \
+			echo "Check setup log: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f /var/log/client-setup.log'"; \
+		fi; \
+	else \
+		echo "❌ Setup script execution failed"; \
+		exit 1; \
+	fi
+
+# Automated test sequence (run after bootstrap)
+auto-test: ## Run automated test sequence (scan -> batch -> scan)
+	echo "🚀 Running automated test sequence..."; \
+	$(GET_CLIENT_IP); \
+	echo "Running tests on $$CLIENT_IP..."; \
+	$(call RUN_TEST,"1️⃣ Running block scan test...",60,"fastevm-test scan","Block scan test completed","⚠️ Block scan test had issues"); \
+	$(call RUN_TEST,"2️⃣ Running batch transaction test...",300,"fastevm-test batch","Batch transaction test completed","❌ Batch transaction test failed"); \
+	$(call RUN_TEST,"3️⃣ Running final block scan test...",60,"fastevm-test scan","Final block scan test completed","⚠️ Final block scan test had issues"); \
+	echo "🎉 Automated test sequence completed!"
+# Quick start (init + apply + prepare-configs + deploy-configs + setup)
+quick-start: init apply prepare-configs deploy-configs setup ## Quick start: complete client node setup
 	@echo "🎉 Quick start completed!"
-	@echo "Run 'make setup-config' to configure test settings"
 
 # Show outputs
 outputs: ## Show all outputs
 	@echo "📋 Client Node Outputs"
 	@echo "======================"
-	@terraform output
+	@$(TERRAFORM_CMD) output
+
+# Test targets (run on client node)
+test-scan: ## Run block scan test
+	@echo "🔍 Running block scan test..."
+	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
+		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test scan; \
+	else \
+		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
+		exit 1; \
+	fi
+
+test-scan-all: ## Run block scan all test
+	@echo "🔍 Running block scan all test..."
+	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
+		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test scan-all; \
+	else \
+		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
+		exit 1; \
+	fi
+
+test-batch: ## Run batch transaction test
+	@echo "📦 Running batch transaction test..."
+	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
+		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test batch; \
+	else \
+		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
+		exit 1; \
+	fi
+
+test-range: ## Run block range test
+	@echo "📊 Running block range test..."
+	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
+		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test range; \
+	else \
+		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
+		exit 1; \
+	fi
+
+test-all: test-scan test-batch ## Run all tests
+	@echo "✅ All tests completed"
