@@ -229,24 +229,6 @@ log "Installing test binary..."
 cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
 chmod +x /usr/local/bin/fastevm-test
 
-# Wait for network
-log "Waiting for network services..."
-sleep 30
-
-# =============================================================================
-# CONFIGURATION PHASE
-# =============================================================================
-log "=== CONFIGURATION PHASE ==="
-
-# Run automated tests
-log "Running automated tests..."
-sudo -u ubuntu bash -c "cd /home/ubuntu && export ENV_FILE=${CLIENT_CONFIG_DIR}/test.env && timeout 60 fastevm-test scan" || log "⚠️ Block scan test had issues"
-sudo -u ubuntu bash -c "cd /home/ubuntu && export ENV_FILE=${CLIENT_CONFIG_DIR}/test.env && timeout 300 fastevm-test batch" || log "❌ Batch transaction test failed"
-sudo -u ubuntu bash -c "cd /home/ubuntu && export ENV_FILE=${CLIENT_CONFIG_DIR}/test.env && timeout 60 fastevm-test scan" || log "⚠️ Final block scan test had issues"
-
-# Fix PATH for ubuntu user
-sudo -u ubuntu bash -c 'echo "export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin\"" >> ~/.bashrc'
-
 # Create completion markers
 touch /var/log/client-bootstrap-complete
 touch /var/log/client-config-complete
