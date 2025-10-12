@@ -50,9 +50,9 @@ variable "image" {
 }
 
 variable "client_subnet_cidr" {
-  description = "CIDR block for the client subnet"
+  description = "CIDR block for the client subnet (same as main network)"
   type        = string
-  default     = "10.1.0.0/24"
+  default     = "10.0.0.0/24"
 }
 
 variable "ssh_user" {

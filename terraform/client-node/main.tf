@@ -46,48 +46,69 @@ resource "local_file" "client_public_key" {
   file_permission = "0644"
 }
 
-# Create VPC network for client node (separate from main network)
-resource "google_compute_network" "client_network" {
-  name                    = "fastevm-client-network"
-  auto_create_subnetworks = false
-  description             = "VPC network for FastEVM client node"
+# Reference existing fastevm-network (created by main deployment)
+data "google_compute_network" "fastevm_network" {
+  name = "fastevm-network"
 }
 
-# Create subnet for client node
-resource "google_compute_subnetwork" "client_subnet" {
-  name          = "fastevm-client-subnet"
-  ip_cidr_range = var.client_subnet_cidr
-  region        = var.region
-  network       = google_compute_network.client_network.id
-  description   = "Subnet for FastEVM client node"
+# Reference existing fastevm-subnet (created by main deployment)
+data "google_compute_subnetwork" "fastevm_subnet" {
+  name   = "fastevm-subnet"
+  region = var.region
+}
+
+# Create persistent disk for client node (same pattern as main nodes)
+resource "google_compute_disk" "client_disk" {
+  name = "${var.project_name}-client-disk"
+  type = var.disk_type
+  zone = var.zone
+  size = var.client_disk_size
 }
 
 # Service account for client node
 resource "google_service_account" "client_service_account" {
-  account_id   = "fastevm-client-sa"
+  account_id   = "${var.project_name}-sa"
   display_name = "FastEVM Client Service Account"
   description  = "Service account for FastEVM client node operations"
 }
 
-# Client node instance
+# Create IAM binding for service account (same pattern as main nodes)
+resource "google_project_iam_binding" "client_sa_binding" {
+  project = var.project_id
+  role    = "roles/compute.instanceAdmin"
+
+  members = [
+    "serviceAccount:${google_service_account.client_service_account.email}",
+  ]
+}
+
+# Client node instance (same pattern as main nodes)
 resource "google_compute_instance" "client_node" {
-  name         = "fastevm-client"
+  name         = "${var.project_name}-client"
   machine_type = var.client_machine_type
   zone         = var.zone
 
-  tags = ["fastevm-client", "test-client"]
+  # Allow stopping instances for updates (required for machine type changes)
+  allow_stopping_for_update = true
+
+  tags = ["fastevm-node", "fastevm-client"]
 
   boot_disk {
     initialize_params {
       image = var.image
-      size  = var.client_disk_size
-      type  = var.disk_type
+      size  = 20
+      type  = "pd-standard"
     }
   }
 
+  attached_disk {
+    source      = google_compute_disk.client_disk.id
+    device_name = "fastevm-data"
+  }
+
   network_interface {
-    network    = google_compute_network.client_network.name
-    subnetwork = google_compute_subnetwork.client_subnet.name
+    network    = data.google_compute_network.fastevm_network.id
+    subnetwork = data.google_compute_subnetwork.fastevm_subnet.id
     access_config {
       // Ephemeral public IP
     }
@@ -95,111 +116,55 @@ resource "google_compute_instance" "client_node" {
 
   metadata = {
     ssh-keys = "${var.ssh_user}:${tls_private_key.client_ssh.public_key_openssh}"
+    startup-script = <<-EOF
+      #!/bin/bash
+      set -e
+      
+      # Logging function
+      log() {
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/client-startup.log
+      }
+      
+      log "Starting FastEVM client node startup script..."
+      
+      # Update system packages
+      log "Updating system packages..."
+      apt-get update -y
+      apt-get upgrade -y
+      
+      # Install required packages
+      log "Installing required packages..."
+      apt-get install -y \
+          curl \
+          wget \
+          git \
+          build-essential \
+          pkg-config \
+          libssl-dev \
+          libclang-dev \
+          llvm-dev \
+          cmake \
+          jq \
+          htop \
+          vim \
+          unzip \
+          software-properties-common \
+          apt-transport-https \
+          ca-certificates \
+          gnupg \
+          lsb-release \
+          openssh-client
+      
+      log "Package installation completed successfully!"
+      EOF
   }
-
-  metadata_startup_script = <<-EOF
-#!/bin/bash
-
-# FastEVM Client Node Setup Script
-# This script sets up a client node for testing FastEVM networks
-
-set -e
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Logging function
-log() {
-    echo -e "$${BLUE}[$$(date '+%Y-%m-%d %H:%M:%S')]$${NC} $1" | tee -a /var/log/client-setup.log
-}
-
-log "Starting FastEVM client node setup..."
-
-# Update system packages
-log "Updating system packages..."
-apt-get update -y
-
-# Install essential packages
-log "Installing essential packages..."
-apt-get install -y curl wget git build-essential pkg-config libssl-dev
-
-# Install Rust for ubuntu user
-log "Installing Rust..."
-sudo -u ubuntu bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
-sudo -u ubuntu bash -c 'source ~/.cargo/env && echo "source ~/.cargo/env" >> ~/.bashrc'
-
-# Clone FastEVM repository
-log "Cloning FastEVM repository..."
-cd /home/ubuntu
-git clone https://github.com/scalar-labs/fastevm.git
-cd fastevm
-
-# Checkout specific branch if provided
-if [ -n "${var.github_branch}" ]; then
-    log "Checking out branch: ${var.github_branch}"
-    git checkout ${var.github_branch}
-fi
-
-# Build the test binary
-log "Building FastEVM test binary..."
-cd testing/integration
-sudo -u ubuntu bash -c 'source ~/.cargo/env && cargo build --release --bin fastevm-test'
-
-# Create test configuration directory
-log "Creating test configuration..."
-mkdir -p /home/ubuntu/test-config
-
-# Create test configuration template
-cat > /home/ubuntu/test-config/test.env.example << 'CONFIG_EOF'
-# FastEVM Test Configuration Example
-# Copy this file to test.env and update with your actual values
-
-# RPC Endpoints (update with actual node IPs)
-RPC_URL1=http://10.0.0.10:8545
-RPC_URL2=http://10.0.0.11:8545
-RPC_URL3=http://10.0.0.12:8545
-RPC_URL4=http://10.0.0.13:8545
-
-# Network Configuration
-CHAIN_ID=202501
-
-# Batch Transaction Test Parameters
-TEST_SENDER_COUNT=100
-TEST_TRANSACTION_COUNT=1
-TEST_TRANSACTION_VALUE=1000000000000000
-TEST_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-
-# Test Timing Configuration
-TEST_WAITING_TIME_SECONDS=30
-TEST_FETCH_NONCE=false
-CONFIG_EOF
-
-# Create default test configuration
-cp /home/ubuntu/test-config/test.env.example /home/ubuntu/test-config/test.env
-
-# Set proper permissions
-chown -R ubuntu:ubuntu /home/ubuntu/test-config
-chown -R ubuntu:ubuntu /home/ubuntu/fastevm
-
-# Create completion marker
-touch /var/log/client-setup-complete
-
-log "FastEVM client node setup completed successfully!"
-log "Test binary location: /home/ubuntu/fastevm/testing/integration/target/release/fastevm-test"
-log "Configuration location: /home/ubuntu/test-config/"
-log "Next steps:"
-log "  1. Update RPC URLs in /home/ubuntu/test-config/test.env"
-log "  2. Run tests using the fastevm-test binary"
-EOF
 
   service_account {
     email  = google_service_account.client_service_account.email
     scopes = ["cloud-platform"]
   }
+
+  depends_on = [google_compute_disk.client_disk]
 
   labels = {
     environment = "testing"
@@ -210,32 +175,11 @@ EOF
   }
 }
 
-# Firewall rule for client node SSH access
-resource "google_compute_firewall" "client_ssh" {
-  name    = "fastevm-client-ssh"
-  network = google_compute_network.client_network.name
-
-  allow {
-    protocol = "tcp"
-    ports    = ["22"]
-  }
-
-  source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["fastevm-client"]
-}
-
-# Firewall rule for client node to access external networks (for testing)
-resource "google_compute_firewall" "client_external_access" {
-  name    = "fastevm-client-external"
-  network = google_compute_network.client_network.name
-
-  allow {
-    protocol = "tcp"
-    ports    = ["80", "443", "8545", "8546", "8551", "26657", "30303"]
-  }
-
-  source_tags = ["fastevm-client"]
-}
+# Note: Firewall rules are managed by the main deployment
+# The existing fastevm-network already has the necessary firewall rules:
+# - fastevm-internal: for subnet-to-subnet communication
+# - fastevm-external: for external access
+# Client node uses the same tags (fastevm-node) so it will be covered by existing rules
 
 # Output client node information
 output "client_node_info" {
@@ -244,9 +188,12 @@ output "client_node_info" {
     external_ip  = google_compute_instance.client_node.network_interface[0].access_config[0].nat_ip
     internal_ip  = google_compute_instance.client_node.network_interface[0].network_ip
     zone         = google_compute_instance.client_node.zone
+    network_name = data.google_compute_network.fastevm_network.name
+    subnet_cidr  = data.google_compute_subnetwork.fastevm_subnet.ip_cidr_range
     ssh_command  = "ssh -i ${path.module}/client-deploy-key ${var.ssh_user}@${google_compute_instance.client_node.network_interface[0].access_config[0].nat_ip}"
+    local_access = "Access from blockchain nodes: ${google_compute_instance.client_node.network_interface[0].network_ip}"
   }
-  description = "Client node connection information"
+  description = "Client node connection information for same-network access"
 }
 
 # Output client node connection details for easy access
@@ -262,9 +209,12 @@ output "client_connection" {
 # Output network information
 output "client_network_info" {
   value = {
-    network_name = google_compute_network.client_network.name
-    subnet_name  = google_compute_subnetwork.client_subnet.name
-    subnet_cidr  = var.client_subnet_cidr
+    network_name = data.google_compute_network.fastevm_network.name
+    subnet_name  = data.google_compute_subnetwork.fastevm_subnet.name
+    subnet_cidr  = data.google_compute_subnetwork.fastevm_subnet.ip_cidr_range
+    same_network_as_blockchain = true
+    local_access_note = "Client reuses existing fastevm-network for easy local access"
+    firewall_note = "Uses existing firewall rules from main deployment"
   }
-  description = "Client node network information"
+  description = "Client node network information - reuses existing blockchain network"
 }

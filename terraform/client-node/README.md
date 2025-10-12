@@ -1,10 +1,10 @@
 # FastEVM Client Node
 
-This directory contains a standalone Terraform configuration for deploying a FastEVM client node. The client node is completely separate from the main FastEVM network and can be deployed independently.
+A standalone Terraform configuration for deploying a FastEVM client node that can test and interact with FastEVM blockchain networks. The client node is completely separate from the main FastEVM network and can be deployed independently.
 
 ## 🚀 Quick Start
 
-### 1. Prerequisites
+### Prerequisites
 
 ```bash
 # Install required tools
@@ -17,45 +17,35 @@ gcloud auth login
 gcloud auth application-default login
 ```
 
-### 2. Configure Variables
+### Complete Automated Deployment
 
 ```bash
-# Copy example configuration
-cp terraform.tfvars.example terraform.tfvars
-
-# Edit with your GCP project ID
-nano terraform.tfvars
+# Quick start (recommended) - Complete automation
+make quick-start
 ```
 
-### 3. Deploy Client Node
+This single command will:
+1. Initialize Terraform
+2. Deploy client node infrastructure
+3. Prepare configurations locally (auto-detects RPC URLs from main deployment)
+4. Deploy configurations to remote client
+5. Run setup script (bootstrap + configuration + automated testing)
+6. Report completion status
+
+### Step-by-Step Deployment
 
 ```bash
-# Quick start (recommended)
-make quick-start
-
-# Or step by step
+# Step 1: Deploy infrastructure
 make init
 make plan
 make apply
-```
 
-### 4. Setup and Test
+# Step 2: Prepare and deploy configurations
+make prepare-configs  # Auto-detects RPC URLs from main deployment
+make deploy-configs   # Copies configs to remote client
 
-```bash
-# Wait for setup to complete (2-3 minutes)
-make status
-
-# Setup test configuration
-make setup-config
-
-# Connect to client node to edit configuration
-make connect
-# Edit /home/ubuntu/test-config/test.env with your FastEVM node IPs
-
-# Run tests
-make run-scan      # Block scan test
-make run-batch     # Batch transaction test
-make run-all       # All tests
+# Step 3: Setup client node
+make setup           # Runs bootstrap + configuration + automated tests
 ```
 
 ## 📁 Directory Structure
@@ -66,9 +56,15 @@ client-node/
 ├── variables.tf               # Variable definitions
 ├── terraform.tfvars.example   # Example variables file
 ├── Makefile                   # Management commands
-├── README.md                  # This file
-└── scripts/
-    └── client-setup.sh        # Client node setup script
+├── README.md                  # This comprehensive guide
+├── scripts/
+│   ├── prepare-configs.sh    # Prepare configurations locally
+│   ├── deploy-configs.sh     # Deploy configurations to remote
+│   └── client-setup.sh       # Legacy setup script (unused)
+├── config/                    # Generated configurations
+│   ├── test.env              # Test environment configuration
+│   └── setup.sh             # Combined setup script
+└── bootstrap.sh              # Legacy bootstrap script (unused)
 ```
 
 ## 🔧 Configuration
@@ -86,6 +82,22 @@ client-node/
 - `client_disk_size`: Disk size in GB (default: 50)
 - `client_subnet_cidr`: Subnet CIDR (default: "10.1.0.0/24")
 
+### Environment Variables
+
+The system automatically detects RPC URLs from your main FastEVM deployment, but you can override them:
+
+```bash
+# Override GitHub repository and branch
+export GITHUB_REPO="https://github.com/scalarorg/fastevm.git"
+export GITHUB_BRANCH="terraform"
+
+# Override test parameters
+export TEST_SENDER_COUNT=10000
+export TEST_TRANSACTION_COUNT=10
+export TEST_TRANSACTION_VALUE=1000000000000000
+export TEST_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+```
+
 ## 🏗️ Infrastructure Components
 
 ### Compute Resources
@@ -99,7 +111,7 @@ client-node/
 - **Firewall Rules**: SSH access and external testing
 
 ### Security
-- **SSH Key Pair**: Generated automatically
+- **SSH Key Pair**: Generated automatically (`client-deploy-key`)
 - **Service Account**: Minimal permissions
 - **Firewall Rules**: Restrictive by default
 
@@ -114,11 +126,17 @@ make destroy           # Destroy client node
 make status            # Show deployment status
 ```
 
+### Configuration Commands
+```bash
+make prepare-configs   # Prepare configurations locally (auto-detects RPC URLs)
+make deploy-configs   # Deploy configurations to remote client
+make setup            # Run setup script on remote client (bootstrap + configure)
+```
+
 ### Client Management
 ```bash
 make connect           # Connect to client node via SSH
-make setup-config      # Setup test configuration
-make run-test TEST=<type>  # Run specific test
+make run-test TEST=<type>  # Run specific test (scan, batch, range, all)
 make run-scan          # Run block scan test
 make run-batch         # Run batch transaction test
 make run-all           # Run all tests
@@ -126,7 +144,7 @@ make run-all           # Run all tests
 
 ### Maintenance Commands
 ```bash
-make update-code       # Update code and rebuild
+make update-code       # Update code and rebuild on client node
 make clean-logs        # Clean logs on client node
 make clean-all         # Clean all local files
 make outputs           # Show all outputs
@@ -134,35 +152,82 @@ make outputs           # Show all outputs
 
 ## 🧪 Testing Configuration
 
-The client node uses `/home/ubuntu/test-config/test.env` for configuration:
+### Automatic Configuration Detection
+
+The system automatically detects RPC URLs from your main FastEVM deployment:
+
+1. **Primary**: Uses `../deployment-info.json` if available
+2. **Fallback**: Uses `../terraform.tfstate` if deployment-info.json not found
+3. **Preference**: Uses internal IPs first, falls back to external IPs
+
+### Generated Configuration (`test.env`)
 
 ```bash
-# RPC Endpoints (update with your FastEVM node IPs)
-RPC_URL1=http://your-node1-ip:8545
-RPC_URL2=http://your-node2-ip:8545
-RPC_URL3=http://your-node3-ip:8545
-RPC_URL4=http://your-node4-ip:8545
+# FastEVM Client Test Configuration
+# Generated automatically with detected RPC URLs
+
+# RPC Endpoints (auto-detected from main deployment)
+RPC_URL1=http://10.0.0.4:8545
+RPC_URL2=http://10.0.0.5:8545
+RPC_URL3=http://10.0.0.3:8545
+RPC_URL4=http://10.0.0.2:8545
 
 # Network Configuration
 CHAIN_ID=202501
 
 # Test Parameters
-TEST_SENDER_COUNT=100
-TEST_TRANSACTION_COUNT=1
+TEST_SENDER_COUNT=10000
+TEST_TRANSACTION_COUNT=10
 TEST_TRANSACTION_VALUE=1000000000000000
 TEST_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-TEST_WAITING_TIME_SECONDS=30
 TEST_FETCH_NONCE=false
+TEST_WAITING_TIME_SECONDS=30
+TEST_RPC_TIMEOUT=30
+TEST_MAX_RETRIES=3
+TEST_LOG_LEVEL=info
 ```
 
-## 🔗 Integration with Main FastEVM Network
+## 🔄 Automated Testing Workflow
 
-The client node is designed to test external FastEVM networks:
+### Test Sequence (Automatically Executed)
 
-1. **Deploy your FastEVM network** using the main Terraform configuration
-2. **Deploy this client node** using `make quick-start`
-3. **Configure test settings** with actual node IPs from your FastEVM deployment
-4. **Run comprehensive tests** to validate your deployment
+The setup script automatically runs a comprehensive test sequence:
+
+1. **Block Scan Test** (60s timeout)
+   - Purpose: Verify network connectivity
+   - Command: `fastevm-test scan`
+   - Expected: Successful connection to RPC endpoints
+
+2. **Batch Transaction Test** (300s timeout)
+   - Purpose: Send multiple transactions to test network
+   - Command: `fastevm-test batch`
+   - Expected: Transactions sent and confirmed
+
+3. **Final Block Scan Test** (60s timeout)
+   - Purpose: Verify transactions were processed
+   - Command: `fastevm-test scan`
+   - Expected: Updated block information
+
+### Manual Testing
+
+```bash
+# SSH into client node
+make connect
+
+# Run tests manually
+cd /home/ubuntu
+source /home/ubuntu/test-config/test.env
+
+# Individual tests
+fastevm-test scan      # Block scan test
+fastevm-test batch     # Batch transaction test
+fastevm-test range     # Block range test
+
+# Or run from local machine
+make run-scan          # Block scan test
+make run-batch         # Batch transaction test
+make run-all           # All tests
+```
 
 ## 💰 Cost Estimation
 
@@ -172,6 +237,19 @@ The client node is designed to test external FastEVM networks:
 - **Total**: ~$55/month
 
 *Costs may vary based on usage and GCP pricing*
+
+## 🔗 Integration with Main FastEVM Network
+
+### Prerequisites
+1. **Deploy your FastEVM network** using the main Terraform configuration
+2. **Ensure deployment-info.json exists** in the main terraform directory
+3. **Deploy this client node** using `make quick-start`
+
+### Integration Steps
+1. **Automatic Detection**: Client node automatically detects RPC URLs from main deployment
+2. **Configuration**: Test configuration is generated with correct internal IPs
+3. **Testing**: Comprehensive automated testing validates the integration
+4. **Validation**: All tests must pass before considering the setup complete
 
 ## 🛠️ Troubleshooting
 
@@ -190,38 +268,70 @@ The client node is designed to test external FastEVM networks:
    make apply
    ```
 
-3. **Tests failing**
+3. **RPC URL detection failed**
+   ```bash
+   # Check if main deployment exists
+   ls ../deployment-info.json
+   ls ../terraform.tfstate
+   
+   # Manual configuration
+   make connect
+   nano /home/ubuntu/test-config/test.env
+   ```
+
+4. **Tests failing**
    ```bash
    make status
-   make update-code
    make connect
+   tail -f /var/log/client-setup.log
    cat /home/ubuntu/test-config/test.env
    ```
 
-4. **Connection issues**
+5. **Connection issues**
    ```bash
    chmod 600 client-deploy-key
    make connect
    ```
 
-### Logs
-- Setup logs: `/var/log/client-setup.log` (on client node)
-- Test output: Displayed in terminal
-- System logs: Standard systemd journal
+### Logs and Monitoring
+
+- **Setup logs**: `/var/log/client-setup.log` (on client node)
+- **Bootstrap logs**: `/var/log/client-bootstrap.log` (on client node)
+- **Configuration logs**: `/var/log/client-config.log` (on client node)
+- **Test output**: Displayed in terminal
+- **System logs**: Standard systemd journal
+
+### Debug Commands
+
+```bash
+# Check network connectivity
+ping <node-ip>
+
+# Check RPC endpoint
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+  http://<node-ip>:8545
+
+# View logs remotely
+make connect
+tail -f /var/log/client-setup.log
+```
 
 ## 🔄 Development Workflow
 
 ### Local Development
 ```bash
-make dev              # Format, validate, plan
-make quick-start      # Full deployment
+make init              # Initialize Terraform
+make plan              # Plan deployment
+make quick-start       # Full automated deployment
 ```
 
-### Testing
+### Testing and Validation
 ```bash
-make setup-config     # Setup test configuration
-make run-scan          # Run tests
-make update-code       # Update and rebuild
+make prepare-configs   # Prepare configurations
+make deploy-configs   # Deploy to remote
+make setup            # Run setup and tests
+make run-scan          # Additional testing
 ```
 
 ### Cleanup
@@ -230,11 +340,57 @@ make destroy          # Destroy client node
 make clean-all        # Clean local files
 ```
 
-## 📚 Additional Resources
+## 📚 Advanced Usage
 
-- [Main FastEVM Deployment](../README.md)
-- [Terraform GCP Provider](https://registry.terraform.io/providers/hashicorp/google/latest)
-- [GCP Compute Engine](https://cloud.google.com/compute)
+### Custom Configuration
+
+If you need to customize the configuration:
+
+```bash
+# Prepare configurations
+make prepare-configs
+
+# Edit the generated configuration
+nano config/test.env
+
+# Deploy with custom configuration
+make deploy-configs
+make setup
+```
+
+### Manual Transaction Testing
+
+```bash
+# SSH into client node
+make connect
+
+# Test RPC connectivity
+curl -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+  http://10.0.0.4:8545
+
+# Run custom tests
+cd /home/ubuntu
+source /home/ubuntu/test-config/test.env
+fastevm-test scan
+fastevm-test batch
+```
+
+### Integration with CI/CD
+
+The client node can be integrated into CI/CD pipelines:
+
+```bash
+# In your CI/CD pipeline
+make quick-start
+if [ $? -eq 0 ]; then
+    echo "Client node deployment successful"
+    make run-all
+else
+    echo "Client node deployment failed"
+    exit 1
+fi
+```
 
 ## 🤝 Contributing
 
@@ -243,6 +399,12 @@ make clean-all        # Clean local files
 3. Make changes
 4. Test with `make quick-start`
 5. Submit a pull request
+
+## 📚 Additional Resources
+
+- [Main FastEVM Deployment](../README.md)
+- [Terraform GCP Provider](https://registry.terraform.io/providers/hashicorp/google/latest)
+- [GCP Compute Engine](https://cloud.google.com/compute)
 
 ---
 
