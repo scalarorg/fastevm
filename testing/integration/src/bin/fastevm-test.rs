@@ -723,6 +723,8 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let env_file = env::var("ENV_FILE").unwrap_or(".env".to_string());
+    dotenvy::from_filename(env_file).ok();
     run_cli().await?;
     Ok(())
 }
