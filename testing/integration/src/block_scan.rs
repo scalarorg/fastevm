@@ -16,6 +16,8 @@ use std::time::Duration;
 pub struct BlockScanConfig {
     /// RPC URL to connect to
     pub rpc_url: String,
+    /// Starting block number to scan from
+    pub start_block: u64,
     /// Maximum number of blocks to scan (0 = scan all available blocks)
     pub max_blocks: u64,
     /// Whether to include empty blocks in output
@@ -28,6 +30,10 @@ impl Default for BlockScanConfig {
     fn default() -> Self {
         Self {
             rpc_url: env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string()),
+            start_block: env::var("BLOCK_NUMBER")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
             max_blocks: 0,
             include_empty_blocks: false,
             request_delay_ms: 100,
@@ -106,6 +112,7 @@ fn format_timestamp2(timestamp: u64) -> String {
 pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
     println!("🔍 Starting block scan...");
     println!("RPC URL: {}", config.rpc_url);
+    println!("Starting block: {}", config.start_block);
     println!(
         "Max blocks to scan: {}",
         if config.max_blocks == 0 {
@@ -134,10 +141,16 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
     let max_block_to_scan = if config.max_blocks == 0 {
         latest_block_number
     } else {
-        std::cmp::min(config.max_blocks, latest_block_number)
+        std::cmp::min(
+            config.start_block + config.max_blocks - 1,
+            latest_block_number,
+        )
     };
 
-    println!("Scanning blocks from 0 to {}", max_block_to_scan);
+    println!(
+        "Scanning blocks from {} to {}",
+        config.start_block, max_block_to_scan
+    );
     println!("🔍 Looking for transactions in each block...");
     println!();
 
@@ -145,10 +158,10 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
     let mut blocks_with_tx_count = 0;
     let mut last_logged_block = 0;
 
-    // Scan blocks from 0 to max_block_to_scan
-    for block_number in 0..=max_block_to_scan {
+    // Scan blocks from start_block to max_block_to_scan
+    for block_number in config.start_block..=max_block_to_scan {
         // Add delay between requests to avoid overwhelming the RPC endpoint
-        if block_number > 0 && config.request_delay_ms > 0 {
+        if block_number > config.start_block && config.request_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(config.request_delay_ms)).await;
         }
 

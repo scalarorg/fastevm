@@ -530,14 +530,14 @@ where
             *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += 1;
 
             // Get current nonce for the sender
-            let current_nonce = address_nonces.get(&account.address).copied();
+            let current_nonce = address_nonces.get(&account.address).copied().unwrap_or(0);
             // Create and sign the transfer transaction
             let tx_envelope = match create_transfer_transaction(
                 &account.private_key,
                 &recipient_account.address.to_string(),
                 chain_id,
                 transaction_amount,
-                current_nonce,
+                current_nonce as u64,
             )
             .await
             {
@@ -557,7 +557,7 @@ where
                 Ok(_) => {
                     successful_transactions += 1;
                     // Update nonce for next transaction from this sender
-                    address_nonces.insert(account.address, current_nonce.unwrap_or(0) + 1);
+                    address_nonces.insert(account.address, current_nonce + 1);
                 }
                 Err(e) => {
                     let error_msg = format!("{e:?}");

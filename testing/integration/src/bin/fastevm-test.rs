@@ -122,6 +122,10 @@ async fn run_cli() -> Result<()> {
                 rpc_url: url.unwrap_or_else(|| {
                     env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
                 }),
+                start_block: env::var("BLOCK_NUMBER")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
                 max_blocks: count,
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
@@ -146,6 +150,10 @@ async fn run_cli() -> Result<()> {
                 rpc_url: url.unwrap_or_else(|| {
                     env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
                 }),
+                start_block: env::var("BLOCK_NUMBER")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
                 max_blocks: 0, // 0 means scan all
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
@@ -171,14 +179,11 @@ async fn run_cli() -> Result<()> {
                 rpc_url: url.unwrap_or_else(|| {
                     env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
                 }),
+                start_block: start,
                 max_blocks: end - start + 1,
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
             };
-
-            // Note: The current implementation scans from 0, so we need to modify it
-            // to support custom start ranges. For now, we'll scan from 0 to end.
-            println!("⚠️  Note: Currently scanning from block 0 to {}. Custom start range not yet implemented.", end);
 
             let stats = scan_blocks(config).await?;
             println!("✅ Range scan completed! Found {} blocks with transactions out of {} total blocks.", 

@@ -12,7 +12,6 @@
 use alloy::hex::ToHexExt;
 use alloy_primitives::{hex, Address};
 use alloy_provider::{Provider, ProviderBuilder};
-use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
 use rand::Rng;
 use std::env;
@@ -193,7 +192,7 @@ async fn broadcast_transaction() -> Result<()> {
         &recipient_addr,
         chain_id,
         gwei_amount,
-        Some(nonce),
+        nonce,
     )
     .await
     {
@@ -553,7 +552,7 @@ async fn test_multi_transactions() -> Result<()> {
                     &recipient_address.to_string(),
                     chain_id,
                     *amount,
-                    Some(nonce),
+                    nonce,
                 )
                 .await
                 {
@@ -782,7 +781,7 @@ async fn test_bulk_transactions() -> Result<()> {
             &recipient.to_string(),
             chain_id,
             transaction_amount,
-            Some(current_nonce),
+            current_nonce,
         )
         .await
         {

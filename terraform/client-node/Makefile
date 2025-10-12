@@ -121,6 +121,7 @@ endif
 CLIENT_IP_CMD = $(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'
 SSH_OPTS = -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
 SSH_CMD = ssh $(SSH_OPTS) -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@
+TEST_SLEEP_DURATION = 120
 
 # Get client IP and validate it exists
 define GET_CLIENT_IP
@@ -131,14 +132,32 @@ define GET_CLIENT_IP
 	fi
 endef
 
+# Get current block number from Ethereum node
+define GET_CURRENT_BLOCK
+	echo "🔍 Getting current block number..."; \
+	CURRENT_BLOCK=$$($(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/test.env && curl -s -X POST -H "Content-Type: application/json" --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" $$RPC_URL1 | jq -r ".result" | xargs printf "%d\n" 2>/dev/null || echo "0"'); \
+	echo "📊 Current block number: $$CURRENT_BLOCK"
+endef
+
 # Execute test command on client with timeout and error handling
 define RUN_TEST
 	echo "$(1)"; \
-	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source /home/ubuntu/test-config/test.env && timeout $(2) $(3)'; \
+	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/test.env && timeout $(2) $(3)'; \
 	if [ $$? -eq 0 ]; then \
 		echo "✅ $(4)"; \
 	else \
 		echo "$(5)"; \
+	fi
+endef
+
+# Execute scan test with BLOCK_NUMBER environment variable
+define RUN_SCAN_WITH_BLOCK
+	echo "$(1)"; \
+	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/test.env && export BLOCK_NUMBER=$(2) && timeout $(3) $(4)'; \
+	if [ $$? -eq 0 ]; then \
+		echo "✅ $(5)"; \
+	else \
+		echo "$(6)"; \
 	fi
 endef
 
@@ -274,38 +293,24 @@ setup: ## Run setup script on remote client node (bootstrap + configure)
 	if [ $$? -eq 0 ]; then \
 		echo "✅ Setup script executed successfully"; \
 		echo "⏳ Waiting for setup to complete..."; \
-		TIMEOUT=600; \
-		ELAPSED=0; \
-		while [ $$ELAPSED -lt $$TIMEOUT ]; do \
-			COMPLETE=$$($(SSH_CMD)$$CLIENT_IP 'ls /var/log/client-bootstrap-complete /var/log/client-config-complete 2>/dev/null && echo "yes" || echo "no"'); \
-			if [ "$$COMPLETE" = "yes" ]; then \
-				echo "✅ Setup completed successfully"; \
-				break; \
-			fi; \
-			echo "⏳ Waiting for setup completion... ($$ELAPSED/$$TIMEOUT seconds)"; \
-			sleep 10; \
-			ELAPSED=$$((ELAPSED + 10)); \
-		done; \
-		if [ $$ELAPSED -ge $$TIMEOUT ]; then \
-			echo "⚠️ Setup timeout - check logs manually"; \
-			echo "Check setup log: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f /var/log/client-setup.log'"; \
-		fi; \
 	else \
 		echo "❌ Setup script execution failed"; \
 		exit 1; \
 	fi
 
 # Automated test sequence (run after bootstrap)
-auto-test: ## Run automated test sequence (scan -> batch -> scan)
+auto-test: ## Run automated test sequence (get block -> batch -> sleep -> scan)
 	echo "🚀 Running automated test sequence..."; \
 	$(GET_CLIENT_IP); \
 	echo "Running tests on $$CLIENT_IP..."; \
-	$(call RUN_TEST,"1️⃣ Running block scan test...",60,"fastevm-test scan","Block scan test completed","⚠️ Block scan test had issues"); \
+	$(call GET_CURRENT_BLOCK); \
 	$(call RUN_TEST,"2️⃣ Running batch transaction test...",300,"fastevm-test batch","Batch transaction test completed","❌ Batch transaction test failed"); \
-	$(call RUN_TEST,"3️⃣ Running final block scan test...",60,"fastevm-test scan","Final block scan test completed","⚠️ Final block scan test had issues"); \
+	echo "⏳ Waiting $(TEST_SLEEP_DURATION) seconds for transactions to be processed..."; \
+	sleep $(TEST_SLEEP_DURATION); \
+	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",$$CURRENT_BLOCK,60,"fastevm-test scan","Final block scan test completed","⚠️ Final block scan test had issues"); \
 	echo "🎉 Automated test sequence completed!"
 # Quick start (init + apply + prepare-configs + deploy-configs + setup)
-quick-start: init apply prepare-configs deploy-configs setup ## Quick start: complete client node setup
+quick-start: init apply prepare-configs deploy-configs setup auto-test ## Quick start: complete client node setup
 	@echo "🎉 Quick start completed!"
 
 # Show outputs
