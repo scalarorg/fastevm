@@ -304,10 +304,10 @@ auto-test: ## Run automated test sequence (get block -> batch -> sleep -> scan)
 	$(GET_CLIENT_IP); \
 	echo "Running tests on $$CLIENT_IP..."; \
 	$(call GET_CURRENT_BLOCK); \
-	$(call RUN_TEST,"2️⃣ Running batch transaction test...",300,"fastevm-test batch","Batch transaction test completed","❌ Batch transaction test failed"); \
+	$(call RUN_TEST,"2️⃣ Running batch transaction test...",300,fastevm-test batch,"Batch transaction test completed","❌ Batch transaction test failed"); \
 	echo "⏳ Waiting $(TEST_SLEEP_DURATION) seconds for transactions to be processed..."; \
 	sleep $(TEST_SLEEP_DURATION); \
-	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",$$CURRENT_BLOCK,60,"fastevm-test scan","Final block scan test completed","⚠️ Final block scan test had issues"); \
+	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",$$CURRENT_BLOCK,60,fastevm-test scan,"Final block scan test completed","⚠️ Final block scan test had issues"); \
 	echo "🎉 Automated test sequence completed!"
 # Quick start (init + apply + prepare-configs + deploy-configs + setup)
 quick-start: init apply prepare-configs deploy-configs setup auto-test ## Quick start: complete client node setup

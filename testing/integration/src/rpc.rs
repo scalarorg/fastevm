@@ -7,6 +7,7 @@
 use alloy_primitives::Address;
 use alloy_provider::{Provider, ProviderBuilder};
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 /// Gets the transaction nonces for the given addresses from the specified RPC URLs.
 pub async fn get_nonces(
@@ -33,7 +34,7 @@ pub async fn get_nonces(
             return nonces;
         }
     };
-
+    let start_time = Instant::now();
     for sender_idx in start_idx..end_idx {
         let address = &addresses[sender_idx];
         let address_nonce = match provider.get_transaction_count(*address).await {
@@ -48,8 +49,13 @@ pub async fn get_nonces(
                 return nonces;
             }
         };
-        println!("Nonce for address {:?} is {:?}", address, address_nonce);
         nonces.insert(*address, address_nonce);
     }
+    println!(
+        "Finished getting nonces from index {} to {} in {:?}",
+        start_idx,
+        end_idx,
+        start_time.elapsed()
+    );
     nonces
 }
