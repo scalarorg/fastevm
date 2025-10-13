@@ -24,7 +24,7 @@ help: ## Show available commands
 	@echo "  connect           Connect to client node via SSH"
 	@echo "  setup-config      Setup test configuration"
 	@echo "  run-test          Run specific test (usage: make run-test TEST=scan)"
-	@echo "  run-scan          Run block scan test"
+	@echo "  run-scan          Run block scan test (usage: make run-scan START_NUMBER=10 COUNTER=5)"
 	@echo "  run-batch         Run batch transaction test"
 	@echo "  run-all           Run all tests"
 	@echo ""
@@ -204,14 +204,14 @@ setup-config: ## Setup test configuration on client node
 	echo "  1. SSH to client: make connect"; \
 	echo "  2. Edit config: nano $(CLIENT_CONFIG_DIR)/test.env"; \
 	echo "  3. Update RPC URLs with actual node IPs from your FastEVM deployment"; \
-	echo "  4. Run tests: make run-test TEST=scan"
+	echo "  4. Run tests: make run-scan START_NUMBER=10 COUNTER=5"
 
 # Run remote test
-run-test: ## Run specific test on client node (usage: make run-test TEST=scan)
+run-test: ## Run specific test on client node (usage: make run-test TEST=scan-all)
 	@if [ -z "$(TEST)" ]; then \
 		echo "❌ Please specify TEST parameter"; \
 		echo "Usage: make run-test TEST=<test_type>"; \
-		echo "Available tests: scan, scan-all, batch, range, all"; \
+		echo "Available tests: scan-all, batch, range, all"; \
 		exit 1; \
 	fi
 	@echo "🧪 Running $(TEST) test on client node..."
@@ -225,8 +225,25 @@ run-test: ## Run specific test on client node (usage: make run-test TEST=scan)
 	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && make test-$(TEST)'
 
 # Run remote scan test
-run-scan: ## Run block scan test on client node
-	@$(MAKE) run-test TEST=scan
+run-scan: ## Run block scan test on client node (usage: make run-scan START_NUMBER=10 COUNTER=5, parameters optional)
+	@echo "🧪 Running scan test on client node..."
+	@if [ -n "$(START_NUMBER)" ] && [ -n "$(COUNTER)" ]; then \
+		echo "Using parameters: START_NUMBER=$(START_NUMBER) COUNTER=$(COUNTER)"; \
+	elif [ -n "$(START_NUMBER)" ]; then \
+		echo "Using START_NUMBER=$(START_NUMBER), COUNTER will use default or environment"; \
+	elif [ -n "$(COUNTER)" ]; then \
+		echo "Using COUNTER=$(COUNTER), START_NUMBER will use default or environment"; \
+	else \
+		echo "No parameters provided, will use defaults or environment variables"; \
+	fi
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make apply' first."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && export ENV_FILE=~/client-config/test.env && fastevm-test scan $(if $(START_NUMBER),--start $(START_NUMBER)) $(if $(COUNTER),--count $(COUNTER))'
 
 # Run remote batch test
 run-batch: ## Run batch transaction test on client node
@@ -320,11 +337,6 @@ outputs: ## Show all outputs
 	@$(TERRAFORM_CMD) output
 
 # Test targets (run on client node)
-test-scan: ## Run block scan test
-	@echo "🔍 Running block scan test..."
-	START_BLOCK=10
-	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",10,60,fastevm-test scan,"Final block scan test completed","⚠️ Final block scan test had issues"); \
-
 test-scan-all: ## Run block scan all test
 	@echo "🔍 Running block scan all test..."
 	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
@@ -351,6 +363,3 @@ test-range: ## Run block range test
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \
 	fi
-
-test-all: test-scan test-batch ## Run all tests
-	@echo "✅ All tests completed"
