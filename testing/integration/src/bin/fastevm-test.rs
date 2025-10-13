@@ -31,8 +31,12 @@ pub struct Cli {
 /// Available commands for the block scanner
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Scan a specific number of blocks from the beginning
+    /// Scan a specific number of blocks from a starting block
     Scan {
+        /// Starting block number (default: 0)
+        #[arg(short, long, default_value = "0")]
+        start: u64,
+
         /// Number of blocks to scan (default: 10)
         #[arg(short, long, default_value = "10")]
         count: u64,
@@ -111,22 +115,50 @@ async fn run_cli() -> Result<()> {
 
     match cli.command {
         Commands::Scan {
+            start,
             count,
             url,
             include_empty,
             delay,
         } => {
-            println!("🔍 Scanning first {} blocks...", count);
+            // Get values from environment variables if parameters are at default values
+            let start_block = if start == 0 {
+                env::var("BLOCK_NUMBER")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(start)
+            } else {
+                start
+            };
+
+            let block_count = if count == 10 {
+                env::var("BLOCK_COUNT")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(count)
+            } else {
+                count
+            };
+
+            // Show which values came from environment variables
+            if start == 0 && env::var("BLOCK_NUMBER").is_ok() {
+                println!("📋 Using BLOCK_NUMBER from environment: {}", start_block);
+            }
+            if count == 10 && env::var("BLOCK_COUNT").is_ok() {
+                println!("📋 Using BLOCK_COUNT from environment: {}", block_count);
+            }
+
+            println!(
+                "🔍 Scanning {} blocks starting from block {}...",
+                block_count, start_block
+            );
 
             let config = BlockScanConfig {
                 rpc_url: url.unwrap_or_else(|| {
                     env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
                 }),
-                start_block: env::var("BLOCK_NUMBER")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
-                max_blocks: count,
+                start_block,
+                block_count,
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
             };
@@ -154,7 +186,7 @@ async fn run_cli() -> Result<()> {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0),
-                max_blocks: 0, // 0 means scan all
+                block_count: 0, // 0 means scan all
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
             };
@@ -180,7 +212,7 @@ async fn run_cli() -> Result<()> {
                     env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
                 }),
                 start_block: start,
-                max_blocks: end - start + 1,
+                block_count: end - start + 1,
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
             };

@@ -18,8 +18,8 @@ pub struct BlockScanConfig {
     pub rpc_url: String,
     /// Starting block number to scan from
     pub start_block: u64,
-    /// Maximum number of blocks to scan (0 = scan all available blocks)
-    pub max_blocks: u64,
+    /// Number of blocks to scan from start_block (0 = scan all available blocks)
+    pub block_count: u64,
     /// Whether to include empty blocks in output
     pub include_empty_blocks: bool,
     /// Delay between block requests (in milliseconds)
@@ -34,7 +34,7 @@ impl Default for BlockScanConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
-            max_blocks: 0,
+            block_count: 0,
             include_empty_blocks: false,
             request_delay_ms: 100,
         }
@@ -114,11 +114,11 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
     println!("RPC URL: {}", config.rpc_url);
     println!("Starting block: {}", config.start_block);
     println!(
-        "Max blocks to scan: {}",
-        if config.max_blocks == 0 {
+        "Number of blocks to scan: {}",
+        if config.block_count == 0 {
             "All available".to_string()
         } else {
-            config.max_blocks.to_string()
+            config.block_count.to_string()
         }
     );
     println!("Include empty blocks: {}", config.include_empty_blocks);
@@ -138,11 +138,11 @@ pub async fn scan_blocks(config: BlockScanConfig) -> Result<BlockScanStats> {
 
     println!("Latest block number: {}", latest_block_number);
 
-    let max_block_to_scan = if config.max_blocks == 0 {
+    let max_block_to_scan = if config.block_count == 0 {
         latest_block_number
     } else {
         std::cmp::min(
-            config.start_block + config.max_blocks - 1,
+            config.start_block + config.block_count - 1,
             latest_block_number,
         )
     };
@@ -304,7 +304,7 @@ pub async fn scan_blocks_with_url(rpc_url: &str) -> Result<BlockScanStats> {
 /// Convenience function to scan a specific number of blocks
 pub async fn scan_blocks_count(count: u64) -> Result<BlockScanStats> {
     let config = BlockScanConfig {
-        max_blocks: count,
+        block_count: count,
         ..Default::default()
     };
     scan_blocks(config).await
@@ -318,7 +318,7 @@ mod tests {
     async fn test_block_scan_config_default() {
         let config = BlockScanConfig::default();
         assert!(!config.rpc_url.is_empty());
-        assert_eq!(config.max_blocks, 0);
+        assert_eq!(config.block_count, 0);
         assert!(!config.include_empty_blocks);
         assert_eq!(config.request_delay_ms, 100);
     }

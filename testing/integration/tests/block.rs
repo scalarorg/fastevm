@@ -12,7 +12,7 @@ async fn test_block_scan_demo() -> Result<()> {
 
     // Test scanning the first 10 blocks
     let config = BlockScanConfig {
-        max_blocks: 10,
+        block_count: 10,
         include_empty_blocks: true,
         request_delay_ms: 50,
         ..Default::default()
