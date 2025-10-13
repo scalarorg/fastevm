@@ -37,6 +37,12 @@ install_services() {
     
     # Create systemd service for execution client
     log_info "Creating fastevm-execution.service..."
+    
+    # Ensure log file exists with proper permissions
+    touch /data/logs/fastevm-execution.log
+    chown ubuntu:ubuntu /data/logs/fastevm-execution.log
+    chmod 644 /data/logs/fastevm-execution.log
+    
     tee /etc/systemd/system/fastevm-execution.service > /dev/null << 'EOF'
 [Unit]
 Description=FastEVM Execution Client
@@ -93,6 +99,12 @@ EOF
 
     # Create systemd service for consensus client
     log_info "Creating fastevm-consensus.service..."
+    
+    # Ensure log file exists with proper permissions
+    touch /data/logs/fastevm-consensus.log
+    chown ubuntu:ubuntu /data/logs/fastevm-consensus.log
+    chmod 644 /data/logs/fastevm-consensus.log
+    
     tee /etc/systemd/system/fastevm-consensus.service > /dev/null << 'EOF'
 [Unit]
 Description=FastEVM Consensus Client

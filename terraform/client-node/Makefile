@@ -153,7 +153,7 @@ endef
 # Execute scan test with BLOCK_NUMBER environment variable
 define RUN_SCAN_WITH_BLOCK
 	echo "$(1)"; \
-	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/test.env && export BLOCK_NUMBER=$(2) && timeout $(3) $(4)'; \
+	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/test.env && export BLOCK_NUMBER=$(2) && timeout $(3) $(4)'; \
 	if [ $$? -eq 0 ]; then \
 		echo "✅ $(5)"; \
 	else \
@@ -310,8 +310,8 @@ auto-test: ## Run automated test sequence (get block -> batch -> sleep -> scan)
 	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",$$CURRENT_BLOCK,60,fastevm-test scan,"Final block scan test completed","⚠️ Final block scan test had issues"); \
 	echo "🎉 Automated test sequence completed!"
 # Quick start (init + apply + prepare-configs + deploy-configs + setup)
-quick-start: init apply prepare-configs deploy-configs setup auto-test ## Quick start: complete client node setup
-	@echo "🎉 Quick start completed!"
+deploy-client: init apply prepare-configs deploy-configs setup #auto-test ## Quick start: complete client node setup
+	@echo "🎉 Deploy client completed!"
 
 # Show outputs
 outputs: ## Show all outputs
@@ -322,12 +322,8 @@ outputs: ## Show all outputs
 # Test targets (run on client node)
 test-scan: ## Run block scan test
 	@echo "🔍 Running block scan test..."
-	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
-		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test scan; \
-	else \
-		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
-		exit 1; \
-	fi
+	START_BLOCK=10
+	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",10,60,fastevm-test scan,"Final block scan test completed","⚠️ Final block scan test had issues"); \
 
 test-scan-all: ## Run block scan all test
 	@echo "🔍 Running block scan all test..."

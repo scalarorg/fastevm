@@ -10,7 +10,17 @@ CLIENT_NODE_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_ROOT="$(dirname "$(dirname "$CLIENT_NODE_DIR")")"
 CONFIG_DIR="${CLIENT_NODE_DIR}/config"
 
-# Default values
+# Load configuration from environment file
+CONFIG_ENV_FILE="${SCRIPT_DIR}/../config.env"
+
+if [ -f "$CONFIG_ENV_FILE" ]; then
+    echo "Loading configuration from $CONFIG_ENV_FILE"
+    source "$CONFIG_ENV_FILE"
+else
+    echo "Warning: Configuration file $CONFIG_ENV_FILE not found, using defaults"
+fi
+
+# Default values (fallback if not set in config.env)
 GITHUB_REPO=${GITHUB_REPO:-"https://github.com/scalarorg/fastevm.git"}
 GITHUB_BRANCH=${GITHUB_BRANCH:-"terraform"}
 CHAIN_ID=${CHAIN_ID:-202501}

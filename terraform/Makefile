@@ -337,7 +337,7 @@ verify-deployment: ## Verify deployment health
 		echo "Testing node connectivity..."; \
 		for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
 			node_ip=$$(jq -r ".instance_external_ips.value[$$i]" ../deployment-info.json 2>/dev/null || jq -r ".instance_ips.value[$$i]" ../deployment-info.json 2>/dev/null); \
-			http_port=$$((8545 + i * 2)); \
+			http_port=8545; \
 			echo "Testing node $$i ($$node_ip:$$http_port)..."; \
 			if curl -s -f "http://$$node_ip:$$http_port" > /dev/null; then \
 				echo "✓ Node $$i is responding"; \
