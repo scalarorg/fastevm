@@ -124,11 +124,11 @@ else
     # Generate default node configuration
     echo "Generating node configuration..."
     NODE_IP=$(hostname -I | awk '{print $1}')
-    HTTP_PORT=$((8545 + NODE_INDEX * 2))
-    WS_PORT=$((8546 + NODE_INDEX * 2))
-    ENGINE_PORT=$((8551 + NODE_INDEX))
-    CONSENSUS_PORT=$((26657 + NODE_INDEX))
-    P2P_PORT=$((30303 + NODE_INDEX))
+    HTTP_PORT=8545
+    WS_PORT=8546
+    ENGINE_PORT=8551
+    CONSENSUS_PORT=26657
+    P2P_PORT=30303
 
     # Generate JWT secret
     JWT_SECRET=$(openssl rand -hex 32)
@@ -360,8 +360,8 @@ cat > /usr/local/bin/fastevm-health-check.sh << 'EOF'
 # Health check script for FastEVM nodes
 
 NODE_INDEX=$${1:-0}
-HTTP_PORT=$((8545 + NODE_INDEX * 2))
-ENGINE_PORT=$((8551 + NODE_INDEX))
+HTTP_PORT=8545
+ENGINE_PORT=8551
 
 # Check execution client
 if curl -s -f "http://localhost:$HTTP_PORT" > /dev/null; then

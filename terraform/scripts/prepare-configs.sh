@@ -704,7 +704,11 @@ prefund_account() {
     local mnemonic=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
     local balance=${PREFUND_BALANCE:-"1000000000000000000000"}
     
-    if cli allocate-funds \
+    # Ensure proper permissions before running CLI
+    sudo chown -R ubuntu:ubuntu /data
+    sudo chmod -R 755 /data
+    
+    if sudo -u ubuntu cli allocate-funds \
         --input /data/genesis.json \
         --count "$count" \
         --mnemonic "$mnemonic" \

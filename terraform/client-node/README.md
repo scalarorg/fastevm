@@ -14,7 +14,8 @@ sudo apt install terraform google-cloud-cli jq  # Ubuntu
 
 # Authenticate with GCP
 gcloud auth login
-gcloud auth application-default login
+gcloud auth application-default login \
+      --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
 ```
 
 ### Complete Automated Deployment
@@ -82,21 +83,43 @@ client-node/
 - `client_disk_size`: Disk size in GB (default: 50)
 - `client_subnet_cidr`: Subnet CIDR (default: "10.1.0.0/24")
 
-### Environment Variables
+### Environment Configuration
 
-The system automatically detects RPC URLs from your main FastEVM deployment, but you can override them:
+The client node configuration can be customized by editing the `config.env` file:
 
 ```bash
-# Override GitHub repository and branch
-export GITHUB_REPO="https://github.com/scalarorg/fastevm.git"
-export GITHUB_BRANCH="terraform"
+# Repository configuration
+GITHUB_REPO=https://github.com/scalarorg/fastevm.git
+GITHUB_BRANCH=terraform
+CHAIN_ID=202501
 
-# Override test parameters
-export TEST_SENDER_COUNT=10000
-export TEST_TRANSACTION_COUNT=10
-export TEST_TRANSACTION_VALUE=1000000000000000
-export TEST_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+# Test configuration defaults
+TEST_SENDER_COUNT=10000
+TEST_TRANSACTION_COUNT=10
+TEST_TRANSACTION_VALUE=1000000000000000
+TEST_MNEMONIC=abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+TEST_FETCH_NONCE=true
+TEST_WAITING_TIME_SECONDS=30
+TEST_RPC_TIMEOUT=30
+TEST_MAX_RETRIES=3
+TEST_LOG_LEVEL=info
 ```
+
+**Key Configuration Variables:**
+- `GITHUB_REPO`: FastEVM repository URL
+- `GITHUB_BRANCH`: Branch to use for deployment
+- `CHAIN_ID`: Blockchain chain ID
+- `TEST_SENDER_COUNT`: Number of test accounts to create
+- `TEST_TRANSACTION_COUNT`: Number of transactions per test
+- `TEST_TRANSACTION_VALUE`: Value in wei for test transactions
+- `TEST_MNEMONIC`: Mnemonic phrase for test accounts
+- `TEST_FETCH_NONCE`: Whether to fetch nonce from network
+- `TEST_WAITING_TIME_SECONDS`: Wait time between operations
+- `TEST_RPC_TIMEOUT`: RPC request timeout in seconds
+- `TEST_MAX_RETRIES`: Maximum retry attempts
+- `TEST_LOG_LEVEL`: Logging level (debug, info, warn, error)
+
+The `prepare-configs.sh` script automatically loads these values from `config.env` and uses them as defaults when generating the client configuration.
 
 ## 🏗️ Infrastructure Components
 
@@ -150,7 +173,7 @@ make clean-all         # Clean all local files
 make outputs           # Show all outputs
 ```
 
-## 🧪 Testing Configuration
+## 🧪 Testing
 
 ### Automatic Configuration Detection
 
@@ -160,53 +183,13 @@ The system automatically detects RPC URLs from your main FastEVM deployment:
 2. **Fallback**: Uses `../terraform.tfstate` if deployment-info.json not found
 3. **Preference**: Uses internal IPs first, falls back to external IPs
 
-### Generated Configuration (`test.env`)
-
-```bash
-# FastEVM Client Test Configuration
-# Generated automatically with detected RPC URLs
-
-# RPC Endpoints (auto-detected from main deployment)
-RPC_URL1=http://10.0.0.4:8545
-RPC_URL2=http://10.0.0.5:8545
-RPC_URL3=http://10.0.0.3:8545
-RPC_URL4=http://10.0.0.2:8545
-
-# Network Configuration
-CHAIN_ID=202501
-
-# Test Parameters
-TEST_SENDER_COUNT=10000
-TEST_TRANSACTION_COUNT=10
-TEST_TRANSACTION_VALUE=1000000000000000
-TEST_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-TEST_FETCH_NONCE=false
-TEST_WAITING_TIME_SECONDS=30
-TEST_RPC_TIMEOUT=30
-TEST_MAX_RETRIES=3
-TEST_LOG_LEVEL=info
-```
-
-## 🔄 Automated Testing Workflow
-
-### Test Sequence (Automatically Executed)
+### Automated Test Sequence
 
 The setup script automatically runs a comprehensive test sequence:
 
-1. **Block Scan Test** (60s timeout)
-   - Purpose: Verify network connectivity
-   - Command: `fastevm-test scan`
-   - Expected: Successful connection to RPC endpoints
-
-2. **Batch Transaction Test** (300s timeout)
-   - Purpose: Send multiple transactions to test network
-   - Command: `fastevm-test batch`
-   - Expected: Transactions sent and confirmed
-
-3. **Final Block Scan Test** (60s timeout)
-   - Purpose: Verify transactions were processed
-   - Command: `fastevm-test scan`
-   - Expected: Updated block information
+1. **Block Scan Test** (60s timeout) - Verify network connectivity
+2. **Batch Transaction Test** (300s timeout) - Send multiple transactions
+3. **Final Block Scan Test** (60s timeout) - Verify transactions were processed
 
 ### Manual Testing
 
@@ -216,7 +199,7 @@ make connect
 
 # Run tests manually
 cd /home/ubuntu
-source /home/ubuntu/test-config/test.env
+source /home/ubuntu/client-config/test.env
 
 # Individual tests
 fastevm-test scan      # Block scan test
@@ -258,7 +241,8 @@ make run-all           # All tests
 1. **Authentication Errors**
    ```bash
    gcloud auth login
-   gcloud auth application-default login
+   gcloud auth application-default login \
+      --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
    ```
 
 2. **Client node not found**
@@ -276,7 +260,7 @@ make run-all           # All tests
    
    # Manual configuration
    make connect
-   nano /home/ubuntu/test-config/test.env
+   nano /home/ubuntu/client-config/test.env
    ```
 
 4. **Tests failing**
@@ -284,7 +268,7 @@ make run-all           # All tests
    make status
    make connect
    tail -f /var/log/client-setup.log
-   cat /home/ubuntu/test-config/test.env
+   cat /home/ubuntu/client-config/test.env
    ```
 
 5. **Connection issues**
@@ -317,29 +301,6 @@ make connect
 tail -f /var/log/client-setup.log
 ```
 
-## 🔄 Development Workflow
-
-### Local Development
-```bash
-make init              # Initialize Terraform
-make plan              # Plan deployment
-make quick-start       # Full automated deployment
-```
-
-### Testing and Validation
-```bash
-make prepare-configs   # Prepare configurations
-make deploy-configs   # Deploy to remote
-make setup            # Run setup and tests
-make run-scan          # Additional testing
-```
-
-### Cleanup
-```bash
-make destroy          # Destroy client node
-make clean-all        # Clean local files
-```
-
 ## 📚 Advanced Usage
 
 ### Custom Configuration
@@ -356,24 +317,6 @@ nano config/test.env
 # Deploy with custom configuration
 make deploy-configs
 make setup
-```
-
-### Manual Transaction Testing
-
-```bash
-# SSH into client node
-make connect
-
-# Test RPC connectivity
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://10.0.0.4:8545
-
-# Run custom tests
-cd /home/ubuntu
-source /home/ubuntu/test-config/test.env
-fastevm-test scan
-fastevm-test batch
 ```
 
 ### Integration with CI/CD
