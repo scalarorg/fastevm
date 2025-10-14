@@ -46,6 +46,7 @@ reth-payload-builder = { workspace = true }
 jsonrpsee = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 # tokio-stream = "0.1"
 
 # Dependencies for mnemonic and account generation

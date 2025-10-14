@@ -1,17 +1,21 @@
 use crate::consensus::ConsensusPool;
+use alloy_primitives::{Bytes, B256};
 use anyhow::Result;
+use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use reth_ethereum::chainspec::EthChainSpec;
+use reth_ethereum::rpc::eth::utils::recover_raw_transaction;
 use reth_extension::CommittedSubDag;
-use reth_extension::ConsensusTransactionApiServer;
 use reth_extension::MysticetiCommittedSubdag;
+use reth_extension::MysticetiConsensusApiServer;
+use reth_transaction_pool::TransactionOrigin;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 /// The type that implements the `txpool` rpc namespace trait
-pub struct ConsensusTransactionsHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
+pub struct MysticetiConsensusHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
     /// Consensus pool keep committed transactions from mysticeti
     consensus_pool: Arc<ConsensusPool<Pool>>,
     /// Transaction pool keep transactions from reth
@@ -20,7 +24,7 @@ pub struct ConsensusTransactionsHandler<Pool: TransactionPool, ChainSpec: EthCha
     // For debugging
     total_txs: Arc<Mutex<u64>>,
 }
-impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandler<Pool, ChainSpec> {
+impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<Pool, ChainSpec> {
     pub fn new(
         consensus_pool: Arc<ConsensusPool<Pool>>,
         tx_pool: Pool,
@@ -42,7 +46,7 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandle
         }
     }
 }
-impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandler<Pool, ChainSpec> {
+impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<Pool, ChainSpec> {
     /// Process a single subdag
     /// We add committed transactions to consensus pool
     /// Add missing transactions from consensus pool to transaction pool
@@ -108,9 +112,33 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> ConsensusTransactionsHandle
         // );
         Ok(added_count)
     }
+    async fn handle_raw_transaction(&self, tx: Bytes) -> Result<B256> {
+        let recovered = recover_raw_transaction(&tx)?;
+
+        // Simulate broadcast_raw_transaction by adding with Local origin
+        // This automatically triggers the transaction pool's event system
+        // which broadcasts to all subscribers via the TxpoolListener
+        let pool_transaction = Pool::Transaction::from_pooled(recovered);
+        let hash = self
+            .tx_pool
+            .add_transaction(TransactionOrigin::Local, pool_transaction)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to add transaction to pool: {}", e))?;
+
+        // The transaction is now automatically "broadcast" through the pool's event system
+        // The TxpoolListener will pick up this transaction and send it to subscribers
+        info!(
+            "Transaction {} added to pool and will be broadcast to subscribers",
+            hash
+        );
+
+        Ok(hash)
+    }
 }
-impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static>
-    ConsensusTransactionApiServer for ConsensusTransactionsHandler<Pool, ChainSpec>
+
+#[async_trait]
+impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> MysticetiConsensusApiServer
+    for MysticetiConsensusHandler<Pool, ChainSpec>
 {
     #[doc = " Submit commited subdag"]
     fn submit_committed_subdags(&self, subdags: Vec<CommittedSubDag>) -> RpcResult<()> {

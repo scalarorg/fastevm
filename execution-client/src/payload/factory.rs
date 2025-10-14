@@ -23,14 +23,21 @@ where
     Pool: TransactionPool,
 {
     consensus_pool: Arc<ConsensusPool<Pool>>,
+    tx_built_payload: UnboundedSender<Payload::BuiltPayload>,
 }
 
 impl<Pool: TransactionPool> MysticetiPayloadBuilderFactory<Pool>
 where
     Pool: TransactionPool,
 {
-    pub fn new(consensus_pool: Arc<ConsensusPool<Pool>>) -> Self {
-        Self { consensus_pool }
+    pub fn new(
+        consensus_pool: Arc<ConsensusPool<Pool>>,
+        tx_built_payload: UnboundedSender<Payload::BuiltPayload>,
+    ) -> Self {
+        Self {
+            consensus_pool,
+            tx_built_payload,
+        }
     }
 }
 
@@ -71,11 +78,15 @@ where
         //     evm_config,
         //     EthereumBuilderConfig::new().with_gas_limit(gas_limit),
         // ))
-        let MysticetiPayloadBuilderFactory { consensus_pool } = self;
+        let MysticetiPayloadBuilderFactory {
+            consensus_pool,
+            tx_built_payload,
+        } = self;
         Ok(MysticetiPayloadBuilder::new(
             ctx.provider().clone(),
             pool,
             consensus_pool,
+            tx_built_payload,
             evm_config,
             EthereumBuilderConfig::new().with_gas_limit(gas_limit),
         ))

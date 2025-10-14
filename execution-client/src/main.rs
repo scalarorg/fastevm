@@ -16,12 +16,17 @@ mod pool;
 mod rpc;
 
 use clap::Parser;
+use reth_node_builder::{
+    rpc::{RethRpcAddOns, RpcContext},
+    NodeAdapter,
+};
+use tokio::sync::mpsc::unbounded_channel;
 // Suppress warnings for dependencies used by CLI binary
 use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
     pool::MysticetiPoolBuilder,
-    rpc::{ConsensusTransactionsHandler, TxpoolListener},
+    rpc::{MysticetiConsensusHandler, TxListener},
 };
 
 use reth_ethereum::{
@@ -33,7 +38,7 @@ use reth_ethereum::{
         EthereumNode,
     },
 };
-use reth_extension::{ConsensusTransactionApiServer, TxpoolListenerApiServer};
+use reth_extension::{MysticetiConsensusApiServer, TxpoolListenerApiServer};
 use std::sync::Arc;
 use tracing::info;
 // Use in cli
@@ -51,7 +56,7 @@ use sha2 as _;
 pub(crate) struct CliMysticetiArgs {
     /// CLI flag to enable the txpool extension namespace
     #[arg(long)]
-    pub enable_txpool_listener: bool,
+    pub enable_tx_subscription: bool,
     /// Number of transactions to send in a batch
     #[arg(long)]
     pub committed_subdags_per_block: usize,
@@ -72,11 +77,11 @@ pub(crate) struct CliMysticetiArgs {
 fn main() {
     Cli::<EthereumChainSpecParser, CliMysticetiArgs>::parse()
         .run(|builder, args| async move {
-            //Create a channel for sending subdag received from rpc server to BeaconConsensusEngineHandle
-            // let (subdag_tx, subdag_rx) = unbounded_channel();
+            // Create a channel for sending built payload to mysticeti consensus
+            let (tx_built_payload, rx_built_payload) = unbounded_channel();
             let consensus_pool = Arc::new(ConsensusPool::new(args.committed_subdags_per_block));
             let mysticeti_payload_builder = BasicPayloadServiceBuilder::new(
-                MysticetiPayloadBuilderFactory::new(consensus_pool.clone()),
+                MysticetiPayloadBuilderFactory::new(consensus_pool.clone(), tx_built_payload),
             );
 
             let handle = builder
@@ -92,15 +97,16 @@ fn main() {
                 .extend_rpc_modules({
                     let consensus_pool = consensus_pool.clone();
                     move |ctx| {
-                        if !args.enable_txpool_listener {
+                        if !args.enable_tx_subscription {
                             return Ok(());
                         }
-
+                        // Access the EthApi instance from the registry
+                        let eth_api = ctx.registry.eth_api().clone();
                         // here we get the configured pool.
-                        let pool = ctx.pool().clone();
-                        let listener = TxpoolListener::new(pool.clone());
+                        let pool = ctx.pool();
+                        let listener = TxListener::new(pool.clone(), eth_api);
                         let chain_spec = ctx.provider().chain_spec();
-                        let consensus_handler = ConsensusTransactionsHandler::new(
+                        let consensus_handler = MysticetiConsensusHandler::new(
                             consensus_pool.clone(),
                             pool.clone(),
                             chain_spec,
@@ -117,16 +123,19 @@ fn main() {
                         reth_ethereum::node::EthEngineTypes,
                     > = node.payload_builder_handle.clone();
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
-
+                    // Get the canonical state stream
                     let mut mysticeti_consensus = MysticetiConsensus::new(
                         consensus_pool,
                         node.provider,
                         payload_builder_handle,
+                        rx_built_payload,
                         engine_handle,
                         args.block_build_interval_ms,
                     );
                     node.task_executor.spawn(async move {
-                        mysticeti_consensus.start().await;
+                        if let Err(e) = mysticeti_consensus.start().await {
+                            error!("Failed to start mysticeti consensus: {:?}", e);
+                        }
                     });
 
                     Ok(())

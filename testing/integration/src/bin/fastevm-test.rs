@@ -18,6 +18,125 @@ use testing::rpc::get_nonces;
 use testing::transactions::create_transfer_transaction;
 use tokio::time::sleep;
 
+/// Configuration loaded from environment variables
+#[derive(Debug, Clone)]
+struct TestConfig {
+    // RPC URLs
+    rpc_url1: String,
+    rpc_url2: String,
+    rpc_url3: String,
+    rpc_url4: String,
+
+    // Network configuration
+    chain_id: u64,
+
+    // Block scanning configuration
+    block_number: u64,
+    block_count: u64,
+
+    // Batch transaction configuration
+    test_sender_count: usize,
+    test_transaction_count: usize,
+    test_transaction_value: u64,
+    test_mnemonic: String,
+    test_fetch_nonce: String,
+
+    // Additional test parameters
+    test_waiting_time_seconds: u64,
+    test_rpc_timeout: u64,
+    test_max_retries: u64,
+    test_log_level: String,
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            rpc_url1: "http://localhost:8545".to_string(),
+            rpc_url2: "http://localhost:8545".to_string(),
+            rpc_url3: "http://localhost:8545".to_string(),
+            rpc_url4: "http://localhost:8545".to_string(),
+            chain_id: 202501,
+            block_number: 0,
+            block_count: 10,
+            test_sender_count: 1000,
+            test_transaction_count: 1,
+            test_transaction_value: 1_000_000_000_000_000,
+            test_mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            test_fetch_nonce: "false".to_string(),
+            test_waiting_time_seconds: 30,
+            test_rpc_timeout: 30,
+            test_max_retries: 3,
+            test_log_level: "info".to_string(),
+        }
+    }
+}
+
+impl TestConfig {
+    /// Load configuration from environment variables
+    fn load() -> Result<Self> {
+        let mut config = Self::default();
+
+        // Load environment variables with fallbacks to defaults
+        config.rpc_url1 = env::var("RPC_URL1").unwrap_or(config.rpc_url1);
+        config.rpc_url2 = env::var("RPC_URL2").unwrap_or(config.rpc_url2);
+        config.rpc_url3 = env::var("RPC_URL3").unwrap_or(config.rpc_url3);
+        config.rpc_url4 = env::var("RPC_URL4").unwrap_or(config.rpc_url4);
+
+        if let Ok(chain_id_str) = env::var("CHAIN_ID") {
+            config.chain_id = chain_id_str.parse()?;
+        }
+
+        if let Ok(block_number_str) = env::var("BLOCK_NUMBER") {
+            config.block_number = block_number_str.parse()?;
+        }
+
+        if let Ok(block_count_str) = env::var("BLOCK_COUNT") {
+            config.block_count = block_count_str.parse()?;
+        }
+
+        if let Ok(sender_count_str) = env::var("TEST_SENDER_COUNT") {
+            config.test_sender_count = sender_count_str.parse()?;
+        }
+
+        if let Ok(transaction_count_str) = env::var("TEST_TRANSACTION_COUNT") {
+            config.test_transaction_count = transaction_count_str.parse()?;
+        }
+
+        if let Ok(transaction_value_str) = env::var("TEST_TRANSACTION_VALUE") {
+            config.test_transaction_value = transaction_value_str.parse()?;
+        }
+
+        config.test_mnemonic = env::var("TEST_MNEMONIC").unwrap_or(config.test_mnemonic);
+        config.test_fetch_nonce = env::var("TEST_FETCH_NONCE").unwrap_or(config.test_fetch_nonce);
+        println!("TEST_FETCH_NONCE: {}", config.test_fetch_nonce);
+        if let Ok(waiting_time_str) = env::var("TEST_WAITING_TIME_SECONDS") {
+            config.test_waiting_time_seconds = waiting_time_str.parse()?;
+        }
+
+        if let Ok(rpc_timeout_str) = env::var("TEST_RPC_TIMEOUT") {
+            config.test_rpc_timeout = rpc_timeout_str.parse()?;
+        }
+
+        if let Ok(max_retries_str) = env::var("TEST_MAX_RETRIES") {
+            config.test_max_retries = max_retries_str.parse()?;
+        }
+
+        config.test_log_level = env::var("TEST_LOG_LEVEL").unwrap_or(config.test_log_level);
+
+        Ok(config)
+    }
+
+    /// Get all RPC URLs as a vector
+    fn get_rpc_urls(&self) -> Vec<String> {
+        vec![
+            self.rpc_url1.clone(),
+            self.rpc_url2.clone(),
+            self.rpc_url3.clone(),
+            self.rpc_url4.clone(),
+        ]
+    }
+}
+
 /// CLI arguments for FastEVM testing utilities
 #[derive(Parser, Debug)]
 #[command(name = "fastevm-test")]
@@ -112,6 +231,7 @@ pub enum Commands {
 /// Main entry point for the CLI
 async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
+    let test_config = TestConfig::load()?;
 
     match cli.command {
         Commands::Scan {
@@ -121,21 +241,14 @@ async fn run_cli() -> Result<()> {
             include_empty,
             delay,
         } => {
-            // Get values from environment variables if parameters are at default values
+            // Use command line arguments if provided, otherwise use environment config
             let start_block = if start == 0 {
-                env::var("BLOCK_NUMBER")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(start)
+                test_config.block_number
             } else {
                 start
             };
-
             let block_count = if count == 10 {
-                env::var("BLOCK_COUNT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(count)
+                test_config.block_count
             } else {
                 count
             };
@@ -154,9 +267,7 @@ async fn run_cli() -> Result<()> {
             );
 
             let config = BlockScanConfig {
-                rpc_url: url.unwrap_or_else(|| {
-                    env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
-                }),
+                rpc_url: url.unwrap_or(test_config.rpc_url1),
                 start_block,
                 block_count,
                 include_empty_blocks: include_empty,
@@ -179,13 +290,8 @@ async fn run_cli() -> Result<()> {
             println!("⚠️  Warning: This may take a long time for networks with many blocks!");
 
             let config = BlockScanConfig {
-                rpc_url: url.unwrap_or_else(|| {
-                    env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
-                }),
-                start_block: env::var("BLOCK_NUMBER")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
+                rpc_url: url.unwrap_or(test_config.rpc_url1),
+                start_block: test_config.block_number,
                 block_count: 0, // 0 means scan all
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
@@ -208,9 +314,7 @@ async fn run_cli() -> Result<()> {
             println!("🔍 Scanning blocks from {} to {}...", start, end);
 
             let config = BlockScanConfig {
-                rpc_url: url.unwrap_or_else(|| {
-                    env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
-                }),
+                rpc_url: url.unwrap_or(test_config.rpc_url1),
                 start_block: start,
                 block_count: end - start + 1,
                 include_empty_blocks: include_empty,
@@ -227,39 +331,32 @@ async fn run_cli() -> Result<()> {
             transaction_count,
             mnemonic,
         } => {
-            println!("🚀 Starting batch transaction test...");
-            // Extract network configuration from environment variables
-            let chain_id = env::var("CHAIN_ID")
-                .unwrap_or("202501".to_string())
-                .parse::<u64>()?;
-            // Override with environment variables if set
-            let sender_count = env::var("TEST_SENDER_COUNT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(sender_count);
+            println!(
+                "🚀 Starting batch transaction test with configuration {:?}",
+                test_config
+            );
 
-            let transaction_count = env::var("TEST_TRANSACTION_COUNT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(transaction_count);
-            let transaction_value = env::var("TEST_TRANSACTION_VALUE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1_000_000_000_000_000_u64);
-            let mnemonic = env::var("TEST_MNEMONIC").unwrap_or(mnemonic);
-
-            let rpc_urls = vec![
-                env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-                env::var("RPC_URL2").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-                env::var("RPC_URL3").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-                env::var("RPC_URL4").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-            ];
-
-            let fetch_nonce = env::var("TEST_FETCH_NONCE").unwrap_or("false".to_string());
+            // Use command line arguments if provided, otherwise use environment config
+            let sender_count = if sender_count == 1000 {
+                test_config.test_sender_count
+            } else {
+                sender_count
+            };
+            let transaction_count = if transaction_count == 1 {
+                test_config.test_transaction_count
+            } else {
+                transaction_count
+            };
+            let mnemonic = if mnemonic == "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" {
+                test_config.test_mnemonic.clone()
+            } else {
+                mnemonic
+            };
 
             println!("  Sender count: {}", sender_count);
             println!("  Transaction count per sender: {}", transaction_count);
             println!("  Mnemonic: {}...", &mnemonic[..20]);
+
             let accounts = generate_accounts(sender_count, &mnemonic)
                 .map_err(|e| eyre::eyre!("Failed to generate accounts: {}", e))?;
 
@@ -268,12 +365,12 @@ async fn run_cli() -> Result<()> {
                 .map(|account| account.address)
                 .collect::<Vec<_>>();
             let _ = send_batch_transfer_transactions(
-                chain_id,
+                test_config.chain_id,
                 accounts,
                 transaction_count as usize,
-                transaction_value,
-                rpc_urls.clone(),
-                fetch_nonce,
+                test_config.test_transaction_value,
+                test_config.get_rpc_urls(),
+                test_config.test_fetch_nonce.clone(),
             )
             .await
             .map_err(|e| eyre::eyre!("Failed to send batch transactions: {}", e))?;
@@ -760,8 +857,10 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load environment variables from the specified file
     let env_file = env::var("ENV_FILE").unwrap_or(".env".to_string());
     dotenvy::from_filename(env_file).ok();
+
     run_cli().await?;
     Ok(())
 }

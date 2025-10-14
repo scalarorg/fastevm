@@ -151,6 +151,7 @@ where
                 }
             }
         }
+        debug!("Total pending transactions: {}", sorted_transactions.len());
         *pending_transactions = sorted_transactions;
     }
 
@@ -192,12 +193,7 @@ where
         return pending_transactions;
     }
     /// Remove mined transactions from both pending transactions and committed queue
-    pub fn remove_mined_transactions(&self, execution_payload: &ExecutionPayload) {
-        let tx_hashes = execution_payload
-            .transactions()
-            .iter()
-            .map(|tx| calculate_tx_hash(tx))
-            .collect::<HashSet<TxHash>>();
+    pub fn remove_mined_transactions(&self, block_number: u64, tx_hashes: &HashSet<TxHash>) {
         //We lock the consensus pool to ensure thread safety
         //make sure committed queue is not modified while removing mined transactions
         let _lock = self.lock.lock().unwrap();
@@ -221,7 +217,7 @@ where
 
         debug!(
             "Removed mined transactions in block number {:?} with {:?} mined txs. Pending txs reduced from {} to {}. Remain committed subdags len: {}",
-            execution_payload.block_number(),
+            block_number,
             tx_hashes.len(),
             initial_pending_len,
             pending_transactions.len(),

@@ -553,6 +553,7 @@ where
             };
 
             // Broadcast the transaction to the network
+            let start_time = Instant::now();
             match provider.send_tx_envelope(tx_envelope).await {
                 Ok(_) => {
                     successful_transactions += 1;

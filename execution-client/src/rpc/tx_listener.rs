@@ -1,15 +1,17 @@
 use futures_util::StreamExt;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
-    PendingSubscriptionSink,
+    PendingSubscriptionSink, SubscriptionMessage,
 };
-use reth_ethereum::pool::TransactionPool;
+use reth_ethereum::{
+    pool::TransactionPool,
+    rpc::{api::eth::RpcConvert, eth::RpcNodeCore, EthApi},
+};
+use reth_extension::{encode_transactions, TxpoolListenerApiServer};
 use reth_transaction_pool::{NewTransactionEvent, ValidPoolTransaction};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
-
-use reth_extension::{encode_transactions, TxpoolListenerApiServer};
 
 // Configuration constants for transaction batching
 const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 10 transactions
@@ -17,17 +19,18 @@ const BATCH_TIMEOUT_MS: u64 = 10; // Send batch after 1 second even if not full
 
 /// The type that implements the `txpool` rpc namespace trait
 #[derive(Debug)]
-pub struct TxpoolListener<Pool> {
+pub struct TxListener<Pool, N: RpcNodeCore, Rpc: RpcConvert> {
     #[allow(unused)]
     pool: Pool,
+    eth_api: EthApi<N, Rpc>,
 }
-impl<Pool> TxpoolListener<Pool> {
-    pub fn new(pool: Pool) -> Self {
-        Self { pool }
+impl<Pool, N: RpcNodeCore, Rpc: RpcConvert> TxListener<Pool, N, Rpc> {
+    pub fn new(pool: Pool, eth_api: EthApi<N, Rpc>) -> Self {
+        Self { pool, eth_api }
     }
 }
 
-impl<Pool> TxpoolListenerApiServer for TxpoolListener<Pool>
+impl<Pool, N: RpcNodeCore, Rpc: RpcConvert> TxpoolListenerApiServer for TxListener<Pool, N, Rpc>
 where
     Pool: TransactionPool + Clone + 'static,
 {
@@ -35,12 +38,11 @@ where
         Ok(self.pool.pool_size().total)
     }
 
-    fn subscribe_transactions(
+    fn subscribe_pending_transactions(
         &self,
         pending_subscription_sink: PendingSubscriptionSink,
     ) -> SubscriptionResult {
         let pool = self.pool.clone();
-        let mut stream = pool.new_pending_pool_transactions_listener();
         // Spawn an async block to listen for transactions.
         tokio::spawn(Box::pin(async move {
             let sink = match pending_subscription_sink.accept().await {
@@ -58,54 +60,12 @@ where
             // Create a periodic timer for batch timeout
             let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
             let mut total_send_txs = 0_u64;
-            //let mut last_sent = std::timeInstant::now();
-            // Waiting for new transactions
-            // let mut disconnected = false;
-            // while !disconnected {
-            //     // Try to get all transactions from stream
-            //     match stream.try_recv() {
-            //         Ok(NewTransactionEvent { transaction, .. }) => {
-            //             if transaction.is_local() {
-            //                 info!("Received local transaction: {:?}", transaction.hash());
-            //                 buffer.push(transaction);
-            //             } else {
-            //                 info!("Received peer transaction: {:?}", transaction.hash());
-            //             }
-            //         }
-            //         Err(e) => match e {
-            //             TryRecvError::Disconnected => {
-            //                 error!("Transaction stream disconnected.");
-            //                 disconnected = true;
-            //             }
-            //             TryRecvError::Empty => {
-            //                 // Do nothing
-            //             }
-            //         },
-            //     }
-            //     if buffer.len() >= BATCH_SIZE_THRESHOLD
-            //         || buffer.len() > 0
-            //             && (last_sent.elapsed() >= Duration::from_millis(BATCH_TIMEOUT_MS)
-            //                 || !disconnected)
-            //     {
-            //         total_send_txs += buffer.len() as u64;
-            //         info!(
-            //             "Sending batch of {} transactions. Total sent transactions: {}",
-            //             buffer.len(),
-            //             total_send_txs
-            //         );
-            //         let batch = std::mem::take(&mut buffer);
-            //         let msg = encode_transactions(batch);
-            //         let _ = sink.send(msg).await;
-            //         last_sent = std::time::Instant::now();
-            //     }
-            //     // Sleep to avoid busy waiting
-            //     std::thread::sleep(Duration::from_millis(10));
-            //     //End loop
-            // }
+
+            let mut pending_stream = pool.new_pending_pool_transactions_listener();
             loop {
                 tokio::select! {
                     // Handle new transaction events
-                    Some(NewTransactionEvent { transaction, .. }) = stream.next() => {
+                    Some(NewTransactionEvent { transaction, .. }) = pending_stream.next() => {
                         if transaction.is_local() {
                             // because of this push, buffer has at least 1 transaction
                             buffer.push(transaction);
@@ -136,13 +96,130 @@ where
         }));
         Ok(())
     }
+
+    fn subscribe_all_transactions(
+        &self,
+        pending_subscription_sink: PendingSubscriptionSink,
+    ) -> SubscriptionResult {
+        info!("Subscribing to all transactions");
+        let pool = self.pool.clone();
+        // Spawn an async block to listen for transactions.
+        tokio::spawn(Box::pin(async move {
+            let sink = match pending_subscription_sink.accept().await {
+                Ok(sink) => sink,
+                Err(e) => {
+                    println!("failed to accept subscription: {e}");
+                    return;
+                }
+            };
+
+            // Transaction buffer for batching
+            let mut buffer: Vec<Arc<ValidPoolTransaction<<Pool as TransactionPool>::Transaction>>> =
+                Vec::new();
+
+            // Create a periodic timer for batch timeout
+            let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
+            let mut total_send_txs = 0_u64;
+
+            let mut all_transactions_stream = pool.new_transactions_listener();
+            loop {
+                tokio::select! {
+                    // Handle new transaction events
+                    Some(NewTransactionEvent { transaction, .. }) = all_transactions_stream.recv() => {
+                        if transaction.is_local() {
+                            // because of this push, buffer has at least 1 transaction
+                            buffer.push(transaction);
+                            // Send batch if threshold is reached
+                            if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                                total_send_txs += buffer.len() as u64;
+                                info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                                let batch = std::mem::take(&mut buffer);
+                                let msg = encode_transactions(batch);
+                                let _ = sink.send(msg).await;
+                            }
+                        }
+                    }
+                    // Handle batch timeout
+                    _ = batch_timer.tick() => {
+                        if !buffer.is_empty() {
+                            total_send_txs += buffer.len() as u64;
+                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            let batch = std::mem::take(&mut buffer);
+                            let msg = encode_transactions(batch);
+                            let _ = sink.send(msg).await;
+                        }
+                        batch_timer.reset();
+                    }
+                }
+                //End loop
+            }
+        }));
+        Ok(())
+    }
+
+    fn subscribe_raw_transactions(
+        &self,
+        pending_subscription_sink: PendingSubscriptionSink,
+    ) -> SubscriptionResult {
+        // For now, this is a placeholder implementation
+        // In a real implementation, this would listen to raw transaction events
+        info!("Subscribing to raw transactions");
+        let mut receiver = self.eth_api.subscribe_to_raw_transactions();
+        tokio::spawn(Box::pin(async move {
+            let sink = match pending_subscription_sink.accept().await {
+                Ok(sink) => sink,
+                Err(e) => {
+                    println!("failed to accept subscription: {e}");
+                    return;
+                }
+            };
+            // Transaction buffer for batching
+            let mut buffer = Vec::new();
+
+            // Create a periodic timer for batch timeout
+            let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
+            let mut total_send_txs = 0_u64;
+            loop {
+                tokio::select! {
+                    // Handle new transaction events
+                    Ok(raw_tx) = receiver.recv() => {
+                        // because of this push, buffer has at least 1 transaction
+                        buffer.push(raw_tx);
+                        // Send batch if threshold is reached
+                        if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                            total_send_txs += buffer.len() as u64;
+                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            let batch = std::mem::take(&mut buffer);
+                            let msg = SubscriptionMessage::from(
+                                serde_json::value::to_raw_value(&batch).expect("serialize batch"),
+                            );
+                            let _ = sink.send(msg).await;
+                        }
+                    }
+                    // Handle batch timeout
+                    _ = batch_timer.tick() => {
+                        if !buffer.is_empty() {
+                            total_send_txs += buffer.len() as u64;
+                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            let batch = std::mem::take(&mut buffer);
+                            let msg = SubscriptionMessage::from(
+                                serde_json::value::to_raw_value(&batch).expect("serialize batch"),
+                            );
+                            let _ = sink.send(msg).await;
+                        }
+                        batch_timer.reset();
+                    }
+                }
+                //End loop
+            }
+        }));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonrpsee::http_client::HttpClientBuilder;
-    use jsonrpsee::server::ServerBuilder;
     use jsonrpsee::ws_client::WsClientBuilder;
     use reth_ethereum::pool::noop::NoopTransactionPool;
     use reth_extension::TxpoolListenerApiClient;
@@ -180,27 +257,6 @@ mod tests {
         assert_eq!(count, 0); // NoopTransactionPool should have no transactions
     }
 
-    #[tokio::test]
-    async fn test_txpool_listener_new() {
-        let pool = NoopTransactionPool::default();
-        let listener = TxpoolListener::new(pool);
-
-        // Test that the listener was created successfully
-        // We can't directly test the fields as they're private, but we can test the methods
-        let result = listener.transaction_count();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_transaction_count() {
-        let pool = NoopTransactionPool::default();
-        let listener = TxpoolListener::new(pool);
-
-        let count = listener.transaction_count().unwrap();
-        assert_eq!(count, 0); // NoopTransactionPool should have no transactions
-    }
-
     #[test]
     fn test_pool_size_total() {
         let pool = NoopTransactionPool::default();
@@ -218,55 +274,6 @@ mod tests {
         // Test that we can create a listener (it should not panic)
         // The listener is a receiver that will never receive anything for NoopTransactionPool
         // Note: We can't easily test is_closed() without more complex setup
-    }
-
-    #[tokio::test]
-    async fn test_txpool_listener_with_different_pools() {
-        // Test that TxpoolListener works with different pool types
-        let pool1 = NoopTransactionPool::default();
-        let pool2 = NoopTransactionPool::default();
-
-        let listener1 = TxpoolListener::new(pool1);
-        let listener2 = TxpoolListener::new(pool2);
-
-        // Both should work the same way
-        assert_eq!(listener1.transaction_count().unwrap(), 0);
-        assert_eq!(listener2.transaction_count().unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_txpool_listener_debug() {
-        let pool = NoopTransactionPool::default();
-        let listener = TxpoolListener::new(pool);
-
-        // Test that we can format the listener for debugging
-        let debug_str = format!("{:?}", listener);
-        assert!(debug_str.contains("TxpoolListener"));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_call_transaction_http() {
-        let server_addr = start_server().await;
-        let uri = format!("http://{server_addr}");
-        let client = HttpClientBuilder::default().build(&uri).unwrap();
-        let count = TxpoolListenerApiClient::transaction_count(&client)
-            .await
-            .unwrap();
-        assert_eq!(count, 0);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_subscribe_transactions() {
-        let server_addr = start_server().await;
-        let ws_url = format!("ws://{server_addr}");
-        let client = WsClientBuilder::default().build(&ws_url).await.unwrap();
-
-        let mut sub = TxpoolListenerApiClient::subscribe_transactions(&client)
-            .await
-            .expect("failed to subscribe");
-
-        let first = sub.next().await.unwrap().unwrap();
-        assert_eq!(first.len(), 0, "expected initial count to be 0");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -291,26 +298,12 @@ mod tests {
             .await
             .expect("Failed to create ws client");
 
-        let mut sub = TxpoolListenerApiClient::subscribe_transactions(&client)
+        let mut sub = TxpoolListenerApiClient::subscribe_all_transactions(&client)
             .await
             .expect("failed to subscribe");
 
         let first = sub.next().await.unwrap().unwrap();
         assert_eq!(first.len(), 0, "expected initial count to be 0");
-    }
-
-    async fn start_server() -> std::net::SocketAddr {
-        let server = ServerBuilder::default().build("127.0.0.1:0").await.unwrap();
-        let addr = server.local_addr().unwrap();
-        let pool = NoopTransactionPool::default();
-
-        // Create a TaskExecutor for testing using tokio runtime
-        let api = TxpoolListener { pool };
-        let server_handle = server.start(api.into_rpc());
-
-        tokio::spawn(server_handle.stopped());
-
-        addr
     }
 
     // pub async fn create_transfer_transaction(

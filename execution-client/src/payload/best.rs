@@ -2,7 +2,6 @@ use reth_transaction_pool::{
     error::InvalidPoolTransactionError, BestTransactions, PoolTransaction, ValidPoolTransaction,
 };
 use std::{collections::VecDeque, sync::Arc};
-use tracing::debug;
 
 pub struct BestMysticetiTransactions<T: PoolTransaction> {
     reth_best_txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,

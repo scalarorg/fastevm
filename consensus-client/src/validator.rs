@@ -1,6 +1,7 @@
 // Copyright (c) Scalar Org, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::engine_api::Transactions;
 use anyhow::Result;
 use consensus_config::{AuthorityIndex, Committee, NetworkKeyPair, Parameters, ProtocolKeyPair};
 use consensus_core::{
@@ -10,13 +11,14 @@ use consensus_core::{
 use mysten_metrics::RegistryService;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use sui_protocol_config::{ConsensusNetwork, ProtocolConfig};
 use tokio::sync::mpsc;
 use tracing::{error, info};
-
-use crate::engine_api::PayloadItem;
-
-// Simple transaction verifier that accepts all transactions
+// Configuration constants for transaction batching
+const BATCH_SIZE_THRESHOLD: usize = 1000; // Send batch when we have 10 transactions
+const BATCH_TIMEOUT_MS: u64 = 100; // Send batch after 1 second even if not full
+                                   // Simple transaction verifier that accepts all transactions
 #[derive(Debug)]
 struct SimpleTransactionVerifier;
 
@@ -54,7 +56,7 @@ impl ValidatorNode {
         keypairs: Vec<(NetworkKeyPair, ProtocolKeyPair)>,
         registry_service: RegistryService,
         commit_consumer: CommitConsumer,
-        input_payload_rx: mpsc::UnboundedReceiver<PayloadItem>,
+        input_payload_rx: mpsc::UnboundedReceiver<Transactions>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting validator node {}", self.authority_index);
 
@@ -111,7 +113,7 @@ impl ValidatorNode {
 
     async fn start_transaction_processing(
         &self,
-        mut input_txs_rx: mpsc::UnboundedReceiver<PayloadItem>,
+        mut txs_receiver: mpsc::UnboundedReceiver<Transactions>,
     ) {
         // Process received payload from execution client
         let transaction_client = self
@@ -119,20 +121,52 @@ impl ValidatorNode {
             .as_ref()
             .unwrap()
             .transaction_client();
+
         tokio::spawn(async move {
-            while let Some(payload) = input_txs_rx.recv().await {
-                let tx_data = payload.into_iter().map(|tx| tx.into()).collect();
-                match transaction_client.submit(tx_data).await {
-                    Ok((block_ref, _status_receiver)) => {
-                        info!(
-                            "Transaction submitted successfully to Mysticeti consensus, included in block: {:?}",
-                            block_ref
-                        );
+            // Transaction buffer for batching
+            let mut buffer = Vec::new();
+
+            // Create a periodic timer for batch timeout
+            let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
+            let mut total_send_txs = 0_u64;
+            loop {
+                tokio::select! {
+                    // Handle new transaction events
+                    Some(raw_tx) = txs_receiver.recv() => {
+                        info!("Received raw transactios: {:?}", raw_tx.len());
+                        // because of this push, buffer has at least 1 transaction
+                        for tx in raw_tx {
+                            buffer.push(tx.into());
+                        }
+                        // Send batch if threshold is reached
+                        if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                            total_send_txs += buffer.len() as u64;
+                            info!("Sending batch of {} transactions to mysticeti. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            let batch = std::mem::take(&mut buffer);
+                            if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
+                                info!("Submitted batch of {} transactions. Block ref: {:?}", buffer.len(), block_ref);
+                            } else {
+                                error!("Failed to submit batch of {} transactions", buffer.len());
+                            }
+                            batch_timer.reset();
+                        }
                     }
-                    Err(e) => {
-                        error!("Failed to submit transaction to Mysticeti consensus: {}", e);
+                    // Handle batch timeout
+                    _ = batch_timer.tick() => {
+                        if !buffer.is_empty() {
+                            total_send_txs += buffer.len() as u64;
+                            info!("Sending batch of {} transactions to mysticeti. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            let batch = std::mem::take(&mut buffer);
+                            if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
+                                info!("Submitted batch of {} transactions. Block ref: {:?}", buffer.len(), block_ref);
+                            } else {
+                                error!("Failed to submit batch of {} transactions", buffer.len());
+                            }
+                        }
+                        batch_timer.reset();
                     }
                 }
+                //End loop
             }
         });
 

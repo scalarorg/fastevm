@@ -20,6 +20,7 @@ use reth_ethereum::{
 use reth_ethereum_payload_builder::{default_ethereum_payload, EthereumBuilderConfig};
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderError};
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
 use crate::consensus::ConsensusPool;
@@ -54,6 +55,8 @@ pub struct MysticetiPayloadBuilder<Pool: TransactionPool, Client, EvmConfig = Et
     evm_config: EvmConfig,
     /// Subdag queue.
     consensus_pool: Arc<ConsensusPool<Pool>>,
+    /// Channel for sending built payload to mysticeti consensus
+    tx_built_payload: tokio::sync::mpsc::UnboundedSender<reth_payload_builder::EthBuiltPayload>,
     /// Payload builder configuration.
     builder_config: EthereumBuilderConfig,
 }
@@ -82,6 +85,7 @@ impl<Pool: TransactionPool, Client: Clone, EvmConfig: Clone>
         client: Client,
         pool: Pool,
         consensus_pool: Arc<ConsensusPool<Pool>>,
+        tx_built_payload: tokio::sync::mpsc::UnboundedSender<reth_payload_builder::EthBuiltPayload>,
         evm_config: EvmConfig,
         builder_config: EthereumBuilderConfig,
     ) -> Self {
@@ -89,6 +93,7 @@ impl<Pool: TransactionPool, Client: Clone, EvmConfig: Clone>
             client,
             pool,
             consensus_pool,
+            tx_built_payload,
             evm_config,
             builder_config,
         }
@@ -308,6 +313,10 @@ where
         args: BuildArguments<EthPayloadBuilderAttributes, EthBuiltPayload>,
     ) -> Result<BuildOutcome<EthBuiltPayload>, PayloadBuilderError> {
         let proposal_transactions = self.consensus_pool.get_proposal_transactions();
+        debug!(
+            "[MysticetiPayloadBuilder] Try to build payload with proposal transactions count: {:?}",
+            proposal_transactions.len()
+        );
         let payload = default_ethereum_payload(
             self.evm_config.clone(),
             self.client.clone(),
@@ -323,13 +332,21 @@ where
                     let block = payload.block();
                     let header = block.header();
                     debug!(
-                        "[MysticetiPayloadBuilder] try_build with better payload. Block number: {}, parent hash: {}, header: {:?}",
+                        "[MysticetiPayloadBuilder] Payload built with transaction count: {}. Block number: {}, parent hash: {}, header: {:?}",
+                        block.transaction_count(),
                         block.header().number(),
                         hex::encode(block.header().parent_hash()),
                         header
                     );
+                    // Send built payload to mysticeti consensus
+                    self.tx_built_payload.send(payload.clone());
                     //Return freeze payload instead of better payload
                     //Stop try_build process
+                    BuildOutcome::Freeze(payload)
+                }
+                BuildOutcome::Freeze(payload) => {
+                    // Send built payload to mysticeti consensus
+                    self.tx_built_payload.send(payload.clone());
                     BuildOutcome::Freeze(payload)
                 }
                 _ => payload,
