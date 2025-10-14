@@ -16,10 +16,7 @@ mod pool;
 mod rpc;
 
 use clap::Parser;
-use reth_node_builder::{
-    rpc::{RethRpcAddOns, RpcContext},
-    NodeAdapter,
-};
+use reth_ethereum_engine_primitives::EthPayloadTypes;
 use tokio::sync::mpsc::unbounded_channel;
 // Suppress warnings for dependencies used by CLI binary
 use crate::{
@@ -40,7 +37,7 @@ use reth_ethereum::{
 };
 use reth_extension::{MysticetiConsensusApiServer, TxpoolListenerApiServer};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info};
 // Use in cli
 use bip39 as _;
 use hdwallet as _;
@@ -81,7 +78,10 @@ fn main() {
             let (tx_built_payload, rx_built_payload) = unbounded_channel();
             let consensus_pool = Arc::new(ConsensusPool::new(args.committed_subdags_per_block));
             let mysticeti_payload_builder = BasicPayloadServiceBuilder::new(
-                MysticetiPayloadBuilderFactory::new(consensus_pool.clone(), tx_built_payload),
+                MysticetiPayloadBuilderFactory::<_, EthPayloadTypes>::new(
+                    consensus_pool.clone(),
+                    tx_built_payload,
+                ),
             );
 
             let handle = builder

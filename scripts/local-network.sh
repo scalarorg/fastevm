@@ -409,7 +409,7 @@ start_execution_node() {
     
     # Build bootnodes string
     local bootnodes=""
-    local debug_level="-vvvv"
+    local debug_level="-vvv"
     # if [ "$node_index" = "1" ]; then
     #     debug_level="-vvvvv"
     # fi

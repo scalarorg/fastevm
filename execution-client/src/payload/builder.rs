@@ -20,7 +20,6 @@ use reth_ethereum::{
 use reth_ethereum_payload_builder::{default_ethereum_payload, EthereumBuilderConfig};
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderError};
-use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
 use crate::consensus::ConsensusPool;
@@ -339,14 +338,14 @@ where
                         header
                     );
                     // Send built payload to mysticeti consensus
-                    self.tx_built_payload.send(payload.clone());
+                    let _ = self.tx_built_payload.send(payload.clone());
                     //Return freeze payload instead of better payload
                     //Stop try_build process
                     BuildOutcome::Freeze(payload)
                 }
                 BuildOutcome::Freeze(payload) => {
                     // Send built payload to mysticeti consensus
-                    self.tx_built_payload.send(payload.clone());
+                    let _ = self.tx_built_payload.send(payload.clone());
                     BuildOutcome::Freeze(payload)
                 }
                 _ => payload,

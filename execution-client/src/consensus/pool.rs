@@ -4,7 +4,6 @@
 
 use alloy_consensus::Transaction;
 use alloy_primitives::{keccak256, Bytes, TxHash, B256};
-use reth_ethereum::rpc::types::engine::ExecutionPayload;
 use reth_extension::MysticetiCommittedSubdag;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::{

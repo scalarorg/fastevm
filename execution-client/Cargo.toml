@@ -47,7 +47,7 @@ jsonrpsee = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-# tokio-stream = "0.1"
+tokio-stream = "0.1"
 
 # Dependencies for mnemonic and account generation
 bip39 = "2.0"
