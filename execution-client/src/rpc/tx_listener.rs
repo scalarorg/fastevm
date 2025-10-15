@@ -24,11 +24,11 @@ use reth_transaction_pool::{
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 // Configuration constants for transaction batching
 const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 10 transactions
-const BATCH_TIMEOUT_MS: u64 = 10; // Send batch after 1 second even if not full
+const BATCH_TIMEOUT_MS: u64 = 10; // Send batch after 10 ms even if not full
 
 /// Validates a raw transaction and converts it to a pool transaction
 /// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
@@ -334,7 +334,7 @@ where
                         let start_time = Instant::now();
                         match validate_raw_transaction::<C, Pool>(Arc::clone(&tx_validator), &raw_tx).await {
                             Ok(true) => {
-                                info!("Transaction validated in {:?}", start_time.elapsed());
+                                debug!("Transaction validated in {:?}", start_time.elapsed());
                                 // Transaction is valid, add to buffer
                                 buffer.push(raw_tx);
 

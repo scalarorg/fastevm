@@ -16,7 +16,6 @@ use sui_protocol_config::{ConsensusNetwork, ProtocolConfig};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 // Configuration constants for transaction batching
-const BATCH_SIZE_THRESHOLD: usize = 1000; // Send batch when we have 10 transactions
 const BATCH_TIMEOUT_MS: u64 = 100; // Send batch after 1 second even if not full
                                    // Simple transaction verifier that accepts all transactions
 #[derive(Debug)]
@@ -38,14 +37,17 @@ pub struct ValidatorNode {
     authority_index: AuthorityIndex,
     working_directory: PathBuf,
     consensus_authority: Option<ConsensusAuthority>,
+    protocol_config: ProtocolConfig,
 }
 
 impl ValidatorNode {
     pub fn new(authority_index: u32, working_directory: PathBuf) -> Self {
+        let protocol_config = ProtocolConfig::get_for_max_version_UNSAFE();
         Self {
             authority_index: AuthorityIndex::new_for_test(authority_index),
             working_directory,
             consensus_authority: None,
+            protocol_config,
         }
     }
 
@@ -88,7 +90,7 @@ impl ValidatorNode {
             self.authority_index,
             committee,
             parameters,
-            ProtocolConfig::get_for_max_version_UNSAFE(),
+            self.protocol_config.clone(),
             protocol_keypair.clone(),
             network_keypair.clone(),
             Arc::new(Clock::new_for_test(0)),
@@ -121,7 +123,8 @@ impl ValidatorNode {
             .as_ref()
             .unwrap()
             .transaction_client();
-
+        let max_transactions_in_block_count =
+            self.protocol_config.max_num_transactions_in_block() as usize;
         tokio::spawn(async move {
             // Transaction buffer for batching
             let mut buffer = Vec::new();
@@ -139,14 +142,15 @@ impl ValidatorNode {
                             buffer.push(tx.into());
                         }
                         // Send batch if threshold is reached
-                        if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                        if buffer.len() >= max_transactions_in_block_count {
                             total_send_txs += buffer.len() as u64;
                             info!("Sending batch of {} transactions to mysticeti. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
+                            let batch_size = batch.len();
                             if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
-                                info!("Submitted batch of {} transactions. Block ref: {:?}", buffer.len(), block_ref);
+                                info!("Submitted batch of {} transactions. Block ref: {:?}", batch_size, block_ref);
                             } else {
-                                error!("Failed to submit batch of {} transactions", buffer.len());
+                                error!("Failed to submit batch of {} transactions", batch_size);
                             }
                             batch_timer.reset();
                         }
