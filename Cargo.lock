@@ -3937,6 +3937,7 @@ dependencies = [
  "hex",
  "http",
  "jsonrpsee",
+ "parking_lot",
  "reth-basic-payload-builder",
  "reth-ethereum",
  "reth-ethereum-engine-primitives",

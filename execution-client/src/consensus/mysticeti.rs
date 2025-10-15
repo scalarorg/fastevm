@@ -16,13 +16,13 @@ use reth_ethereum::{
     storage::StateProviderFactory,
 };
 use reth_node_api::BlockBody;
-use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
+use reth_payload_builder::PayloadId;
 use reth_provider::CanonStateSubscriptions;
 use reth_transaction_pool::TransactionPool;
 use std::{collections::VecDeque, sync::Arc};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 // const WAITING_PENDING_TXS_TIMEOUT: u64 = 3000; // 10 second timeout
 // const WAITING_PENDING_TXS_INTERVAL: u64 = 100; // 1 second interval
 use std::collections::HashSet;
@@ -35,7 +35,7 @@ where
     Pool: TransactionPool,
 {
     consensus_pool: Arc<ConsensusPool<Pool>>,
-    payload_builder_handle: PayloadBuilderHandle<Payload>,
+    //payload_builder_handle: PayloadBuilderHandle<Payload>,
     rx_built_payload: Option<UnboundedReceiver<Payload::BuiltPayload>>,
     engine_handle: BeaconConsensusEngineHandle<Payload>,
     provider: Provider,
@@ -62,14 +62,14 @@ where
     pub fn new(
         consensus_pool: Arc<ConsensusPool<Pool>>,
         provider: Provider,
-        payload_builder_handle: PayloadBuilderHandle<Payload>,
+        //payload_builder_handle: PayloadBuilderHandle<Payload>,
         rx_built_payload: UnboundedReceiver<Payload::BuiltPayload>,
         engine_handle: BeaconConsensusEngineHandle<Payload>,
         block_build_interval: u64,
     ) -> Self {
         Self {
             consensus_pool,
-            payload_builder_handle,
+            //payload_builder_handle,
             rx_built_payload: Some(rx_built_payload),
             engine_handle,
             provider,
@@ -319,31 +319,29 @@ where
         //last_built_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
         last_built_payload: Option<Payload::BuiltPayload>,
     ) -> Result<Option<PayloadId>> {
-        let next_committed_subdag_batch = self.consensus_pool.next_committed_subdag_batch();
-        // let committed_transactions = self.consensus_pool.last_committed_transaction_in_batch();
-        if let Some(committed_batch) = next_committed_subdag_batch {
+        if let Some((first_committed_subdag, last_committed_subdag)) =
+            self.consensus_pool.next_committed_subdag_batch()
+        {
             debug!(
                 "Create proposal block with committed batch size: {:?}:
                 FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
                  LastCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}
                  Queue size: {:?}",
-                committed_batch.last_committed_subdag.commit_ref.index
-                    - committed_batch.first_committed_subdag.commit_ref.index
+                last_committed_subdag.commit_ref.index - first_committed_subdag.commit_ref.index
                     + 1,
-                committed_batch.first_committed_subdag.commit_ref.index,
-                committed_batch.first_committed_subdag.timestamp_ms,
-                committed_batch.first_committed_subdag.leader.round,
-                committed_batch.last_committed_subdag.commit_ref.index,
-                committed_batch.last_committed_subdag.timestamp_ms,
-                committed_batch.last_committed_subdag.leader.round,
+                first_committed_subdag.commit_ref.index,
+                first_committed_subdag.timestamp_ms,
+                first_committed_subdag.leader.round,
+                last_committed_subdag.commit_ref.index,
+                last_committed_subdag.timestamp_ms,
+                last_committed_subdag.leader.round,
                 self.consensus_pool.queue_size(),
             );
             let last_block_hash = last_built_payload
                 .as_ref()
                 .map(|payload| payload.block().hash());
             let forkchoice_state = self.create_forkchoice_state(last_block_hash).await;
-            let leader_digest: [u8; 32] = committed_batch
-                .last_committed_subdag
+            let leader_digest: [u8; 32] = last_committed_subdag
                 .leader
                 .digest
                 .as_ref()
@@ -351,7 +349,7 @@ where
                 .expect("Leader digest must be exactly 32 bytes");
             //Create payload attributes with timestamp in seconds
             let payload_attributes = self.create_payload_attributes(
-                committed_batch.last_committed_subdag.timestamp_ms / 1000,
+                last_committed_subdag.timestamp_ms / 1000,
                 leader_digest,
                 last_built_payload,
             );

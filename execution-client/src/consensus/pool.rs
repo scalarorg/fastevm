@@ -3,7 +3,7 @@
 //! Or is not cons
 
 use alloy_consensus::Transaction;
-use alloy_primitives::{keccak256, Bytes, TxHash, B256};
+use alloy_primitives::TxHash;
 use reth_extension::MysticetiCommittedSubdag;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::{
@@ -11,8 +11,6 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 use tracing::debug;
-
-use crate::consensus::BatchCommittedSubDag;
 
 /// Struct to store committed transactions and pooled transactions
 /// Pooled transactions are transactions from committed transactions that are added to the reth pool
@@ -51,7 +49,12 @@ where
             lock: Mutex::new(()),
         }
     }
-    pub fn next_committed_subdag_batch(&self) -> Option<BatchCommittedSubDag<Pool::Transaction>> {
+    pub fn next_committed_subdag_batch(
+        &self,
+    ) -> Option<(
+        MysticetiCommittedSubdag<Pool::Transaction>,
+        MysticetiCommittedSubdag<Pool::Transaction>,
+    )> {
         let next_committed_index = *self.next_committed_index.read().unwrap();
         let last_index = next_committed_index + self.committed_subdags_per_block as u64 - 1;
         let commited_queue = self.commited_queue.read().unwrap();
@@ -63,21 +66,23 @@ where
                 return None;
             }
             if i == next_committed_index {
-                first_committed_transactions = committed_transactions;
+                first_committed_transactions = committed_transactions.map(|inner| inner.clone());
             }
             if i == last_index {
-                last_committed_transactions = committed_transactions;
+                last_committed_transactions = committed_transactions.map(|inner| inner.clone());
             }
         }
-        match (first_committed_transactions, last_committed_transactions) {
-            (Some(first_committed_transactions), Some(last_committed_transactions)) => {
-                Some(BatchCommittedSubDag {
-                    first_committed_subdag: first_committed_transactions.clone(),
-                    last_committed_subdag: last_committed_transactions.clone(),
-                })
-            }
-            _ => None,
-        }
+        first_committed_transactions.zip(last_committed_transactions)
+
+        // match (first_committed_transactions, last_committed_transactions) {
+        //     (Some(first_committed_transactions), Some(last_committed_transactions)) => {
+        //         Some(BatchCommittedSubDag {
+        //             first_committed_subdag: first_committed_transactions.clone(),
+        //             last_committed_subdag: last_committed_transactions.clone(),
+        //         })
+        //     }
+        //     _ => None,
+        // }
     }
     /// Get queue size
     pub fn queue_size(&self) -> usize {
@@ -223,17 +228,6 @@ where
             committed_queue.len()
         );
     }
-}
-
-fn calculate_tx_hash(tx: &Bytes) -> TxHash {
-    let tx_hash: B256 = keccak256(tx);
-
-    // // Decode the transaction
-    // let transaction: TransactionSigned = TransactionSigned::decode_2718(&mut tx)?;
-
-    // // Get the hash
-    // *transaction.tx_hash()
-    tx_hash
 }
 
 #[cfg(test)]

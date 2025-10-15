@@ -1,18 +1,15 @@
 use crate::consensus::ConsensusPool;
-use alloy_primitives::{Bytes, B256};
 use anyhow::Result;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
 use reth_ethereum::chainspec::EthChainSpec;
-use reth_ethereum::rpc::eth::utils::recover_raw_transaction;
 use reth_extension::CommittedSubDag;
 use reth_extension::MysticetiCommittedSubdag;
 use reth_extension::MysticetiConsensusApiServer;
-use reth_transaction_pool::TransactionOrigin;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// The type that implements the `txpool` rpc namespace trait
 pub struct MysticetiConsensusHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
@@ -112,28 +109,28 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<P
         // );
         Ok(added_count)
     }
-    async fn handle_raw_transaction(&self, tx: Bytes) -> Result<B256> {
-        let recovered = recover_raw_transaction(&tx)?;
+    // async fn handle_raw_transaction(&self, tx: Bytes) -> Result<B256> {
+    //     let recovered = recover_raw_transaction(&tx)?;
 
-        // Simulate broadcast_raw_transaction by adding with Local origin
-        // This automatically triggers the transaction pool's event system
-        // which broadcasts to all subscribers via the TxpoolListener
-        let pool_transaction = Pool::Transaction::from_pooled(recovered);
-        let hash = self
-            .tx_pool
-            .add_transaction(TransactionOrigin::Local, pool_transaction)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to add transaction to pool: {}", e))?;
+    //     // Simulate broadcast_raw_transaction by adding with Local origin
+    //     // This automatically triggers the transaction pool's event system
+    //     // which broadcasts to all subscribers via the TxpoolListener
+    //     let pool_transaction = Pool::Transaction::from_pooled(recovered);
+    //     let hash = self
+    //         .tx_pool
+    //         .add_transaction(TransactionOrigin::Local, pool_transaction)
+    //         .await
+    //         .map_err(|e| anyhow::anyhow!("Failed to add transaction to pool: {}", e))?;
 
-        // The transaction is now automatically "broadcast" through the pool's event system
-        // The TxpoolListener will pick up this transaction and send it to subscribers
-        info!(
-            "Transaction {} added to pool and will be broadcast to subscribers",
-            hash
-        );
+    //     // The transaction is now automatically "broadcast" through the pool's event system
+    //     // The TxpoolListener will pick up this transaction and send it to subscribers
+    //     info!(
+    //         "Transaction {} added to pool and will be broadcast to subscribers",
+    //         hash
+    //     );
 
-        Ok(hash)
-    }
+    //     Ok(hash)
+    // }
 }
 
 #[async_trait]

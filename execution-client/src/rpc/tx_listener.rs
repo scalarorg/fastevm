@@ -1,36 +1,181 @@
+use crate::types::TxValidatorConfig;
+use alloy_primitives::Bytes;
+use eyre::Result;
 use futures_util::StreamExt;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     PendingSubscriptionSink, SubscriptionMessage,
 };
+use parking_lot::RwLock;
 use reth_ethereum::{
+    chainspec::EthereumHardforks,
     pool::TransactionPool,
-    rpc::{api::eth::RpcConvert, eth::RpcNodeCore, EthApi},
+    rpc::{
+        api::eth::RpcConvert,
+        eth::{utils::recover_raw_transaction, RpcNodeCore},
+        EthApi,
+    },
 };
 use reth_extension::{encode_transactions, TxpoolListenerApiServer};
-use reth_transaction_pool::{NewTransactionEvent, ValidPoolTransaction};
+use reth_provider::{ChainSpecProvider, StateProviderFactory};
+use reth_transaction_pool::{
+    BlobStore, EthTransactionValidator, NewTransactionEvent, PoolTransaction, TransactionOrigin,
+    TransactionValidationTaskExecutor, TransactionValidator, ValidPoolTransaction,
+};
 use std::sync::Arc;
-use std::time::Duration;
-use tracing::info;
+use std::time::{Duration, Instant};
+use tracing::{error, info, warn};
 
 // Configuration constants for transaction batching
 const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 10 transactions
 const BATCH_TIMEOUT_MS: u64 = 10; // Send batch after 1 second even if not full
 
-/// The type that implements the `txpool` rpc namespace trait
-#[derive(Debug)]
-pub struct TxListener<Pool, N: RpcNodeCore, Rpc: RpcConvert> {
+/// Validates a raw transaction and converts it to a pool transaction
+/// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
+async fn validate_raw_transaction<
+    Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
+    Pool: TransactionPool,
+>(
+    tx_validator: Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
+    raw_tx: &Bytes,
+) -> Result<bool> {
+    let transaction = recover_raw_transaction(&raw_tx)
+        .map(|recovered| Pool::Transaction::from_pooled(recovered))?;
+    let validator_guard = tx_validator.read();
+    if let Some(validator) = &*validator_guard {
+        let outcome = validator
+            .validate_transaction(TransactionOrigin::Local, transaction)
+            .await;
+        return Ok(outcome.is_valid());
+    }
+    Ok(true)
+}
+
+/// The type that implements the `txpool` rpc namespace trait\
+pub struct TxListener<
+    Pool: TransactionPool + Clone + 'static,
+    N: RpcNodeCore,
+    Rpc: RpcConvert,
+    C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
+    S: BlobStore,
+> {
     #[allow(unused)]
     pool: Pool,
     eth_api: EthApi<N, Rpc>,
+    tx_validator: Arc<RwLock<Option<EthTransactionValidator<C, Pool::Transaction>>>>,
+    config_receiver: Option<tokio::sync::oneshot::Receiver<TxValidatorConfig<C, S>>>,
 }
-impl<Pool, N: RpcNodeCore, Rpc: RpcConvert> TxListener<Pool, N, Rpc> {
+
+impl<
+        Pool: TransactionPool + Clone + 'static,
+        N: RpcNodeCore,
+        Rpc: RpcConvert,
+        C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
+        S: BlobStore,
+    > TxListener<Pool, N, Rpc, C, S>
+{
     pub fn new(pool: Pool, eth_api: EthApi<N, Rpc>) -> Self {
-        Self { pool, eth_api }
+        Self {
+            pool,
+            eth_api,
+            tx_validator: Arc::new(RwLock::new(None)),
+            config_receiver: None,
+        }
+    }
+
+    pub fn with_config_receiver(
+        mut self,
+        receiver: tokio::sync::oneshot::Receiver<TxValidatorConfig<C, S>>,
+    ) -> Self {
+        self.config_receiver = Some(receiver);
+        self
+    }
+}
+impl<
+        Pool,
+        N: RpcNodeCore,
+        Rpc: RpcConvert,
+        C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
+        S: BlobStore,
+    > TxListener<Pool, N, Rpc, C, S>
+where
+    Pool: TransactionPool + Clone + 'static,
+{
+    // async fn validate_raw_transaction(&self, raw_tx: &Bytes) -> Result<bool> {
+    //     // First, try to recover the transaction using the same validation as in mysticeti.rs
+    //     // TODO: Implement proper validation logic
+    //     let transaction = recover_raw_transaction(&raw_tx)
+    //         .map(|recovered| Pool::Transaction::from_pooled(recovered));
+    //     if transaction.is_err() {
+    //         return Ok(false);
+    //     }
+    //     let validator_guard = self.tx_validator.read();
+    //     let transaction = transaction.unwrap();
+    //     if let Some(validator) = &*validator_guard {
+    //         let outcome = validator
+    //             .validate_transaction(TransactionOrigin::Local, transaction)
+    //             .await;
+    //         return Ok(outcome.is_valid());
+    //     }
+    //     Ok(true)
+    // }
+    /// Start validator reconstruction thread
+    pub fn start_txvalidator_config_listener(&mut self) {
+        if let Some(config_receiver) = self.config_receiver.take() {
+            let tx_validator = Arc::clone(&self.tx_validator);
+
+            std::thread::spawn(move || {
+                // Wait for configuration from pool builder
+                match config_receiver.blocking_recv() {
+                    Ok(config) => {
+                        info!("Received validator configuration, reconstructing validator in separate thread");
+
+                        // Reconstruct the validator with the received config
+                        let TxValidatorConfig {
+                            provider,
+                            head_timestamp,
+                            max_tx_input_bytes,
+                            tx_fee_cap,
+                            max_tx_gas_limit,
+                            minimum_priority_fee,
+                            blob_store,
+                            additional_validation_tasks,
+                            pool_config,
+                        } = config;
+
+                        let validator = TransactionValidationTaskExecutor::eth_builder(provider)
+                            .with_head_timestamp(head_timestamp)
+                            .with_max_tx_input_bytes(max_tx_input_bytes)
+                            .with_local_transactions_config(
+                                pool_config.local_transactions_config.clone(),
+                            )
+                            .set_tx_fee_cap(tx_fee_cap)
+                            .with_max_tx_gas_limit(max_tx_gas_limit)
+                            .with_minimum_priority_fee(minimum_priority_fee)
+                            .with_additional_tasks(additional_validation_tasks)
+                            .build::<Pool::Transaction, S>(blob_store);
+
+                        // Set the validator to self.tx_validator using thread-safe access
+                        let mut validator_guard = tx_validator.write();
+                        *validator_guard = Some(validator);
+                        info!("Successfully set transaction validator");
+                    }
+                    Err(e) => {
+                        error!("Failed to receive validator configuration: {:?}", e);
+                    }
+                }
+            });
+        }
     }
 }
 
-impl<Pool, N: RpcNodeCore, Rpc: RpcConvert> TxpoolListenerApiServer for TxListener<Pool, N, Rpc>
+impl<
+        Pool,
+        N: RpcNodeCore,
+        Rpc: RpcConvert,
+        C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
+        S: BlobStore,
+    > TxpoolListenerApiServer for TxListener<Pool, N, Rpc, C, S>
 where
     Pool: TransactionPool + Clone + 'static,
 {
@@ -161,46 +306,66 @@ where
         &self,
         pending_subscription_sink: PendingSubscriptionSink,
     ) -> SubscriptionResult {
-        // For now, this is a placeholder implementation
-        // In a real implementation, this would listen to raw transaction events
-        info!("Subscribing to raw transactions");
+        info!("Subscribing to raw transactions with validation");
         let mut receiver = self.eth_api.subscribe_to_raw_transactions();
+        let tx_validator = Arc::clone(&self.tx_validator);
         tokio::spawn(Box::pin(async move {
             let sink = match pending_subscription_sink.accept().await {
                 Ok(sink) => sink,
                 Err(e) => {
-                    println!("failed to accept subscription: {e}");
+                    error!("Failed to accept subscription: {e}");
                     return;
                 }
             };
-            // Transaction buffer for batching
-            let mut buffer = Vec::new();
+
+            // Transaction buffer for batching - now stores validated transactions
+            let mut buffer: Vec<Bytes> = Vec::new();
 
             // Create a periodic timer for batch timeout
             let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
             let mut total_send_txs = 0_u64;
+            let mut validation_failures = 0_u64;
+
             loop {
                 tokio::select! {
                     // Handle new transaction events
                     Ok(raw_tx) = receiver.recv() => {
-                        // because of this push, buffer has at least 1 transaction
-                        buffer.push(raw_tx);
-                        // Send batch if threshold is reached
-                        if buffer.len() >= BATCH_SIZE_THRESHOLD {
-                            total_send_txs += buffer.len() as u64;
-                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
-                            let batch = std::mem::take(&mut buffer);
-                            let msg = SubscriptionMessage::from(
-                                serde_json::value::to_raw_value(&batch).expect("serialize batch"),
-                            );
-                            let _ = sink.send(msg).await;
+                        // Validate the raw transaction before adding to buffer
+                        let start_time = Instant::now();
+                        match validate_raw_transaction::<C, Pool>(Arc::clone(&tx_validator), &raw_tx).await {
+                            Ok(true) => {
+                                info!("Transaction validated in {:?}", start_time.elapsed());
+                                // Transaction is valid, add to buffer
+                                buffer.push(raw_tx);
+
+                                // Send batch if threshold is reached
+                                if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                                    total_send_txs += buffer.len() as u64;
+                                    info!("Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                                    let batch = std::mem::take(&mut buffer);
+                                    let msg = SubscriptionMessage::from(
+                                        serde_json::value::to_raw_value(&batch).expect("serialize batch"),
+                                    );
+                                    let _ = sink.send(msg).await;
+                                }
+                            }
+                            Ok(false) => {
+                                // Transaction failed validation, skip it
+                                validation_failures += 1;
+                                warn!("Skipping invalid transaction. Total validation failures: {}", validation_failures);
+                            },
+                            Err(e) => {
+                                // Fatal validation error
+                                error!("Fatal validation error: {}", e);
+                                validation_failures += 1;
+                            }
                         }
                     }
                     // Handle batch timeout
                     _ = batch_timer.tick() => {
                         if !buffer.is_empty() {
                             total_send_txs += buffer.len() as u64;
-                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            info!("Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
                             let msg = SubscriptionMessage::from(
                                 serde_json::value::to_raw_value(&batch).expect("serialize batch"),

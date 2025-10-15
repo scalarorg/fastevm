@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 use testing::address::{generate_account_from_seed, Account};
-use testing::block_scan::{scan_blocks, scan_blocks_count, BlockScanConfig};
+use testing::block_scan::{scan_blocks, BlockScanConfig};
 use testing::rpc::get_nonces;
 use testing::transactions::create_transfer_transaction;
 use tokio::time::sleep;
@@ -144,6 +144,7 @@ impl TestConfig {
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
+    /// Command to run
     pub command: Commands,
 }
 
@@ -377,17 +378,6 @@ async fn run_cli() -> Result<()> {
         }
     }
 
-    Ok(())
-}
-
-/// Convenience function to run block scanning with default settings
-async fn run_default_scan() -> Result<()> {
-    println!("🚀 Running default block scan (first 10 blocks)...");
-    let stats = scan_blocks_count(10).await?;
-    println!(
-        "✅ Default scan completed! Found {} blocks with transactions.",
-        stats.blocks_with_transactions
-    );
     Ok(())
 }
 
@@ -726,7 +716,7 @@ where
     let mut last_progress_time = std::time::Instant::now();
     let progress_interval = std::time::Duration::from_secs(5); // Print progress every 5 seconds
 
-    for tx_round in 0..transactions_per_sender {
+    for _tx_round in 0..transactions_per_sender {
         for sender_idx in start_idx..end_idx {
             let account = &accounts[sender_idx];
             let number_of_senders = accounts.len();
