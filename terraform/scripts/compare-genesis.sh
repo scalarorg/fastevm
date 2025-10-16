@@ -1,7 +1,8 @@
 #!/bin/bash
 # Compare genesis.json files across all nodes
 
-set -e
+# Don't exit on error, handle them gracefully
+# set -e
 
 # Colors for output
 RED='\033[0;31m'
@@ -64,13 +65,29 @@ get_genesis_from_node() {
     local node_ip=$2
     local temp_file="/tmp/genesis_node_${node_index}.json"
     
-    log_info "Fetching genesis.json from node $node_index ($node_ip)..."
+    log_info "Fetching genesis.json from node $node_index ($node_ip)..." >&2
+    log_info "Temp file: $temp_file" >&2
+    log_info "SSH command: ssh $SSH_OPTS -i $SSH_KEY_PATH ubuntu@$node_ip" >&2
     
-    if ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "cat /data/genesis.json" > "$temp_file" 2>/dev/null; then
-        log_success "Retrieved genesis.json from node $node_index"
-        echo "$temp_file"
+    # Debug: Test SSH connection first
+    log_info "Testing file existence..." >&2
+    if ! ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "test -f /data/genesis.json"; then
+        log_error "Genesis file does not exist on node $node_index ($node_ip)" >&2
+        return 1
+    fi
+    log_info "File exists, proceeding with copy..." >&2
+    
+    if ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "cat /data/genesis.json" > "$temp_file"; then
+        log_info "SSH command completed, checking file..." >&2
+        if [ -f "$temp_file" ] && [ -s "$temp_file" ]; then
+            log_success "Retrieved genesis.json from node $node_index ($(wc -c < "$temp_file") bytes)" >&2
+            echo "$temp_file"
+        else
+            log_error "Retrieved file is empty or missing on node $node_index" >&2
+            return 1
+        fi
     else
-        log_error "Failed to retrieve genesis.json from node $node_index"
+        log_error "SSH command failed for node $node_index ($node_ip)" >&2
         return 1
     fi
 }
@@ -79,7 +96,14 @@ get_genesis_from_node() {
 calculate_hash() {
     local file=$1
     if [ -f "$file" ]; then
-        sha256sum "$file" | cut -d' ' -f1
+        # Use shasum on macOS, sha256sum on Linux
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$file" | cut -d' ' -f1
+        elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$file" | cut -d' ' -f1
+        else
+            echo "HASH_COMMAND_NOT_FOUND"
+        fi
     else
         echo "FILE_NOT_FOUND"
     fi
@@ -111,6 +135,9 @@ compare_json_files() {
 # Main comparison logic
 main() {
     log_info "=== Genesis.json Comparison Across All Nodes ==="
+    log_info "Working directory: $(pwd)"
+    log_info "SSH key path: $SSH_KEY_PATH"
+    log_info "SSH key exists: $([ -f "$SSH_KEY_PATH" ] && echo "YES" || echo "NO")"
     
     # Array to store temp files
     declare -a temp_files=()
@@ -119,16 +146,23 @@ main() {
     # Fetch genesis.json from all nodes
     for i in $(seq 0 $((${#NODE_IPS[@]} - 1))); do
         node_ip="${NODE_IPS[$i]}"
-        temp_file=$(get_genesis_from_node $i $node_ip)
-        if [ $? -eq 0 ]; then
-            temp_files+=($temp_file)
-            hash=$(calculate_hash "$temp_file")
-            node_hashes+=($hash)
-            log_info "Node $i hash: $hash"
+        log_info "Processing node $i ($node_ip)..."
+        
+        if temp_file=$(get_genesis_from_node $i $node_ip); then
+            if [[ -n "$temp_file" ]] && [[ -f "$temp_file" ]]; then
+                temp_files+=($temp_file)
+                hash=$(calculate_hash "$temp_file")
+                node_hashes+=($hash)
+                log_info "Node $i hash: $hash"
+            else
+                log_error "Retrieved file is empty or invalid from node $i ($node_ip)"
+                temp_files+=("")
+                node_hashes+=("FILE_NOT_FOUND")
+            fi
         else
-            log_error "Failed to get genesis.json from node $i"
+            log_error "Failed to get genesis.json from node $i ($node_ip)"
             temp_files+=("")
-            node_hashes+=("FAILED")
+            node_hashes+=("FILE_NOT_FOUND")
         fi
     done
     

@@ -171,8 +171,8 @@ fix-ssh-auth: ## Fix gcloud SSH authentication by adding SSH keys to all instanc
 # Compare genesis.json files across all nodes
 compare-genesis: ## Compare genesis.json files across all nodes to ensure consistency
 	@echo "Comparing genesis.json files across all nodes..."
-	@chmod +x compare-genesis.sh
-	@./compare-genesis.sh
+	@chmod +x ./scripts/compare-genesis.sh
+	@./scripts/compare-genesis.sh
 
 # Clean database on all nodes (fixes genesis hash mismatch)
 clean-database: ## Clean database on all nodes to fix genesis hash mismatch
@@ -330,7 +330,7 @@ stop-services: ## Stop FastEVM services on all nodes
 	fi
 
 # Generate prefunded accounts on all nodes (after binary distribution)
-generate-accounts: ## Generate prefunded accounts on all nodes after binary distribution
+init-chain: ## Generate prefunded accounts on all nodes after binary distribution
 	@echo "Generating prefunded accounts on all nodes..."
 	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
 	@chmod 600 fastevm-deploy-key
@@ -345,9 +345,9 @@ generate-accounts: ## Generate prefunded accounts on all nodes after binary dist
 		for node_ip in $$NODE_IPS; do \
 			echo "Generating prefunded accounts on node $$node_ip..."; \
 			scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-				-i fastevm-deploy-key scripts/generate-accounts.sh ubuntu@$$node_ip:/tmp/; \
+				-i fastevm-deploy-key scripts/init-chain.sh ubuntu@$$node_ip:/tmp/; \
 			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-				-i fastevm-deploy-key ubuntu@$$node_ip 'chmod +x /tmp/generate-accounts.sh && /tmp/generate-accounts.sh'; \
+				-i fastevm-deploy-key ubuntu@$$node_ip 'chmod +x /tmp/init-chain.sh && /tmp/init-chain.sh'; \
 			echo "✓ Prefunded accounts generated on $$node_ip"; \
 		done; \
 		echo "✓ Prefunded accounts generation completed on all nodes!"; \
@@ -387,14 +387,14 @@ start-services: ## Start FastEVM services on all nodes
 	fi
 
 # Complete deployment (infrastructure + configs + deploy + prepare binaries + generate accounts + start services)
-deploy-all: check-prereqs init apply prepare-configs deploy-configs prepare-binaries generate-accounts start-services verify-deployment ## Complete deployment: create infrastructure, prepare configs, deploy all nodes, prepare binaries, generate accounts, and start services
+deploy-all: check-prereqs init apply prepare-configs deploy-configs prepare-binaries init-chain start-services verify-deployment ## Complete deployment: create infrastructure, prepare configs, deploy all nodes, prepare binaries, generate accounts, and start services
 	@echo "=== FastEVM Complete Deployment Finished ==="
 	@echo "All nodes are configured and started..."
 	@echo "Check status with: make status"
 	@echo "Test endpoints with: make test-rpc"
 
 # Deploy with existing infrastructure (skip Terraform)
-deploy-existing: check-prereqs prepare-configs deploy-configs prepare-binaries generate-accounts start-services verify-deployment ## Deploy to existing infrastructure (skip Terraform)
+deploy-existing: check-prereqs prepare-configs deploy-configs prepare-binaries init-chain start-services verify-deployment ## Deploy to existing infrastructure (skip Terraform)
 	@echo "=== Deployment to Existing Infrastructure Finished ==="
 
 # Destroy and redeploy
