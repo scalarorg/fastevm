@@ -89,7 +89,7 @@ status: ## Show deployment status
 			echo "Setup Status:"; \
 			ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 			ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-			SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /var/log/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
+			SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /home/ubuntu/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
 			if [ "$$SETUP_COMPLETE" = "yes" ]; then \
 				echo "✅ Setup completed"; \
 				echo ""; \
@@ -97,7 +97,7 @@ status: ## Show deployment status
 				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la /usr/local/bin/fastevm-test 2>/dev/null && echo "✅ Binary ready" || echo "❌ Binary not found"'; \
 				echo ""; \
 				echo "Configuration:"; \
-				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la $(CLIENT_CONFIG_DIR)/test.env 2>/dev/null && echo "✅ Config ready" || echo "❌ Config not found"'; \
+				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la $(CLIENT_CONFIG_DIR)/fastevm.env 2>/dev/null && echo "✅ Config ready" || echo "❌ Config not found"'; \
 			else \
 				echo "⏳ Setup still running..."; \
 				echo "Recent setup log:"; \
@@ -135,14 +135,14 @@ endef
 # Get current block number from Ethereum node
 define GET_CURRENT_BLOCK
 	echo "🔍 Getting current block number..."; \
-	CURRENT_BLOCK=$$($(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/test.env && curl -s -X POST -H "Content-Type: application/json" --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" $$RPC_URL1 | jq -r ".result" | xargs printf "%d\n" 2>/dev/null || echo "0"'); \
+	CURRENT_BLOCK=$$($(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/fastevm.env && curl -s -X POST -H "Content-Type: application/json" --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" $$RPC_URL1 | jq -r ".result" | xargs printf "%d\n" 2>/dev/null || echo "0"'); \
 	echo "📊 Current block number: $$CURRENT_BLOCK"
 endef
 
 # Execute test command on client with timeout and error handling
 define RUN_TEST
 	echo "$(1)"; \
-	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/test.env && timeout $(2) $(3)'; \
+	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/fastevm.env && timeout $(2) $(3)'; \
 	if [ $$? -eq 0 ]; then \
 		echo "✅ $(4)"; \
 	else \
@@ -150,10 +150,17 @@ define RUN_TEST
 	fi
 endef
 
-# Execute scan test with BLOCK_NUMBER environment variable
+# Execute scan test with BLOCK_NUMBER environment variable and START_NUMBER/COUNTER parameters
+# Usage: $(call RUN_SCAN_WITH_BLOCK,message,start_number,counter,command,success_msg,error_msg)
 define RUN_SCAN_WITH_BLOCK
 	echo "$(1)"; \
-	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/test.env && export BLOCK_NUMBER=$(2) && timeout $(3) $(4)'; \
+	echo "Using parameters: START_NUMBER=$(2) COUNTER=$(3)"; \
+	if [ -z "$(2)" ] || [ "$(2)" = "0" ]; then \
+		echo "❌ Error: START_NUMBER is empty or 0, cannot proceed with scan"; \
+		echo "$(6)"; \
+		exit 1; \
+	fi; \
+	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/fastevm.env && export BLOCK_NUMBER=$(2) && timeout 60 $(4) --start $(2) --count $(3)'; \
 	if [ $$? -eq 0 ]; then \
 		echo "✅ $(5)"; \
 	else \
@@ -186,23 +193,23 @@ setup-config: ## Setup test configuration on client node
 	echo "Setting up configuration on $$CLIENT_IP..."; \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /var/log/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
+	SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /home/ubuntu/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
 	if [ "$$SETUP_COMPLETE" = "no" ]; then \
 		echo "⏳ Client setup is still running. Please wait for it to complete."; \
 		echo "You can check progress with: make status"; \
 		echo "Or wait a few minutes and try again."; \
 		exit 1; \
 	fi; \
-	CONFIG_EXISTS=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls $(CLIENT_CONFIG_DIR)/test.env 2>/dev/null && echo "yes" || echo "no"'); \
+	CONFIG_EXISTS=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls $(CLIENT_CONFIG_DIR)/fastevm.env 2>/dev/null && echo "yes" || echo "no"'); \
 	if [ "$$CONFIG_EXISTS" = "no" ]; then \
 		echo "📝 Creating test configuration..."; \
-		ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'mkdir -p $(CLIENT_CONFIG_DIR) && cp $(CLIENT_CONFIG_DIR)/test.env.example $(CLIENT_CONFIG_DIR)/test.env 2>/dev/null || echo "Configuration files will be created during setup"'; \
+		ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'mkdir -p $(CLIENT_CONFIG_DIR) && cp $(CLIENT_CONFIG_DIR)/fastevm.env.example $(CLIENT_CONFIG_DIR)/fastevm.env 2>/dev/null || echo "Configuration files will be created during setup"'; \
 	fi; \
 	echo "✅ Configuration ready"; \
 	echo ""; \
 	echo "📝 Next steps:"; \
 	echo "  1. SSH to client: make connect"; \
-	echo "  2. Edit config: nano $(CLIENT_CONFIG_DIR)/test.env"; \
+	echo "  2. Edit config: nano $(CLIENT_CONFIG_DIR)/fastevm.env"; \
 	echo "  3. Update RPC URLs with actual node IPs from your FastEVM deployment"; \
 	echo "  4. Run tests: make run-scan START_NUMBER=10 COUNTER=5"
 
@@ -243,7 +250,7 @@ run-scan: ## Run block scan test on client node (usage: make run-scan START_NUMB
 	fi; \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && export ENV_FILE=~/client-config/test.env && fastevm-test scan $(if $(START_NUMBER),--start $(START_NUMBER)) $(if $(COUNTER),--count $(COUNTER))'
+	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && export ENV_FILE=~/client-config/fastevm.env && fastevm-test scan $(if $(START_NUMBER),--start $(START_NUMBER)) $(if $(COUNTER),--count $(COUNTER))'
 
 # Run remote batch test
 run-batch: ## Run batch transaction test on client node
@@ -306,7 +313,7 @@ setup: ## Run setup script on remote client node (bootstrap + configure)
 	@echo "🚀 Running setup script on client node..."
 	@$(GET_CLIENT_IP); \
 	echo "Executing setup script on $$CLIENT_IP..."; \
-	$(SSH_CMD)$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && sudo bash ~/client-config/setup.sh'; \
+	$(SSH_CMD)$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && bash ~/client-config/setup.sh'; \
 	if [ $$? -eq 0 ]; then \
 		echo "✅ Setup script executed successfully"; \
 		echo "⏳ Waiting for setup to complete..."; \
@@ -324,7 +331,13 @@ auto-test: ## Run automated test sequence (get block -> batch -> sleep -> scan)
 	$(call RUN_TEST,"2️⃣ Running batch transaction test...",300,fastevm-test batch,"Batch transaction test completed","❌ Batch transaction test failed"); \
 	echo "⏳ Waiting $(TEST_SLEEP_DURATION) seconds for transactions to be processed..."; \
 	sleep $(TEST_SLEEP_DURATION); \
-	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",$$CURRENT_BLOCK,60,fastevm-test scan,"Final block scan test completed","⚠️ Final block scan test had issues"); \
+	CURRENT_BLOCK=$$($(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/fastevm.env && curl -s -X POST -H "Content-Type: application/json" --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" $$RPC_URL1 | jq -r ".result" | xargs printf "%d\n" 2>/dev/null || echo "0"'); \
+	echo "Current block number: $$CURRENT_BLOCK"; \
+	if [ -z "$$CURRENT_BLOCK" ] || [ "$$CURRENT_BLOCK" = "0" ]; then \
+		echo "⚠️ Warning: Current block is empty or 0, using block 1 as fallback"; \
+		CURRENT_BLOCK=1; \
+	fi; \
+	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",$$CURRENT_BLOCK,500,fastevm-test scan,"Final block scan test completed","⚠️ Final block scan test had issues"); \
 	echo "🎉 Automated test sequence completed!"
 # Quick start (init + apply + prepare-configs + deploy-configs + setup)
 deploy-client: init apply prepare-configs deploy-configs setup #auto-test ## Quick start: complete client node setup
@@ -339,8 +352,8 @@ outputs: ## Show all outputs
 # Test targets (run on client node)
 test-scan-all: ## Run block scan all test
 	@echo "🔍 Running block scan all test..."
-	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
-		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test scan-all; \
+	@if [ -f ../fastevm.env ]; then \
+		source ../fastevm.env && fastevm-test scan-all; \
 	else \
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \
@@ -348,8 +361,8 @@ test-scan-all: ## Run block scan all test
 
 test-batch: ## Run batch transaction test
 	@echo "📦 Running batch transaction test..."
-	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
-		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test batch; \
+	@if [ -f ../fastevm.env ]; then \
+		source ../fastevm.env && fastevm-test batch; \
 	else \
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \
@@ -357,8 +370,8 @@ test-batch: ## Run batch transaction test
 
 test-range: ## Run block range test
 	@echo "📊 Running block range test..."
-	@if [ -f $(CLIENT_CONFIG_DIR)/test.env ]; then \
-		source $(CLIENT_CONFIG_DIR)/test.env && fastevm-test range; \
+	@if [ -f ../fastevm.env ]; then \
+		source ../fastevm.env && fastevm-test range; \
 	else \
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \

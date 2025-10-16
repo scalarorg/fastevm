@@ -7,6 +7,7 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+FASTEVM_DIR="$(dirname "$PROJECT_ROOT")"
 CONFIG_DIR="${PROJECT_ROOT}/config"
 DEPLOY_DIR="${PROJECT_ROOT}/deploy"
 NODE_COUNT=${NODE_COUNT:-4}
@@ -17,7 +18,7 @@ GITHUB_REPO=${GITHUB_REPO:-"https://github.com/scalarorg/fastevm.git"}
 GITHUB_BRANCH=${GITHUB_BRANCH:-"main"}
 
 # Prefunded accounts configuration
-PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-10000}
+PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-100000}
 PREFUND_BALANCE=${PREFUND_BALANCE:-"1000000000000000000000"}
 TEST_MNEMONIC=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
 
@@ -278,6 +279,17 @@ log_info "Node IPs: ${NODE_IPS[*]}"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$DEPLOY_DIR"
 
+# Copy genesis.json from execution-client/shared directory
+log_info "Copying genesis.json from execution-client/shared..."
+if [ -f "$FASTEVM_DIR/execution-client/shared/genesis.json" ]; then
+    cp "$FASTEVM_DIR/execution-client/shared/genesis.json" "$CONFIG_DIR/"
+    log_success "Genesis file copied successfully"
+else
+    log_error "Genesis file not found at $FASTEVM_DIR/execution-client/shared/genesis.json"
+    log_error "Please ensure the execution-client/shared/genesis.json file exists"
+    exit 1
+fi
+
 # Generate node IPs and ports
 log_info "Generating node network configuration..."
 declare -a HTTP_PORTS
@@ -300,6 +312,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || echo "placeholder-jwt-secret-$i")
     echo "0x$JWT_SECRET" > "$CONFIG_DIR/jwt$i.hex"
 done
+log_success "Generated JWT secrets for all nodes"
 
 # Generate committees configuration
 log_info "Generating committees configuration..."
@@ -332,6 +345,7 @@ docker_network:
 quorum_threshold: $NODE_COUNT
 validity_threshold: $NODE_COUNT
 EOF
+log_success "Generated committees configuration"
 
 # Generate parameters configuration
 log_info "Generating parameters configuration..."
@@ -362,6 +376,7 @@ commit_sync_parallel_fetches: 8
 commit_sync_batch_size: 100
 commit_sync_batches_ahead: 32
 EOF
+log_success "Generated parameters configuration"
 
 # Generate individual node configurations
 log_info "Generating individual node configurations..."
@@ -403,6 +418,9 @@ jwt_secret: "$JWT_SECRET"
 genesis_block_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
 genesis_time: 1755000000
 fee_recipient: "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6"
+
+# Database configuration
+database_path: "./consensus/db"
 
 # Network configuration
 poll_interval: 30000
@@ -485,6 +503,29 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     cp "$CONFIG_DIR/committees.yml" "$NODE_DIR/"
     cp "$CONFIG_DIR/parameters.yml" "$NODE_DIR/"
     
+    # Generate node-specific environment file
+    cat > "$NODE_DIR/node.env" << EOF
+# FastEVM Node $i Environment Configuration
+NODE_INDEX=$i
+NODE_COUNT=$NODE_COUNT
+PROJECT_NAME="$PROJECT_NAME"
+GITHUB_REPO="$GITHUB_REPO"
+GITHUB_BRANCH="$GITHUB_BRANCH"
+
+# Prefunded accounts configuration
+PREFUND_ACCOUNT_COUNT=$PREFUND_ACCOUNT_COUNT
+PREFUND_BALANCE="$PREFUND_BALANCE"
+TEST_MNEMONIC="$TEST_MNEMONIC"
+
+# Network configuration
+NODE_IP="$NODE_IP"
+HTTP_PORT=$HTTP_PORT
+WS_PORT=$WS_PORT
+ENGINE_PORT=$ENGINE_PORT
+CONSENSUS_PORT=$CONSENSUS_PORT
+P2P_PORT=$P2P_PORT
+EOF
+    
     # Copy service.sh to each node directory
     cp "$SCRIPT_DIR/service.sh" "$NODE_DIR/"
     
@@ -531,6 +572,15 @@ log_info "  PROJECT_NAME: $PROJECT_NAME"
 log_info "  GITHUB_REPO: $GITHUB_REPO"
 log_info "  GITHUB_BRANCH: $GITHUB_BRANCH"
 
+# Load environment variables from node.env file
+if [ -f "/tmp/fastevm-config/node.env" ]; then
+    log_info "Loading environment variables from node.env..."
+    source /tmp/fastevm-config/node.env
+    log_info "Environment variables loaded successfully"
+else
+    log_warning "node.env file not found, using defaults"
+fi
+
 log_info "Starting FastEVM node $NODE_INDEX deployment..."
 
 # Update system packages
@@ -566,45 +616,21 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docke
 sudo apt-get update -y
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-# Install Rust
-log_info "Installing Rust..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
-source $HOME/.cargo/env
-rustup default stable
-rustup update
+# Binary building is now handled by prepare-binaries.sh
+# Just create the necessary directory structure
+log_info "Setting up FastEVM directory structure..."
+
+# Create FastEVM directory structure
+FASTEVM_DIR="/opt/fastevm"
+sudo mkdir -p $FASTEVM_DIR
+sudo mkdir -p /opt/fastevm-binaries
+sudo chown -R ubuntu:ubuntu $FASTEVM_DIR
+sudo chown -R ubuntu:ubuntu /opt/fastevm-binaries
+
+log_info "Directory structure created. Binaries will be prepared by prepare-binaries.sh"
 
 # Add docker group and user
 sudo usermod -aG docker ubuntu
-
-# Create FastEVM directory
-FASTEVM_DIR="/opt/fastevm"
-sudo mkdir -p $FASTEVM_DIR
-sudo chown -R ubuntu:ubuntu $FASTEVM_DIR
-cd $FASTEVM_DIR
-
-# Clone or update the repository
-if [ -d ".git" ]; then
-    log_info "Repository already exists, pulling latest changes..."
-    git fetch origin
-    git checkout $GITHUB_BRANCH
-    git pull origin $GITHUB_BRANCH
-else
-    log_info "Cloning FastEVM repository..."
-    log_info "GitHub Repo: $GITHUB_REPO"
-    log_info "GitHub Branch: $GITHUB_BRANCH"
-    if [ -z "$GITHUB_REPO" ]; then
-        log_error "GITHUB_REPO is not set!"
-        exit 1
-    fi
-    git clone $GITHUB_REPO .
-    git checkout $GITHUB_BRANCH
-fi
-
-# Build the project
-log_info "Building FastEVM..."
-export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
-cargo build --release
 
 # Stop services before updating binaries
 log_info "Stopping services before updating binaries..."
@@ -621,25 +647,23 @@ fi
 # Wait a moment for services to stop
 sleep 5
 
-# Install binaries to system location
-log_info "Installing FastEVM binaries..."
-sudo cp $FASTEVM_DIR/target/release/fastevm-execution /usr/local/bin/
-sudo cp $FASTEVM_DIR/target/release/fastevm-consensus /usr/local/bin/
-sudo cp $FASTEVM_DIR/target/release/cli /usr/local/bin/
-sudo chmod +x /usr/local/bin/fastevm-execution
-sudo chmod +x /usr/local/bin/fastevm-consensus
-sudo chmod +x /usr/local/bin/cli
+# Binary installation is now handled by prepare-binaries.sh
+log_info "Skipping binary installation during deployment..."
+log_info "Binaries will be installed by prepare-binaries.sh"
 
 # Create data directories
 log_info "Creating data directories..."
 sudo mkdir -p /data/execution
 sudo mkdir -p /data/execution/p2p
 sudo mkdir -p /data/execution/db
+sudo mkdir -p /data/consensus
+sudo mkdir -p /data/consensus/db
 sudo mkdir -p /data/logs
 sudo mkdir -p /data/config
 
-# Set proper ownership for database directory
+# Set proper ownership for database directories
 sudo chown -R ubuntu:ubuntu /data/execution
+sudo chown -R ubuntu:ubuntu /data/consensus
 
 # Generate JWT secret
 log_info "Generating JWT secret..."
@@ -667,89 +691,15 @@ fi
 log_info "Copying configuration files..."
 sudo cp /tmp/fastevm-config/* /data/
 
-# Function to add prefunded accounts to genesis.json (Step 2)
-prefund_account() {
-    log_info "Adding prefunded accounts to genesis.json..."
-    
-    # Configuration for prefunded accounts (must be consistent across all nodes)
-    local PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-10000}
-    local PREFUND_BALANCE=${PREFUND_BALANCE:-"1000000000000000000000"}
-    local TEST_MNEMONIC=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
-    
-    log_info "Prefund configuration:"
-    log_info "  Account count: $PREFUND_ACCOUNT_COUNT"
-    log_info "  Balance per account: $PREFUND_BALANCE wei"
-    log_info "  Mnemonic: $TEST_MNEMONIC"
-    
-    # Check if CLI is available
-    if ! command -v cli >/dev/null 2>&1; then
-        log_error "CLI not found in system PATH"
-        return 1
-    fi
-    
-    # Check if genesis.json exists
-    if [ ! -f "/data/genesis.json" ]; then
-        log_error "Genesis file not found at /data/genesis.json"
-        return 1
-    fi
-    
-    # Create backup of original genesis
-    sudo cp /data/genesis.json /data/genesis.json.backup
-    
-    # Generate prefunded accounts using CLI
-    log_info "Generating prefunded accounts using CLI..."
-    
-    # Set default values if not provided
-    local count=${PREFUND_ACCOUNT_COUNT:-1000}
-    local mnemonic=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
-    local balance=${PREFUND_BALANCE:-"1000000000000000000000"}
-    
-    # Ensure proper permissions before running CLI
-    sudo chown -R ubuntu:ubuntu /data
-    sudo chmod -R 755 /data
-    
-    if sudo -u ubuntu cli allocate-funds \
-        --input /data/genesis.json \
-        --count "$count" \
-        --mnemonic "$mnemonic" \
-        --amount "$balance" \
-        --output /data; then
-        
-        log_success "Successfully added $PREFUND_ACCOUNT_COUNT prefunded accounts to genesis.json"
-        
-        # Verify the updated genesis file
-        local total_accounts=$(jq '.alloc | length' /data/genesis.json)
-        log_info "Total accounts in genesis.json: $total_accounts"
-        
-        # Show sample accounts
-        log_info "Sample prefunded accounts:"
-        jq -r '.alloc | keys[0:3] | .[]' /data/genesis.json | while read -r addr; do
-            local balance=$(jq -r ".alloc[\"$addr\"].balance" /data/genesis.json)
-            log_info "  $addr: $balance wei"
-        done
-        
-        return 0
-    else
-        log_error "Failed to add prefunded accounts to genesis.json"
-        # Restore backup
-        sudo cp /data/genesis.json.backup /data/genesis.json
-        return 1
-    fi
-}
-
-# Add prefunded accounts to genesis.json before initialization
-log_info "Adding prefunded accounts to genesis.json..."
-if prefund_account; then
-    log_success "Prefunded accounts added successfully"
-else
-    log_error "Failed to add prefunded accounts, using original genesis.json"
-fi
-
-# Initialize execution node with genesis
-log_info "Initializing execution node with genesis..."
-if [ -f "/data/genesis.json" ]; then
-    sudo /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/genesis.json || true
-fi
+# Initialize execution node with genesis (only if binary exists)
+# log_info "Checking for execution node initialization..."
+# if [ -f "/data/genesis.json" ] && [ -f "/usr/local/bin/fastevm-execution" ]; then
+#     log_info "Initializing execution node with genesis..."
+#     /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/genesis.json || log_info "Execution node initialization completed"
+# else
+#     log_info "Skipping execution node initialization (binary not available yet)"
+#     log_info "Initialization will be done after binary installation"
+# fi
 
 # Install systemd services
 log_info "Installing systemd services..."
@@ -761,25 +711,16 @@ sudo bash /tmp/fastevm-config/service.sh install
 log_info "Setting permissions..."
 sudo chown -R ubuntu:ubuntu /data
 
-# Ensure database directory has proper permissions
+# Ensure database directories have proper permissions
 log_info "Setting database permissions..."
 sudo chmod -R 755 /data/execution/db
-
-# Restart services if they exist, otherwise start them
-log_info "Restarting/Starting services..."
-if systemctl is-active --quiet fastevm-execution; then
-    log_info "Restarting services..."
-    sudo bash /tmp/fastevm-config/service.sh restart
-else
-    log_info "Starting services..."
-    sudo bash /tmp/fastevm-config/service.sh start
-fi
+sudo chmod -R 755 /data/consensus/db
 
 # Create completion marker
 echo "FastEVM node $NODE_INDEX deployment completed successfully at $(date)" | sudo tee /var/log/fastevm-deployment-complete
 
 log_success "=== FastEVM Node $NODE_INDEX Deployment Completed Successfully ==="
-log_info "Services started: fastevm-execution, fastevm-consensus"
+log_success "Services installed but not started. Use 'make start-services' to start all nodes."
 log_info "Use 'fastevm-status' to check status"
 log_info "Use 'fastevm-health-check' to verify health"
 EOF
@@ -870,6 +811,15 @@ done
 
 log_success "Generated docker-compose.yml"
 
+# Generate network summary
+log_info "Generating network summary..."
+cat > "$CONFIG_DIR/network-summary.txt" << EOF
+FastEVM Network Configuration Summary
+=====================================
+
+Node Configuration:
+EOF
+
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     NODE_IP="${NODE_IPS[$i]}"
     HTTP_PORT="${HTTP_PORTS[$i]}"
@@ -907,6 +857,7 @@ Node $i:
   Consensus API: http://$NODE_IP:$CONSENSUS_PORT
 EOF
 done
+log_success "Generated network summary"
 
 # Generate deployment script
 log_info "Generating deployment script..."
@@ -968,8 +919,8 @@ deploy_node() {
     # Copy configuration files to node
     scp \$SSH_OPTS -i "\$SSH_KEY_PATH" -r node\$node_index/* ubuntu@\$node_ip:/tmp/fastevm-config/
     
-    # Run deployment script on node with prefund environment variables
-    ssh \$SSH_OPTS -i "\$SSH_KEY_PATH" ubuntu@\$node_ip "PREFUND_ACCOUNT_COUNT='$PREFUND_ACCOUNT_COUNT' PREFUND_BALANCE='$PREFUND_BALANCE' TEST_MNEMONIC='$TEST_MNEMONIC' bash /tmp/fastevm-config/deploy.sh"
+    # Run deployment script on node (environment variables loaded from node.env)
+    ssh \$SSH_OPTS -i "\$SSH_KEY_PATH" ubuntu@\$node_ip "bash /tmp/fastevm-config/deploy.sh"
     
     log_success "Node \$node_index deployment completed"
 }
@@ -1132,6 +1083,7 @@ ssh ubuntu@$BASE_IP.$START_IP 'journalctl -u fastevm-execution -f'
 ssh ubuntu@$BASE_IP.$START_IP 'journalctl -u fastevm-consensus -f'
 \`\`\`
 EOF
+log_success "Generated README documentation"
 
 log_success "Configuration preparation completed!"
 echo ""

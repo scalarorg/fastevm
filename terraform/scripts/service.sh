@@ -76,7 +76,7 @@ ExecStart=/usr/local/bin/fastevm-execution \
     --discovery.addr 0.0.0.0 \
     --discovery.port 30303 \
     --p2p-secret-key /data/execution/p2p/secret.key \
-    --enable-txpool-listener \
+    --enable-tx-subscription \
     --committed-subdags-per-block 30 \
     --block-build-interval-ms 100 \
     --txpool.max-new-txns 102400 \
@@ -87,7 +87,7 @@ ExecStart=/usr/local/bin/fastevm-execution \
     --txpool.max-new-pending-txs-notifications 102400 \
     --txpool.queued-max-count 102400 \
     --txpool.queued-max-size 128 \
-    -vvvv
+    -vvv
 Restart=always
 RestartSec=10
 StandardOutput=append:/data/logs/fastevm-execution.log

@@ -81,7 +81,7 @@ check_prerequisites() {
         exit 1
     fi
     
-    local required_files=("test.env" "setup.sh")
+    local required_files=("fastevm.env" "setup.sh")
     for file in "${required_files[@]}"; do
         if [ ! -f "${CONFIG_DIR}/${file}" ]; then
             log_error "Required configuration file not found: ${CONFIG_DIR}/${file}"
@@ -132,7 +132,7 @@ copy_config_files() {
     ssh $SSH_OPTS -i "$SSH_KEY" "$SSH_USER@$CLIENT_IP" "mkdir -p $CLIENT_CONFIG_DIR"
     
     # Copy files
-    local files=("test.env" "setup.sh")
+    local files=("fastevm.env" "setup.sh")
     for file in "${files[@]}"; do
         log_info "Copying $file..."
         scp $SSH_OPTS -i "$SSH_KEY" "${CONFIG_DIR}/${file}" "$SSH_USER@$CLIENT_IP:$CLIENT_CONFIG_DIR/${file}"

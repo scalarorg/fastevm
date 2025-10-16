@@ -57,10 +57,51 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docke
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-# Install Rust
-echo "Installing Rust..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:$PATH" && rustup default stable && rustup update
+# Only build on the first node (node 0)
+if [ "$NODE_INDEX" = "0" ]; then
+    echo "This is the build node (node 0). Building FastEVM..."
+    
+    # Install Rust
+    echo "Installing Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    export PATH="$HOME/.cargo/bin:$PATH" && rustup default stable && rustup update
+
+    # Create FastEVM directory
+    FASTEVM_DIR="/opt/fastevm"
+    mkdir -p $FASTEVM_DIR
+    cd $FASTEVM_DIR
+
+    # Clone the repository
+    echo "Cloning FastEVM repository..."
+    echo "GitHub Repo: $GITHUB_REPO"
+    echo "GitHub Branch: $GITHUB_BRANCH"
+    if [ -z "$GITHUB_REPO" ]; then
+        echo "ERROR: GITHUB_REPO is not set!"
+        exit 1
+    fi
+    git clone $GITHUB_REPO .
+    git checkout $GITHUB_BRANCH
+
+    # Build the project
+    echo "Building FastEVM..."
+    export PATH="$HOME/.cargo/bin:$PATH" && cargo build --release
+    
+    # Create binaries directory for distribution
+    mkdir -p /opt/fastevm-binaries
+    cp target/release/fastevm-execution /opt/fastevm-binaries/
+    cp target/release/fastevm-consensus /opt/fastevm-binaries/
+    cp target/release/fastevm-test /opt/fastevm-binaries/ 2>/dev/null || echo "fastevm-test not found, skipping"
+    
+    echo "Build completed on node 0. Binaries ready for distribution."
+else
+    echo "This is node $NODE_INDEX. Skipping build process."
+    echo "Binaries will be distributed from node 0."
+    
+    # Create FastEVM directory structure
+    FASTEVM_DIR="/opt/fastevm"
+    mkdir -p $FASTEVM_DIR
+    mkdir -p /opt/fastevm-binaries
+fi
 
 # Add docker group and user
 usermod -aG docker ubuntu
@@ -68,26 +109,6 @@ usermod -aG docker ubuntu
 # Configure passwordless sudo for ubuntu user
 echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/ubuntu
 chmod 440 /etc/sudoers.d/ubuntu
-
-# Create FastEVM directory
-FASTEVM_DIR="/opt/fastevm"
-mkdir -p $FASTEVM_DIR
-cd $FASTEVM_DIR
-
-# Clone the repository
-echo "Cloning FastEVM repository..."
-echo "GitHub Repo: $GITHUB_REPO"
-echo "GitHub Branch: $GITHUB_BRANCH"
-if [ -z "$GITHUB_REPO" ]; then
-    echo "ERROR: GITHUB_REPO is not set!"
-    exit 1
-fi
-git clone $GITHUB_REPO .
-git checkout $GITHUB_BRANCH
-
-# Build the project
-echo "Building FastEVM..."
-export PATH="$HOME/.cargo/bin:$PATH" && cargo build --release
 
 # Create data directories
 echo "Creating data directories..."
@@ -196,7 +217,7 @@ EOF
     "cancunTime": 0
   },
   "difficulty": "0x0",
-  "gasLimit": "0x1c9c380",
+  "gasLimit": "120000000",
   "alloc": {
     "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6": {
       "balance": "0x1000000000000000000000000000000000000000000000000000000000000000"
@@ -317,8 +338,8 @@ After=network.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=$FASTEVM_DIR
-ExecStart=$FASTEVM_DIR/target/release/fastevm-execution \\
+WorkingDirectory=/opt/fastevm
+ExecStart=/opt/fastevm-binaries/fastevm-execution \\
     --config /data/execution.toml \\
     --datadir /data/execution \\
     --log-level info
@@ -341,8 +362,8 @@ After=network.target fastevm-execution.service
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=$FASTEVM_DIR
-ExecStart=$FASTEVM_DIR/target/release/fastevm-consensus \\
+WorkingDirectory=/opt/fastevm
+ExecStart=/opt/fastevm-binaries/fastevm-consensus \\
     start \\
     --config /data/node.yml
 Restart=always
@@ -434,21 +455,13 @@ EOF
 # Set up cron job for monitoring
 echo "*/5 * * * * ubuntu /usr/local/bin/fastevm-monitor.sh $NODE_INDEX" >> /etc/crontab
 
-# Enable and start services
-echo "Enabling and starting services..."
+# Enable services (but don't start them yet)
+echo "Enabling services..."
 systemctl daemon-reload
 systemctl enable fastevm-execution
 systemctl enable fastevm-consensus
 
-# Start execution client first
-systemctl start fastevm-execution
-
-# Wait for execution client to be ready
-echo "Waiting for execution client to be ready..."
-sleep 30
-
-# Start consensus client
-systemctl start fastevm-consensus
+echo "Services enabled but not started. They will be started during deployment."
 
 # Create status script
 cat > /usr/local/bin/fastevm-status.sh << 'EOF'
@@ -509,7 +522,12 @@ echo "FastEVM bootstrap completed successfully at $(date)" > /var/log/fastevm-bo
 
 echo "=== FastEVM Bootstrap Completed Successfully at $(date) ==="
 echo "Node $NODE_INDEX is ready!"
-echo "Services started: fastevm-execution, fastevm-consensus"
+if [ "$NODE_INDEX" = "0" ]; then
+    echo "Build node: Binaries ready for distribution"
+else
+    echo "Worker node: Waiting for binaries from node 0"
+fi
+echo "Services enabled: fastevm-execution, fastevm-consensus"
 echo "Use 'fastevm-status' to check status"
 echo "Use 'fastevm-health-check' to verify health"
 echo "Logs available in /var/log/fastevm-* and journalctl"

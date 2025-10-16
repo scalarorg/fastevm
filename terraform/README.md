@@ -19,7 +19,7 @@ sudo apt install terraform google-cloud-cli jq  # Ubuntu
 
 # 2. Authenticate with GCP
 gcloud auth login
-cloud auth application-default login \
+gcloud auth application-default login \
       --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
 
 # 3. Deploy everything in one command
@@ -29,10 +29,23 @@ make deploy-all
 
 This single command will:
 - ✅ Create GCP infrastructure (VMs, networking, disks)
+- ✅ Build Rust binaries on node 0 only (optimized build process)
+- ✅ Distribute binaries from node 0 to all other nodes
 - ✅ Prepare all node configurations locally
 - ✅ Deploy and configure all nodes remotely
 - ✅ Start all FastEVM services
 - ✅ Verify deployment health
+
+## 🔧 Build Process
+
+The deployment uses an optimized build process to avoid build failures:
+
+1. **Build on Node 0 only**: Only the first node (node 0) builds the Rust binaries
+2. **Distribute binaries**: Binaries are copied from node 0 to localhost, then distributed to all nodes
+3. **Install services**: Services are installed on all nodes using the distributed binaries
+4. **Start services**: All services are started in parallel
+
+This approach is more reliable and faster than building on each node individually.
 
 ### Examples
 
@@ -277,6 +290,7 @@ make clean-data        # Clean node data
 make prepare-configs   # Prepare all configurations locally
 make show-configs      # Show prepared configuration summary
 make deploy-configs    # Deploy prepared configurations to remote nodes
+make distribute-binaries # Distribute binaries from build node to all nodes
 make prepare-and-deploy # Full workflow: prepare + deploy
 make outputs           # Show all outputs
 make backup            # Backup configuration
@@ -363,7 +377,7 @@ sudo bash /tmp/fastevm-config/service.sh follow      # Follow live logs
 1. **Authentication Errors**
    ```bash
    gcloud auth login
-   cloud auth application-default login \
+   gcloud auth application-default login \
       --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
    ```
 
@@ -537,7 +551,7 @@ make setup-config
 
 # 5. Configure test settings
 make connect
-# Edit /home/ubuntu/test-config/test.env with actual node IPs from main deployment
+# Edit /home/ubuntu/test-config/fastevm.env with actual node IPs from main deployment
 
 # 6. Run tests
 make run-scan      # Block scan test
@@ -602,7 +616,7 @@ make outputs           # Show all outputs
 ### Client Node Configuration
 
 #### Test Configuration File
-The client node uses `/home/ubuntu/test-config/test.env` for configuration:
+The client node uses `/home/ubuntu/test-config/fastevm.env` for configuration:
 
 ```bash
 # RPC Endpoints (update with actual node IPs from main deployment)
@@ -703,7 +717,7 @@ make clean-logs     # Clean logs
    make status
    make update-code
    make connect
-   cat /home/ubuntu/test-config/test.env
+   cat /home/ubuntu/test-config/fastevm.env
    ```
 
 3. **Connection issues**

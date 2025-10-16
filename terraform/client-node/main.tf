@@ -132,7 +132,7 @@ resource "google_compute_instance" "client_node" {
       apt-get update -y
       apt-get upgrade -y
       
-      # Install required packages
+      # Install required packages (including C compiler)
       log "Installing required packages..."
       apt-get install -y \
           curl \
@@ -155,7 +155,21 @@ resource "google_compute_instance" "client_node" {
           lsb-release \
           openssh-client
       
+      # Verify C compiler is available
+      log "Verifying C compiler installation..."
+      if ! command -v cc &> /dev/null; then
+          log "ERROR: C compiler (cc) not found after installation"
+          exit 1
+      fi
+      
+      # Verify gcc is available (build-essential should provide this)
+      if ! command -v gcc &> /dev/null; then
+          log "ERROR: GCC compiler not found after installation"
+          exit 1
+      fi
+      
       log "Package installation completed successfully!"
+      log "C compiler verification passed"
       EOF
   }
 

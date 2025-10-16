@@ -22,7 +22,7 @@ gcloud auth application-default login \
 
 ```bash
 # Quick start (recommended) - Complete automation
-make quick-start
+make deploy-client
 ```
 
 This single command will:
@@ -32,6 +32,11 @@ This single command will:
 4. Deploy configurations to remote client
 5. Run setup script (bootstrap + configuration + automated testing)
 6. Report completion status
+
+**Alternative quick start:**
+```bash
+make help              # Show all available commands
+```
 
 ### Step-by-Step Deployment
 
@@ -85,7 +90,7 @@ client-node/
 
 ### Environment Configuration
 
-The client node configuration can be customized by editing the `config.env` file:
+The client node configuration can be customized by editing the `../fastevm.env` file:
 
 ```bash
 # Repository configuration
@@ -97,7 +102,7 @@ CHAIN_ID=202501
 TEST_SENDER_COUNT=10000
 TEST_TRANSACTION_COUNT=10
 TEST_TRANSACTION_VALUE=1000000000000000
-TEST_MNEMONIC=abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about
+TEST_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 TEST_FETCH_NONCE=true
 TEST_WAITING_TIME_SECONDS=30
 TEST_RPC_TIMEOUT=30
@@ -119,7 +124,7 @@ TEST_LOG_LEVEL=info
 - `TEST_MAX_RETRIES`: Maximum retry attempts
 - `TEST_LOG_LEVEL`: Logging level (debug, info, warn, error)
 
-The `prepare-configs.sh` script automatically loads these values from `config.env` and uses them as defaults when generating the client configuration.
+The `prepare-configs.sh` script automatically loads these values from `../fastevm.env` and uses them as defaults when generating the client configuration.
 
 ## 🏗️ Infrastructure Components
 
@@ -159,10 +164,23 @@ make setup            # Run setup script on remote client (bootstrap + configure
 ### Client Management
 ```bash
 make connect           # Connect to client node via SSH
-make run-test TEST=<type>  # Run specific test (scan, batch, range, all)
-make run-scan          # Run block scan test
+make setup-config      # Setup test configuration on client node
+make run-test TEST=<type>  # Run specific test (scan-all, batch, range, all)
+make run-scan [START_NUMBER=X] [COUNTER=Y]  # Run block scan test with optional parameters
 make run-batch         # Run batch transaction test
 make run-all           # Run all tests
+```
+
+### Testing Commands (Local)
+```bash
+make test-scan-all     # Run block scan all test locally
+make test-batch        # Run batch transaction test locally
+make test-range        # Run block range test locally
+```
+
+### Automated Testing
+```bash
+make auto-test         # Run automated test sequence (get block -> batch -> sleep -> scan)
 ```
 
 ### Maintenance Commands
@@ -171,6 +189,12 @@ make update-code       # Update code and rebuild on client node
 make clean-logs        # Clean logs on client node
 make clean-all         # Clean all local files
 make outputs           # Show all outputs
+```
+
+### Quick Start Commands
+```bash
+make deploy-client     # Complete client node setup (init + apply + prepare-configs + deploy-configs + setup)
+make help              # Show all available commands
 ```
 
 ## 🧪 Testing
@@ -193,6 +217,7 @@ The setup script automatically runs a comprehensive test sequence:
 
 ### Manual Testing
 
+#### Remote Testing (on client node)
 ```bash
 # SSH into client node
 make connect
@@ -205,11 +230,26 @@ source /home/ubuntu/client-config/test.env
 fastevm-test scan      # Block scan test
 fastevm-test batch     # Batch transaction test
 fastevm-test range     # Block range test
+```
 
-# Or run from local machine
-make run-scan          # Block scan test
+#### Local Testing (from your machine)
+```bash
+# Run tests remotely from local machine
+make run-scan [START_NUMBER=10] [COUNTER=5]  # Block scan test with optional parameters
 make run-batch         # Batch transaction test
 make run-all           # All tests
+make run-test TEST=scan-all  # Specific test type
+
+# Automated test sequence
+make auto-test         # Get current block -> run batch -> wait -> run scan
+```
+
+#### Local Testing (if you have the binary locally)
+```bash
+# Run tests locally (requires local fastevm-test binary)
+make test-scan-all     # Block scan all test
+make test-batch        # Batch transaction test  
+make test-range        # Block range test
 ```
 
 ## 💰 Cost Estimation
@@ -269,6 +309,10 @@ make run-all           # All tests
    make connect
    tail -f /var/log/client-setup.log
    cat /home/ubuntu/client-config/test.env
+   
+   # Try running tests manually
+   make run-scan
+   make auto-test
    ```
 
 5. **Connection issues**
@@ -351,6 +395,8 @@ fi
 
 ---
 
-**Ready to deploy?** Run `make quick-start` to get started! 🚀
+**Ready to deploy?** Run `make deploy-client` to get started! 🚀
 
 **Need to test your FastEVM network?** This client node provides comprehensive testing capabilities! 🧪
+
+**Want to see all available commands?** Run `make help` for a complete list! 📋

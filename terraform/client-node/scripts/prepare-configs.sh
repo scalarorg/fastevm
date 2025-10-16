@@ -11,7 +11,7 @@ PROJECT_ROOT="$(dirname "$(dirname "$CLIENT_NODE_DIR")")"
 CONFIG_DIR="${CLIENT_NODE_DIR}/config"
 
 # Load configuration from environment file
-CONFIG_ENV_FILE="${SCRIPT_DIR}/../config.env"
+CONFIG_ENV_FILE="${SCRIPT_DIR}/../../fastevm.env"
 
 if [ -f "$CONFIG_ENV_FILE" ]; then
     echo "Loading configuration from $CONFIG_ENV_FILE"
@@ -20,7 +20,7 @@ else
     echo "Warning: Configuration file $CONFIG_ENV_FILE not found, using defaults"
 fi
 
-# Default values (fallback if not set in config.env)
+# Default values (fallback if not set in fastevm.env)
 GITHUB_REPO=${GITHUB_REPO:-"https://github.com/scalarorg/fastevm.git"}
 GITHUB_BRANCH=${GITHUB_BRANCH:-"terraform"}
 CHAIN_ID=${CHAIN_ID:-202501}
@@ -120,7 +120,7 @@ create_config_structure() {
 generate_test_env() {
     log_info "Generating test configuration..."
     
-    cat > "${CONFIG_DIR}/test.env" << EOF
+    cat > "${CONFIG_DIR}/fastevm.env" << EOF
 # FastEVM Client Test Configuration
 # Generated on $(date)
 
@@ -145,7 +145,7 @@ TEST_MAX_RETRIES=${TEST_MAX_RETRIES}
 TEST_LOG_LEVEL=${TEST_LOG_LEVEL}
 EOF
 
-    log_success "Test configuration generated: ${CONFIG_DIR}/test.env"
+    log_success "Test configuration generated: ${CONFIG_DIR}/fastevm.env"
 }
 
 # Function to generate combined setup script
@@ -160,7 +160,7 @@ set -e
 
 PROJECT_DIR="/home/ubuntu/fastevm"
 CONFIG_DIR="/home/ubuntu/client-config"
-LOG_FILE="/var/log/client-setup.log"
+LOG_FILE="/home/ubuntu/client-setup.log"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -181,35 +181,6 @@ export PATH="$HOME/.cargo/bin:$PATH"
 source $HOME/.cargo/env
 rustup default stable
 
-# Make Rust available system-wide
-log "Making Rust available system-wide..."
-DEFAULT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-CARGO_PATH="/root/.cargo/bin"
-
-add_cargo_to_path() {
-    local file="$1"
-    local path_line="export PATH=\"$CARGO_PATH:$DEFAULT_PATH\""
-    if ! grep -q "$CARGO_PATH" "$file" 2>/dev/null; then
-        echo "$path_line" >> "$file"
-        log "Added Rust PATH to $file"
-    fi
-}
-
-add_cargo_to_path "/etc/environment"
-add_cargo_to_path "/etc/profile"
-add_cargo_to_path "/etc/bash.bashrc"
-add_cargo_to_path "/home/ubuntu/.bashrc"
-
-# Create symlinks
-ln -sf /root/.cargo/bin/rustc /usr/local/bin/rustc
-ln -sf /root/.cargo/bin/cargo /usr/local/bin/cargo
-ln -sf /root/.cargo/bin/rustup /usr/local/bin/rustup
-
-# Configure passwordless sudo
-log "Configuring passwordless sudo..."
-echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/ubuntu
-chmod 440 /etc/sudoers.d/ubuntu
-
 # Clone and build FastEVM
 log "Cloning FastEVM repository..."
 cd /home/ubuntu
@@ -222,7 +193,7 @@ else
     git clone -b "GITHUB_BRANCH_PLACEHOLDER" "GITHUB_REPO_PLACEHOLDER" "$PROJECT_DIR"
 fi
 
-chown -R ubuntu:ubuntu "$PROJECT_DIR"
+# chown -R ubuntu:ubuntu "$PROJECT_DIR"
 
 # Build test binary
 log "Building FastEVM test binary..."
@@ -236,12 +207,12 @@ fi
 
 # Install binary
 log "Installing test binary..."
-cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
-chmod +x /usr/local/bin/fastevm-test
+sudo cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
+sudo chmod +x /usr/local/bin/fastevm-test
 
 # Create completion markers
-touch /var/log/client-bootstrap-complete
-touch /var/log/client-config-complete
+touch /home/ubuntu/client-bootstrap-complete
+touch /home/ubuntu/client-config-complete
 
 log "FastEVM client node setup completed successfully!"
 log "Bootstrap and configuration phases completed"
