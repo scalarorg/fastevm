@@ -221,12 +221,12 @@ distribute_binaries() {
         # Copy to system location
         sudo cp /opt/fastevm-binaries/fastevm-execution /usr/local/bin/
         sudo cp /opt/fastevm-binaries/fastevm-consensus /usr/local/bin/
-        sudo cp /opt/fastevm-binaries/cli /usr/local/bin/ 2>/dev/null || true
+        sudo cp /opt/fastevm-binaries/cli /usr/local/bin/
         
         # Set executable permissions
         sudo chmod +x /usr/local/bin/fastevm-execution
         sudo chmod +x /usr/local/bin/fastevm-consensus
-        sudo chmod +x /usr/local/bin/cli 2>/dev/null || true
+        sudo chmod +x /usr/local/bin/cli
     "
     log_success "Binaries installed on build node"
     
@@ -246,19 +246,19 @@ distribute_binaries() {
         ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "sudo mkdir -p /opt/fastevm-binaries && sudo chown -R ubuntu:ubuntu /opt/fastevm-binaries && sudo chmod -R 755 /opt/fastevm-binaries"
         
         # Copy binaries directly from build node to target node
-        ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$build_node_ip "scp $SSH_OPTS -i ~/.ssh/fastevm-deploy-key /opt/fastevm-binaries/fastevm-execution /opt/fastevm-binaries/fastevm-consensus ubuntu@$node_ip:/opt/fastevm-binaries/ && if [ -f /opt/fastevm-binaries/cli ]; then scp $SSH_OPTS -i ~/.ssh/fastevm-deploy-key /opt/fastevm-binaries/cli ubuntu@$node_ip:/opt/fastevm-binaries/; fi"
+        ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$build_node_ip "scp $SSH_OPTS -i ~/.ssh/fastevm-deploy-key /opt/fastevm-binaries/fastevm-execution /opt/fastevm-binaries/fastevm-consensus /opt/fastevm-binaries/cli ubuntu@$node_ip:/opt/fastevm-binaries/"
         
         # Copy binaries to system location and set permissions
         ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "
             # Copy to system location
             sudo cp /opt/fastevm-binaries/fastevm-execution /usr/local/bin/
             sudo cp /opt/fastevm-binaries/fastevm-consensus /usr/local/bin/
-            sudo cp /opt/fastevm-binaries/cli /usr/local/bin/ 2>/dev/null || true
+            sudo cp /opt/fastevm-binaries/cli /usr/local/bin/
             
             # Set executable permissions
             sudo chmod +x /usr/local/bin/fastevm-execution
             sudo chmod +x /usr/local/bin/fastevm-consensus
-            sudo chmod +x /usr/local/bin/cli 2>/dev/null || true
+            sudo chmod +x /usr/local/bin/cli
             chmod +x /opt/fastevm-binaries/*
         "
         
@@ -273,11 +273,27 @@ verify_distribution() {
     log_info "Verifying binary distribution..."
     for node_ip in $all_nodes; do
         log_info "Verifying binaries on node $node_ip..."
-        if ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "ls -la /usr/local/bin/fastevm-execution /usr/local/bin/fastevm-consensus /usr/local/bin/cli" >/dev/null 2>&1; then
-            log_success "Binaries verified on node $node_ip"
-        else
-            log_error "Binaries verification failed on node $node_ip"
+        
+        # Check each binary individually for better error reporting
+        local missing_binaries=""
+        
+        if ! ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "test -f /usr/local/bin/fastevm-execution" >/dev/null 2>&1; then
+            missing_binaries="$missing_binaries fastevm-execution"
+        fi
+        
+        if ! ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "test -f /usr/local/bin/fastevm-consensus" >/dev/null 2>&1; then
+            missing_binaries="$missing_binaries fastevm-consensus"
+        fi
+        
+        if ! ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "test -f /usr/local/bin/cli" >/dev/null 2>&1; then
+            missing_binaries="$missing_binaries cli"
+        fi
+        
+        if [ -n "$missing_binaries" ]; then
+            log_error "Missing binaries on node $node_ip:$missing_binaries"
             return 1
+        else
+            log_success "All binaries verified on node $node_ip"
         fi
     done
 }

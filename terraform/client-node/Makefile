@@ -1,7 +1,7 @@
 # FastEVM Client Node Management Makefile
 # Standalone client node deployment and management
 
-.PHONY: help init plan apply destroy status connect setup-config run-test run-scan run-batch run-all update-code clean-logs clean-all bootstrap quick-start
+.PHONY: help init plan apply destroy status connect setup-config run-test run-scan run-batch run-all update-code clean-logs clean-all bootstrap quick-start prepare-binaries backup-binaries restore-binaries
 
 # Default target
 help: ## Show available commands
@@ -19,6 +19,11 @@ help: ## Show available commands
 	@echo "  prepare-configs   Prepare configurations locally"
 	@echo "  deploy-configs   Deploy configurations to remote client"
 	@echo "  setup            Run setup script on remote client (bootstrap + configure)"
+	@echo ""
+	@echo "Binary Management:"
+	@echo "  prepare-binaries Prepare and install binaries (backup/restore or build)"
+	@echo "  backup-binaries  Backup binaries from client to local storage"
+	@echo "  restore-binaries Restore binaries from local storage to client"
 	@echo ""
 	@echo "Client Management:"
 	@echo "  connect           Connect to client node via SSH"
@@ -376,3 +381,53 @@ test-range: ## Run block range test
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \
 	fi
+
+# Binary Management Commands
+prepare-binaries: ## Prepare and install binaries (backup/restore or build)
+	@echo "🔧 Preparing client binaries..."
+	@$(GET_CLIENT_IP)
+	@./scripts/prepare-binaries.sh
+	@echo "✅ Client binaries prepared successfully"
+
+backup-binaries: ## Backup binaries from client to local storage
+	@echo "💾 Backing up client binaries..."
+	@$(GET_CLIENT_IP)
+	@CLIENT_IP=$$($(CLIENT_IP_CMD)); \
+	./scripts/prepare-binaries.sh backup $$CLIENT_IP
+	@echo "✅ Client binaries backed up successfully"
+
+restore-binaries: ## Restore binaries from local storage to client
+	@echo "📦 Restoring client binaries..."
+	@$(GET_CLIENT_IP)
+	@CLIENT_IP=$$($(CLIENT_IP_CMD)); \
+	./scripts/prepare-binaries.sh restore $$CLIENT_IP
+	@echo "✅ Client binaries restored successfully"
+
+# Quick start command - complete automated deployment
+quick-start: ## Quick start: complete client node setup with binary optimization
+	@echo "🚀 FastEVM Client Node Quick Start"
+	@echo "=================================="
+	@echo "This will deploy and configure a complete client node with optimized binary handling"
+	@echo ""
+	@echo "Step 1: Deploy infrastructure..."
+	@make apply
+	@echo ""
+	@echo "Step 2: Prepare configurations..."
+	@make prepare-configs
+	@echo ""
+	@echo "Step 3: Deploy configurations..."
+	@make deploy-configs
+	@echo ""
+	@echo "Step 4: Prepare binaries (backup/restore or build)..."
+	@make prepare-binaries
+	@echo ""
+	@echo "Step 5: Setup client node..."
+	@make setup
+	@echo ""
+	@echo "✅ Quick start completed successfully!"
+	@echo "Client node is ready for testing"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  - Run 'make status' to check deployment status"
+	@echo "  - Run 'make run-scan' to test the setup"
+	@echo "  - Run 'make connect' to SSH into the client node"

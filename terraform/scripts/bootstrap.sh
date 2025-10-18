@@ -194,6 +194,23 @@ path = "/data/execution"
 
 [txpool]
 enabled = true
+max_new_txns = 102400
+max_account_slots = 102400
+max_pending_txns = 102400
+pending_max_count = 102400
+pending_max_size = 128
+max_new_pending_txs_notifications = 102400
+queued_max_count = 102400
+queued_max_size = 128
+
+[engine]
+always_process_payload_attributes_on_canonical_head = true
+
+[consensus]
+enable_tx_subscription = true
+committed_subdags_per_block = 30
+block_build_interval_ms = 100
+
 EOF
 
     # Create genesis file

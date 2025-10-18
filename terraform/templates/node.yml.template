@@ -1,0 +1,27 @@
+# Node {{NODE_INDEX}} configuration for FastEVM Consensus Client
+chain: "./genesis.json"
+
+# Committee configuration
+committee_path: "./committees.yml"
+parameters_path: "./parameters.yml"
+
+# Execution client configuration
+execution_http_url: "http://127.0.0.1:{{HTTP_PORT}}"
+execution_ws_url: "ws://127.0.0.1:{{WS_PORT}}"
+jwt_secret: "{{JWT_SECRET}}"
+genesis_time: 1755000000
+fee_recipient: "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6"
+
+# Database configuration
+database_path: "./consensus/db"
+
+# Network configuration
+poll_interval: 30000
+max_retries: 3
+timeout: 30
+
+# Node configuration
+working_directory: "."
+node_index: {{NODE_INDEX}}
+log_level: "info"
+

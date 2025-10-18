@@ -173,42 +173,58 @@ log "Starting FastEVM client node setup..."
 # =============================================================================
 log "=== BOOTSTRAP PHASE ==="
 
-# Install Rust
-log "Installing Rust system-wide..."
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.cargo/bin"
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:$PATH"
-source $HOME/.cargo/env
-rustup default stable
-
-# Clone and build FastEVM
-log "Cloning FastEVM repository..."
-cd /home/ubuntu
-if [ -d "$PROJECT_DIR" ]; then
-    cd "$PROJECT_DIR"
-    git fetch origin
-    git checkout "GITHUB_BRANCH_PLACEHOLDER"
-    git pull origin "GITHUB_BRANCH_PLACEHOLDER"
+# Check if binaries are available locally, otherwise build
+log "Checking for pre-built binaries..."
+if [ -f "/opt/fastevm-binaries/fastevm-test" ]; then
+    log "Pre-built binary found, installing..."
+    sudo cp /opt/fastevm-binaries/fastevm-test /usr/local/bin/
+    sudo chmod +x /usr/local/bin/fastevm-test
+    log "Binary installed from pre-built source"
 else
-    git clone -b "GITHUB_BRANCH_PLACEHOLDER" "GITHUB_REPO_PLACEHOLDER" "$PROJECT_DIR"
+    log "No pre-built binary found, building from source..."
+    
+    # Install Rust
+    log "Installing Rust system-wide..."
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.cargo/bin"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    export PATH="$HOME/.cargo/bin:$PATH"
+    source $HOME/.cargo/env
+    rustup default stable
+
+    # Clone and build FastEVM
+    log "Cloning FastEVM repository..."
+    cd /home/ubuntu
+    if [ -d "$PROJECT_DIR" ]; then
+        cd "$PROJECT_DIR"
+        git fetch origin
+        git checkout "GITHUB_BRANCH_PLACEHOLDER"
+        git pull origin "GITHUB_BRANCH_PLACEHOLDER"
+    else
+        git clone -b "GITHUB_BRANCH_PLACEHOLDER" "GITHUB_REPO_PLACEHOLDER" "$PROJECT_DIR"
+    fi
+
+    # Build test binary
+    log "Building FastEVM test binary..."
+    cd "$PROJECT_DIR/testing/integration"
+    cargo build --release --bin fastevm-test
+
+    if [ ! -f "$PROJECT_DIR/target/release/fastevm-test" ]; then
+        log "ERROR: Build failed - binary not found"
+        exit 1
+    fi
+
+    # Install binary
+    log "Installing test binary..."
+    sudo cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
+    sudo chmod +x /usr/local/bin/fastevm-test
+    
+    # Backup the binary for future use
+    log "Backing up binary for future deployments..."
+    sudo mkdir -p /opt/fastevm-binaries
+    sudo cp "$PROJECT_DIR/target/release/fastevm-test" /opt/fastevm-binaries/
+    sudo chown ubuntu:ubuntu /opt/fastevm-binaries/fastevm-test
+    chmod +x /opt/fastevm-binaries/fastevm-test
 fi
-
-# chown -R ubuntu:ubuntu "$PROJECT_DIR"
-
-# Build test binary
-log "Building FastEVM test binary..."
-cd "$PROJECT_DIR/testing/integration"
-cargo build --release --bin fastevm-test
-
-if [ ! -f "$PROJECT_DIR/target/release/fastevm-test" ]; then
-    log "ERROR: Build failed - binary not found"
-    exit 1
-fi
-
-# Install binary
-log "Installing test binary..."
-sudo cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
-sudo chmod +x /usr/local/bin/fastevm-test
 
 # Create completion markers
 touch /home/ubuntu/client-bootstrap-complete

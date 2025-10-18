@@ -21,15 +21,15 @@ gcloud auth application-default login \
 ### Complete Automated Deployment
 
 ```bash
-# Quick start (recommended) - Complete automation
-make deploy-client
+# Quick start (recommended) - Complete automation with binary optimization
+make quick-start
 ```
 
 This single command will:
-1. Initialize Terraform
-2. Deploy client node infrastructure
-3. Prepare configurations locally (auto-detects RPC URLs from main deployment)
-4. Deploy configurations to remote client
+1. Deploy client node infrastructure
+2. Prepare configurations locally (auto-detects RPC URLs from main deployment)
+3. Deploy configurations to remote client
+4. **Prepare binaries (backup/restore or build)** - Optimized binary handling
 5. Run setup script (bootstrap + configuration + automated testing)
 6. Report completion status
 
@@ -37,6 +37,33 @@ This single command will:
 ```bash
 make help              # Show all available commands
 ```
+
+## ⚡ Binary Optimization
+
+The client node deployment now includes **binary backup/restore optimization** similar to the network node deployment:
+
+### How It Works
+- **First deployment**: Builds binaries from source and backs them up locally
+- **Subsequent deployments**: Restores pre-built binaries (saves 5-10 minutes)
+- **Automatic fallback**: Falls back to building if binaries are missing
+
+### Binary Management Commands
+```bash
+# Prepare binaries (backup/restore or build)
+make prepare-binaries
+
+# Backup binaries from client to local storage
+make backup-binaries
+
+# Restore binaries from local storage to client
+make restore-binaries
+```
+
+### Benefits
+- **Faster deployments**: Skip compilation on subsequent deployments
+- **Consistent binaries**: Use the same tested binaries across deployments
+- **Reduced resource usage**: Less CPU/memory usage on client nodes
+- **Better reliability**: Avoid compilation issues on different environments
 
 ### Step-by-Step Deployment
 
@@ -50,7 +77,10 @@ make apply
 make prepare-configs  # Auto-detects RPC URLs from main deployment
 make deploy-configs   # Copies configs to remote client
 
-# Step 3: Setup client node
+# Step 3: Prepare binaries (optimized)
+make prepare-binaries # Backup/restore or build binaries
+
+# Step 4: Setup client node
 make setup           # Runs bootstrap + configuration + automated tests
 ```
 
@@ -66,11 +96,11 @@ client-node/
 ├── scripts/
 │   ├── prepare-configs.sh    # Prepare configurations locally
 │   ├── deploy-configs.sh     # Deploy configurations to remote
-│   └── client-setup.sh       # Legacy setup script (unused)
+│   └── prepare-binaries.sh    # Binary backup/restore management
 ├── config/                    # Generated configurations
 │   ├── test.env              # Test environment configuration
 │   └── setup.sh             # Combined setup script
-└── bootstrap.sh              # Legacy bootstrap script (unused)
+└── binaries/                 # Local binary storage (auto-created)
 ```
 
 ## 🔧 Configuration

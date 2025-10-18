@@ -43,6 +43,21 @@ install_services() {
     chown ubuntu:ubuntu /data/logs/fastevm-execution.log
     chmod 644 /data/logs/fastevm-execution.log
     
+    # Load environment variables from node.env file
+    log_info "Loading environment variables from node.env file..."
+    if [ -f "/data/node.env" ]; then
+        source /data/node.env
+        # Remove quotes from BOOTNODES if present
+        log_success "Environment variables loaded from node.env"
+        log_info "Node index: $NODE_INDEX"
+        log_info "Bootnodes: $BOOTNODES"
+    else
+        log_warning "node.env file not found at /data/node.env"
+        # Set default values
+        NODE_INDEX="0"
+        BOOTNODES=""
+    fi
+    
     tee /etc/systemd/system/fastevm-execution.service > /dev/null << 'EOF'
 [Unit]
 Description=FastEVM Execution Client
@@ -53,32 +68,25 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/data
-ExecStart=/usr/local/bin/fastevm-execution \
-    node \
+EnvironmentFile=/data/node.env
+Environment=HTTP_PORT=8545
+Environment=WS_PORT=8546
+Environment=ENGINE_PORT=8551
+Environment=P2P_PORT=30303
+ExecStart=/usr/local/bin/fastevm-execution node \
     --chain /data/genesis.json \
     --datadir /data/execution \
     --engine.always-process-payload-attributes-on-canonical-head \
     --http \
     --http.api eth,net,web3,admin,debug \
     --http.addr 0.0.0.0 \
-    --http.port 8545 \
+    --http.port ${HTTP_PORT} \
     --http.corsdomain "*" \
     --ws \
     --ws.api eth,net,web3,admin,debug \
     --ws.addr 0.0.0.0 \
-    --ws.port 8546 \
+    --ws.port ${WS_PORT} \
     --ws.origins "*" \
-    --authrpc.addr 0.0.0.0 \
-    --authrpc.port 8551 \
-    --authrpc.jwtsecret /data/execution/jwt.hex \
-    --addr 0.0.0.0 \
-    --port 30303 \
-    --discovery.addr 0.0.0.0 \
-    --discovery.port 30303 \
-    --p2p-secret-key /data/execution/p2p/secret.key \
-    --enable-tx-subscription \
-    --committed-subdags-per-block 30 \
-    --block-build-interval-ms 100 \
     --txpool.max-new-txns 102400 \
     --txpool.max-account-slots 102400 \
     --txpool.max-pending-txns 102400 \
@@ -87,6 +95,18 @@ ExecStart=/usr/local/bin/fastevm-execution \
     --txpool.max-new-pending-txs-notifications 102400 \
     --txpool.queued-max-count 102400 \
     --txpool.queued-max-size 128 \
+    --authrpc.addr 0.0.0.0 \
+    --authrpc.port ${ENGINE_PORT} \
+    --authrpc.jwtsecret /data/execution/jwt.hex \
+    --addr 0.0.0.0 \
+    --port ${P2P_PORT} \
+    --discovery.addr 0.0.0.0 \
+    --discovery.port ${P2P_PORT} \
+    --p2p-secret-key /data/execution/p2p/secret.key \
+    --bootnodes ${BOOTNODES} \
+    --enable-tx-subscription \
+    --committed-subdags-per-block 30 \
+    --block-build-interval-ms 100 \
     -vvv
 Restart=always
 RestartSec=10
