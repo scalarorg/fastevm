@@ -31,12 +31,13 @@ log_warning() {
 if [ -f "/tmp/fastevm-config/node.env" ]; then
     log_info "Loading environment variables from node.env file..."
     source /tmp/fastevm-config/node.env
+    cp /tmp/fastevm-config/node.env /data/node.env
     log_success "Environment variables loaded successfully"
 else
     log_error "node.env file not found at /tmp/fastevm-config/node.env"
     exit 1
 fi
-
+ls -la /data
 log_info "Starting FastEVM node $NODE_INDEX setup..."
 
 # Step 1: Initialize chain with prefunded accounts
@@ -57,12 +58,13 @@ fi
 
 # Generate prefunded accounts
 log_info "Generating prefunded accounts..."
-if /usr/local/bin/cli allocate-funds \
+if sudo /usr/local/bin/cli allocate-funds \
     --input "/tmp/fastevm-config/genesis.json" \
     --count "${PREFUND_ACCOUNT_COUNT:-100000}" \
     --mnemonic "${TEST_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}" \
     --amount "${PREFUND_BALANCE:-1000000000000000000000}" \
-    --output "/data"; then
+    --output "/data/config"; then
+    sudo chown -R ubuntu:ubuntu /data/config
     log_success "Generated prefunded accounts successfully"
 else
     log_error "Failed to generate prefunded accounts"
@@ -73,11 +75,13 @@ fi
 log_info "Step 2: Generating peer IDs using CLI..."
 
 # Create P2P directory if it doesn't exist
-mkdir -p /data/execution/p2p
+sudo mkdir -p /data/execution/p2p
 
 # Generate peer ID for this node
 log_info "Generating peer ID for node $NODE_INDEX..."
-echo "$P2P_SECRET_KEY" > /data/execution/p2p/secret.key
+echo -n "$P2P_SECRET_KEY" | sudo tee /data/execution/p2p/secret.key > /dev/null
+sudo chmod 600 /data/execution/p2p/secret.key
+sudo chown ubuntu:ubuntu -R /data/execution
 
 if /usr/local/bin/cli show-peer-id --file /data/execution/p2p/secret.key --output /data/execution/p2p/secret.hex; then
     # Remove 0x prefix if present
@@ -113,18 +117,18 @@ for j in $(seq 0 $((NODE_COUNT - 1))); do
             OTHER_PEER_ID=$(cat "$TEMP_PEER_FILE")
             OTHER_PEER_IDS[$j]=$OTHER_PEER_ID
             
-            # Get the IP for the other node (assuming sequential IPs starting from NODE_IP)
-            OTHER_NODE_IP_PART=$(echo "$NODE_IP" | cut -d'.' -f1-3)
-            OTHER_NODE_IP="$OTHER_NODE_IP_PART.$((10 + j))"
+            # Get the actual IP for the other node from ALL_NODE_IPS
+            IFS=' ' read -ra NODE_IPS_ARRAY <<< "$ALL_NODE_IPS"
+            OTHER_NODE_IP="${NODE_IPS_ARRAY[$j]}"
             BOOTNODES="$BOOTNODES,enode://$OTHER_PEER_ID@$OTHER_NODE_IP:$P2P_PORT"
             
             rm -f "$TEMP_SECRET_FILE" "$TEMP_PEER_FILE"
         else
             log_warning "Failed to generate peer ID for node $j, using secret key as fallback"
             OTHER_PEER_IDS[$j]=$OTHER_SECRET_KEY
-            # Get the IP for the other node
-            OTHER_NODE_IP_PART=$(echo "$NODE_IP" | cut -d'.' -f1-3)
-            OTHER_NODE_IP="$OTHER_NODE_IP_PART.$((10 + j))"
+            # Get the actual IP for the other node from ALL_NODE_IPS
+            IFS=' ' read -ra NODE_IPS_ARRAY <<< "$ALL_NODE_IPS"
+            OTHER_NODE_IP="${NODE_IPS_ARRAY[$j]}"
             BOOTNODES="$BOOTNODES,enode://$OTHER_SECRET_KEY@$OTHER_NODE_IP:$P2P_PORT"
         fi
     fi
@@ -146,39 +150,44 @@ else
 fi
 
 # Replace placeholders in execution.toml
-if [ -f "/data/execution.toml" ]; then
+if [ -f "/data/config/execution.toml" ]; then
     log_info "Replacing placeholders in execution.toml..."
-    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" /data/execution.toml
-    sed -i "s|{{BOOTNODES}}|$BOOTNODES|g" /data/execution.toml
+    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" /data/config/execution.toml
+    sed -i "s|{{BOOTNODES}}|$BOOTNODES|g" /data/config/execution.toml
     
     # Replace placeholders for other nodes' peer IDs using stored values
     for j in $(seq 0 $((NODE_COUNT - 1))); do
         if [ $j -ne $NODE_INDEX ] && [ -n "${OTHER_PEER_IDS[$j]}" ]; then
-            sed -i "s|{{PEER_ID_$j}}|${OTHER_PEER_IDS[$j]}|g" /data/execution.toml
+            sed -i "s|{{PEER_ID_$j}}|${OTHER_PEER_IDS[$j]}|g" /data/config/execution.toml
         fi
     done
-    cat /data/execution.toml
     log_success "Replaced placeholders in execution.toml"
+    cat /data/config/execution.toml
 else
     log_warning "execution.toml not found, skipping placeholder replacement"
 fi
 
 # Replace placeholders in node.yml
-if [ -f "/data/node.yml" ]; then
+if [ -f "/data/config/node.yml" ]; then
     log_info "Replacing placeholders in node.yml..."
-    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" /data/node.yml
-    log_success "Replaced placeholders in node.yml"
+    sed -i "s|{{NODE_INDEX}}|$NODE_INDEX|g" /data/config/node.yml
+    sed -i "s|{{HTTP_PORT}}|$HTTP_PORT|g" /data/config/node.yml
+    sed -i "s|{{WS_PORT}}|$WS_PORT|g" /data/config/node.yml
+    sed -i "s|{{JWT_SECRET}}|$JWT_SECRET|g" /data/config/node.yml
+    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" /data/config/node.yml
+    log_success "Replaced placeholders in config/node.yml"
+    cat /data/config/node.yml
 else
-    log_warning "node.yml not found, skipping placeholder replacement"
+    log_warning "config/node.yml not found, skipping placeholder replacement"
 fi
 
 # Step 4: Initialize execution node with genesis
 log_info "Step 4: Initializing execution node with genesis..."
-if [ -f "/data/genesis.json" ] && [ -f "/usr/local/bin/fastevm-execution" ]; then
+if [ -f "/data/config/genesis.json" ] && [ -f "/usr/local/bin/fastevm-execution" ]; then
     log_info "Initializing execution node with genesis..."
-    if /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/genesis.json; then
+    if /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json; then
         log_success "Execution node initialized successfully"
-        cat /data/execution.toml
+        cat /data/config/execution.toml
     else
         log_warning "Execution node initialization completed with warnings"
     fi
@@ -206,28 +215,6 @@ echo "  PEER_ID: $PEER_ID"
 echo "  BOOTNODES: $BOOTNODES"
 echo ""
 
-# Display execution.toml configuration if it exists
-if [ -f "/data/execution.toml" ]; then
-    log_info "Execution Configuration (execution.toml):"
-    echo "----------------------------------------"
-    cat /data/execution.toml
-    echo "----------------------------------------"
-    echo ""
-else
-    log_warning "execution.toml not found at /data/execution.toml"
-fi
-
-# Display node.yml configuration if it exists
-if [ -f "/data/node.yml" ]; then
-    log_info "Consensus Configuration (node.yml):"
-    echo "----------------------------------------"
-    cat /data/node.yml
-    echo "----------------------------------------"
-    echo ""
-else
-    log_warning "node.yml not found at /data/node.yml"
-fi
-
 # Display network configuration
 log_info "Network Configuration:"
 echo "  RPC Endpoints:"
@@ -238,5 +225,9 @@ echo "  P2P Configuration:"
 echo "    Peer ID: $PEER_ID"
 echo "    P2P Port: $P2P_PORT"
 echo ""
+
+# Install systemd services
+log_info "Installing systemd services..."
+sudo bash /tmp/fastevm-config/service.sh install
 
 log_success "Node $NODE_INDEX is ready for service startup!"

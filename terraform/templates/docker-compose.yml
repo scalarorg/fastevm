@@ -14,7 +14,7 @@ services:
     volumes:
       - execution-data:/data
       - ./execution.toml:/data/execution.toml
-      - ./genesis.json:/data/genesis.json
+      - ./genesis.json:/data/config/genosis.json
       - ./jwt.hex:/data/jwt.hex
     networks:
       fastevm-network:
@@ -32,7 +32,7 @@ services:
       - ./node.yml:/app/data/node.yml
       - ./committees.yml:/app/data/committees.yml
       - ./parameters.yml:/app/data/parameters.yml
-      - ./genesis.json:/app/data/genesis.json
+      - ./genesis.json:/app/data/config/genosis.json
     networks:
       fastevm-network:
         ipv4_address: ${NODE_IP}

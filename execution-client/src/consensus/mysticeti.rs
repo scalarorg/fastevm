@@ -228,9 +228,9 @@ where
                 new_built_payload = built_payload_stream.next() => {
                     match new_built_payload {
                         Some(new_payload) => {
-                            debug!("New built payload with number {}, put it to the buffer. Payload buffer size: {:?}",
+                            debug!("New built payload with number {}, put it to the buffer. Current payload buffer size: {:?}",
                                 new_payload.block().header().number(),
-                                self.payload_buffer.len());
+                                self.payload_buffer.len() + 1);
                             self.last_built_payload.replace(new_payload.clone());
                             self.payload_buffer.push_back(new_payload);
                             if self.last_processing_payload.is_none() {

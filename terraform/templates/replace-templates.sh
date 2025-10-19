@@ -52,10 +52,35 @@ replace_placeholders() {
     content=$(echo "$content" | sed "s/{{START_IP}}/$START_IP/g")
     content=$(echo "$content" | sed "s/{{END_IP}}/$END_IP/g")
     content=$(echo "$content" | sed "s/{{NODE_COUNT}}/$NODE_COUNT/g")
-    content=$(echo "$content" | sed "s/{{AUTHORITIES_LIST}}/$AUTHORITIES_LIST/g")
+    content=$(echo "$content" | sed "s/{{LOG_LEVEL}}/$LOG_LEVEL/g")
     
-    # Write the output file
-    echo "$content" > "$output_file"
+    # Handle AUTHORITIES_LIST specially for multi-line content
+    if echo "$content" | grep -q "{{AUTHORITIES_LIST}}"; then
+        if [ -n "$AUTHORITIES_LIST" ]; then
+            # Use a temporary file for multi-line replacement
+            local temp_file=$(mktemp)
+            echo "$content" > "$temp_file"
+            
+            # Replace the placeholder with the actual authorities list
+            # Use awk for better multi-line handling
+            awk -v authorities="$AUTHORITIES_LIST" '
+            /{{AUTHORITIES_LIST}}/ {
+                print authorities
+                next
+            }
+            { print }
+            ' "$temp_file" > "$output_file"
+            
+            rm -f "$temp_file"
+        else
+            # Remove the placeholder if AUTHORITIES_LIST is empty
+            content=$(echo "$content" | sed "/{{AUTHORITIES_LIST}}/d")
+            echo "$content" > "$output_file"
+        fi
+    else
+        # No AUTHORITIES_LIST placeholder, write content as-is
+        echo "$content" > "$output_file"
+    fi
     
     log_success "Generated $output_file"
 }

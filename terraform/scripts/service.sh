@@ -50,15 +50,13 @@ install_services() {
         # Remove quotes from BOOTNODES if present
         log_success "Environment variables loaded from node.env"
         log_info "Node index: $NODE_INDEX"
-        log_info "Bootnodes: $BOOTNODES"
     else
         log_warning "node.env file not found at /data/node.env"
         # Set default values
         NODE_INDEX="0"
-        BOOTNODES=""
     fi
     
-    tee /etc/systemd/system/fastevm-execution.service > /dev/null << 'EOF'
+    tee /etc/systemd/system/fastevm-execution.service > /dev/null << EOF
 [Unit]
 Description=FastEVM Execution Client
 After=network.target
@@ -74,7 +72,7 @@ Environment=WS_PORT=8546
 Environment=ENGINE_PORT=8551
 Environment=P2P_PORT=30303
 ExecStart=/usr/local/bin/fastevm-execution node \
-    --chain /data/genesis.json \
+    --chain /data/config/genesis.json \
     --datadir /data/execution \
     --engine.always-process-payload-attributes-on-canonical-head \
     --http \
@@ -107,7 +105,7 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --enable-tx-subscription \
     --committed-subdags-per-block 30 \
     --block-build-interval-ms 100 \
-    -vvv
+    -$LOG_LEVEL
 Restart=always
 RestartSec=10
 StandardOutput=append:/data/logs/fastevm-execution.log
@@ -135,7 +133,7 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/data
-ExecStart=/bin/bash -c '/usr/local/bin/fastevm-consensus start --config /data/node.yml >> /data/logs/fastevm-consensus.log 2>&1'
+ExecStart=/bin/bash -c '/usr/local/bin/fastevm-consensus start --config /data/config/node.yml >> /data/logs/fastevm-consensus.log 2>&1'
 Restart=always
 RestartSec=10
 StandardOutput=append:/data/logs/fastevm-consensus.log

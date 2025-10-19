@@ -48,7 +48,7 @@ use hdwallet as _;
 use hex as _;
 use reth_network_peers as _;
 use reth_rpc_layer as _;
-use secp256k1 as _;
+use secp256k1::{self as _};
 use serde_json as _;
 use sha2 as _;
 

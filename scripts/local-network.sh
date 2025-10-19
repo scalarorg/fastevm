@@ -410,9 +410,9 @@ start_execution_node() {
     # Build bootnodes string
     local bootnodes=""
     local debug_level="-vvv"
-    # if [ "$node_index" = "1" ]; then
-    #     debug_level="-vvvvv"
-    # fi
+    if [ "$node_index" = "1" ]; then
+        debug_level="-vvvv"
+    fi
     for i in {1..4}; do
         if [ $i -ne $node_index ]; then
             local peer_hex_file="$DATA_DIR/execution$i/p2p/secret.hex"

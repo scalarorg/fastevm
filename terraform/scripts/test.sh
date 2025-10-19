@@ -178,7 +178,7 @@ verify_genesis_consistency() {
         # Use SSH to copy genesis.json from remote node
         if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
             -i "$TERRAFORM_DIR/fastevm-deploy-key" ubuntu@"$node_ip" \
-            "cat /data/genesis.json" > "$genesis_file" 2>/dev/null; then
+            "cat /data/config/genosis.json" > "$genesis_file" 2>/dev/null; then
             log_success "Downloaded genesis.json from $node_name"
             genesis_files+=("$genesis_file")
         else

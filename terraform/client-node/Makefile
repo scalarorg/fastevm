@@ -1,7 +1,7 @@
 # FastEVM Client Node Management Makefile
 # Standalone client node deployment and management
 
-.PHONY: help init plan apply destroy status connect setup-config run-test run-scan run-batch run-all update-code clean-logs clean-all bootstrap quick-start prepare-binaries backup-binaries restore-binaries
+.PHONY: help init plan apply destroy status connect setup-config run-test run-scan run-batch run-all update-code clean-logs clean-all bootstrap quick-start prepare-binaries backup-binaries restore-binaries check-terraform
 
 # Default target
 help: ## Show available commands
@@ -9,6 +9,7 @@ help: ## Show available commands
 	@echo "=============================="
 	@echo ""
 	@echo "Deployment Commands:"
+	@echo "  check-terraform   Check if terraform is available"
 	@echo "  init              Initialize Terraform"
 	@echo "  plan              Plan deployment"
 	@echo "  apply             Deploy client node"
@@ -44,6 +45,7 @@ CLIENT_SSH_KEY := client-deploy-key
 CLIENT_USER := ubuntu
 CLIENT_PROJECT_DIR := /home/$(CLIENT_USER)/fastevm
 CLIENT_CONFIG_DIR := /home/$(CLIENT_USER)/test-config
+ENV_FILE = ../fastevm.env
 
 # Initialize Terraform
 init: ## Initialize Terraform
@@ -102,7 +104,7 @@ status: ## Show deployment status
 				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la /usr/local/bin/fastevm-test 2>/dev/null && echo "✅ Binary ready" || echo "❌ Binary not found"'; \
 				echo ""; \
 				echo "Configuration:"; \
-				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la $(CLIENT_CONFIG_DIR)/fastevm.env 2>/dev/null && echo "✅ Config ready" || echo "❌ Config not found"'; \
+				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la $(ENV_FILE) 2>/dev/null && echo "✅ Config ready" || echo "❌ Config not found"'; \
 			else \
 				echo "⏳ Setup still running..."; \
 				echo "Recent setup log:"; \
@@ -113,65 +115,30 @@ status: ## Show deployment status
 		echo "❌ No Terraform state found. Run 'make apply' first."; \
 	fi
 
-# Terraform command detection
-TERRAFORM_CMD := $(shell which terraform 2>/dev/null || echo "/opt/homebrew/bin/terraform")
-ifeq ($(wildcard $(TERRAFORM_CMD)),)
-TERRAFORM_CMD := $(shell which terraform 2>/dev/null || echo "/usr/local/bin/terraform")
-endif
-ifeq ($(wildcard $(TERRAFORM_CMD)),)
-TERRAFORM_CMD := terraform
-endif
+# Terraform command detection - use PATH to find terraform
+TERRAFORM_CMD := $(shell which terraform 2>/dev/null || echo "terraform")
 
-# Common variables and macros
-CLIENT_IP_CMD = $(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'
-SSH_OPTS = -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
-SSH_CMD = ssh $(SSH_OPTS) -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@
-TEST_SLEEP_DURATION = 120
+# Check if terraform is available
+check-terraform:
+	@if ! command -v terraform >/dev/null 2>&1; then \
+		echo "❌ Terraform not found in PATH. Please install terraform first."; \
+		echo "   Visit: https://developer.hashicorp.com/terraform/downloads"; \
+		exit 1; \
+	fi
+	@echo "✅ Terraform found: $$(which terraform)"
+
+# Common variables
+TEST_SLEEP_DURATION = $(TEST_WAITING_TIME_SECONDS)
 
 # Get client IP and validate it exists
 define GET_CLIENT_IP
-	CLIENT_IP=$$($(CLIENT_IP_CMD)); \
+	CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found. Run 'make apply' first."; \
 		exit 1; \
 	fi
 endef
 
-# Get current block number from Ethereum node
-define GET_CURRENT_BLOCK
-	echo "🔍 Getting current block number..."; \
-	CURRENT_BLOCK=$$($(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/fastevm.env && curl -s -X POST -H "Content-Type: application/json" --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" $$RPC_URL1 | jq -r ".result" | xargs printf "%d\n" 2>/dev/null || echo "0"'); \
-	echo "📊 Current block number: $$CURRENT_BLOCK"
-endef
-
-# Execute test command on client with timeout and error handling
-define RUN_TEST
-	echo "$(1)"; \
-	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/fastevm.env && timeout $(2) $(3)'; \
-	if [ $$? -eq 0 ]; then \
-		echo "✅ $(4)"; \
-	else \
-		echo "$(5)"; \
-	fi
-endef
-
-# Execute scan test with BLOCK_NUMBER environment variable and START_NUMBER/COUNTER parameters
-# Usage: $(call RUN_SCAN_WITH_BLOCK,message,start_number,counter,command,success_msg,error_msg)
-define RUN_SCAN_WITH_BLOCK
-	echo "$(1)"; \
-	echo "Using parameters: START_NUMBER=$(2) COUNTER=$(3)"; \
-	if [ -z "$(2)" ] || [ "$(2)" = "0" ]; then \
-		echo "❌ Error: START_NUMBER is empty or 0, cannot proceed with scan"; \
-		echo "$(6)"; \
-		exit 1; \
-	fi; \
-	$(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && export ENV_FILE=~/client-config/fastevm.env && export BLOCK_NUMBER=$(2) && timeout 60 $(4) --start $(2) --count $(3)'; \
-	if [ $$? -eq 0 ]; then \
-		echo "✅ $(5)"; \
-	else \
-		echo "$(6)"; \
-	fi
-endef
 
 # SSH connection helper - handles host key management
 define SSH_CONNECT
@@ -179,8 +146,9 @@ define SSH_CONNECT
 	echo "🔑 Managing SSH host keys for $$CLIENT_IP..."; \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	$(SSH_CMD)$$CLIENT_IP $(1)
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP $(1)
 endef
+
 
 # Connect to client node
 connect: ## Connect to client node via SSH
@@ -205,16 +173,13 @@ setup-config: ## Setup test configuration on client node
 		echo "Or wait a few minutes and try again."; \
 		exit 1; \
 	fi; \
-	CONFIG_EXISTS=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls $(CLIENT_CONFIG_DIR)/fastevm.env 2>/dev/null && echo "yes" || echo "no"'); \
-	if [ "$$CONFIG_EXISTS" = "no" ]; then \
-		echo "📝 Creating test configuration..."; \
-		ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'mkdir -p $(CLIENT_CONFIG_DIR) && cp $(CLIENT_CONFIG_DIR)/fastevm.env.example $(CLIENT_CONFIG_DIR)/fastevm.env 2>/dev/null || echo "Configuration files will be created during setup"'; \
-	fi; \
+	CONFIG_EXISTS=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls $(ENV_FILE) 2>/dev/null && echo "yes" || echo "no"'); \
+	
 	echo "✅ Configuration ready"; \
 	echo ""; \
 	echo "📝 Next steps:"; \
 	echo "  1. SSH to client: make connect"; \
-	echo "  2. Edit config: nano $(CLIENT_CONFIG_DIR)/fastevm.env"; \
+	echo "  2. Edit config: nano $(ENV_FILE)"; \
 	echo "  3. Update RPC URLs with actual node IPs from your FastEVM deployment"; \
 	echo "  4. Run tests: make run-scan START_NUMBER=10 COUNTER=5"
 
@@ -255,7 +220,7 @@ run-scan: ## Run block scan test on client node (usage: make run-scan START_NUMB
 	fi; \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && export ENV_FILE=~/client-config/fastevm.env && fastevm-test scan $(if $(START_NUMBER),--start $(START_NUMBER)) $(if $(COUNTER),--count $(COUNTER))'
+	./scripts/run-test.sh run-scan-direct "$(START_NUMBER)" "$(COUNTER)"
 
 # Run remote batch test
 run-batch: ## Run batch transaction test on client node
@@ -318,7 +283,7 @@ setup: ## Run setup script on remote client node (bootstrap + configure)
 	@echo "🚀 Running setup script on client node..."
 	@$(GET_CLIENT_IP); \
 	echo "Executing setup script on $$CLIENT_IP..."; \
-	$(SSH_CMD)$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && bash ~/client-config/setup.sh'; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && bash ~/client-config/setup.sh'; \
 	if [ $$? -eq 0 ]; then \
 		echo "✅ Setup script executed successfully"; \
 		echo "⏳ Waiting for setup to complete..."; \
@@ -327,23 +292,11 @@ setup: ## Run setup script on remote client node (bootstrap + configure)
 		exit 1; \
 	fi
 
+
 # Automated test sequence (run after bootstrap)
 auto-test: ## Run automated test sequence (get block -> batch -> sleep -> scan)
-	echo "🚀 Running automated test sequence..."; \
-	$(GET_CLIENT_IP); \
-	echo "Running tests on $$CLIENT_IP..."; \
-	$(call GET_CURRENT_BLOCK); \
-	$(call RUN_TEST,"2️⃣ Running batch transaction test...",300,fastevm-test batch,"Batch transaction test completed","❌ Batch transaction test failed"); \
-	echo "⏳ Waiting $(TEST_SLEEP_DURATION) seconds for transactions to be processed..."; \
-	sleep $(TEST_SLEEP_DURATION); \
-	CURRENT_BLOCK=$$($(SSH_CMD)$$CLIENT_IP 'cd /home/ubuntu && source ~/client-config/fastevm.env && curl -s -X POST -H "Content-Type: application/json" --data "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}" $$RPC_URL1 | jq -r ".result" | xargs printf "%d\n" 2>/dev/null || echo "0"'); \
-	echo "Current block number: $$CURRENT_BLOCK"; \
-	if [ -z "$$CURRENT_BLOCK" ] || [ "$$CURRENT_BLOCK" = "0" ]; then \
-		echo "⚠️ Warning: Current block is empty or 0, using block 1 as fallback"; \
-		CURRENT_BLOCK=1; \
-	fi; \
-	$(call RUN_SCAN_WITH_BLOCK,"3️⃣ Running final block scan test...",$$CURRENT_BLOCK,500,fastevm-test scan,"Final block scan test completed","⚠️ Final block scan test had issues"); \
-	echo "🎉 Automated test sequence completed!"
+	./scripts/run-test.sh auto-test $(TEST_SLEEP_DURATION)
+
 # Quick start (init + apply + prepare-configs + deploy-configs + setup)
 deploy-client: init apply prepare-configs deploy-configs setup #auto-test ## Quick start: complete client node setup
 	@echo "🎉 Deploy client completed!"
@@ -357,8 +310,8 @@ outputs: ## Show all outputs
 # Test targets (run on client node)
 test-scan-all: ## Run block scan all test
 	@echo "🔍 Running block scan all test..."
-	@if [ -f ../fastevm.env ]; then \
-		source ../fastevm.env && fastevm-test scan-all; \
+	@if [ -f $(ENV_FILE) ]; then \
+		source $(ENV_FILE) && fastevm-test scan-all; \
 	else \
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \
@@ -366,8 +319,8 @@ test-scan-all: ## Run block scan all test
 
 test-batch: ## Run batch transaction test
 	@echo "📦 Running batch transaction test..."
-	@if [ -f ../fastevm.env ]; then \
-		source ../fastevm.env && fastevm-test batch; \
+	@if [ -f $(ENV_FILE) ]; then \
+		source $(ENV_FILE) && fastevm-test batch; \
 	else \
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \
@@ -375,8 +328,8 @@ test-batch: ## Run batch transaction test
 
 test-range: ## Run block range test
 	@echo "📊 Running block range test..."
-	@if [ -f ../fastevm.env ]; then \
-		source ../fastevm.env && fastevm-test range; \
+	@if [ -f $(ENV_FILE) ]; then \
+		source $(ENV_FILE) && fastevm-test range; \
 	else \
 		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
 		exit 1; \
@@ -392,14 +345,14 @@ prepare-binaries: ## Prepare and install binaries (backup/restore or build)
 backup-binaries: ## Backup binaries from client to local storage
 	@echo "💾 Backing up client binaries..."
 	@$(GET_CLIENT_IP)
-	@CLIENT_IP=$$($(CLIENT_IP_CMD)); \
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	./scripts/prepare-binaries.sh backup $$CLIENT_IP
 	@echo "✅ Client binaries backed up successfully"
 
 restore-binaries: ## Restore binaries from local storage to client
 	@echo "📦 Restoring client binaries..."
 	@$(GET_CLIENT_IP)
-	@CLIENT_IP=$$($(CLIENT_IP_CMD)); \
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	./scripts/prepare-binaries.sh restore $$CLIENT_IP
 	@echo "✅ Client binaries restored successfully"
 

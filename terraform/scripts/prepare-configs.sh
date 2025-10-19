@@ -10,6 +10,15 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 FASTEVM_DIR="$(dirname "$PROJECT_ROOT")"
 CONFIG_DIR="${PROJECT_ROOT}/config"
 DEPLOY_DIR="${PROJECT_ROOT}/deploy"
+
+# Load configuration from fastevm.env file if it exists
+FASTEVM_ENV_FILE="${PROJECT_ROOT}/fastevm.env"
+if [ -f "$FASTEVM_ENV_FILE" ]; then
+    echo "Loading configuration from $FASTEVM_ENV_FILE"
+    source "$FASTEVM_ENV_FILE"
+fi
+
+LOG_LEVEL=${LOG_LEVEL:-vvv}
 NODE_COUNT=${NODE_COUNT:-4}
 PROJECT_NAME=${PROJECT_NAME:-"fastevm"}
 GITHUB_REPO=${GITHUB_REPO:-"https://github.com/scalarorg/fastevm.git"}
@@ -97,42 +106,40 @@ detect_terraform_info() {
                 return 0
             fi
         fi
+    fi
+    
+    # Fallback: try to get from terraform.tfvars
+    if [ -f "terraform.tfvars" ]; then
+        log_info "Reading configuration from terraform.tfvars..."
+        NODE_COUNT_TF=$(grep -E '^\s*node_count\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
+        PROJECT_NAME_TF=$(grep -E '^\s*project_name\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
         
-        # Fallback: try to get from terraform.tfvars
-        if [ -f "terraform.tfvars" ]; then
-            log_info "Reading configuration from terraform.tfvars..."
-            NODE_COUNT_TF=$(grep -E '^\s*node_count\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
-            PROJECT_NAME_TF=$(grep -E '^\s*project_name\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
-            
-            if [ -n "$NODE_COUNT_TF" ]; then
-                NODE_COUNT="$NODE_COUNT_TF"
-                log_info "Detected node count from terraform.tfvars: $NODE_COUNT"
-            fi
-            
-            if [ -n "$PROJECT_NAME_TF" ]; then
-                PROJECT_NAME="$PROJECT_NAME_TF"
-                log_info "Detected project name from terraform.tfvars: $PROJECT_NAME"
-            fi
+        if [ -n "$NODE_COUNT_TF" ]; then
+            NODE_COUNT="$NODE_COUNT_TF"
+            log_info "Detected node count from terraform.tfvars: $NODE_COUNT"
         fi
         
-        # Fallback: try to get from variables.tf
-        if [ -f "variables.tf" ]; then
-            log_info "Reading default values from variables.tf..."
-            NODE_COUNT_DEFAULT=$(grep -A 5 'variable "node_count"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
-            PROJECT_NAME_DEFAULT=$(grep -A 5 'variable "project_name"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
-            
-            if [ -n "$NODE_COUNT_DEFAULT" ]; then
-                NODE_COUNT="$NODE_COUNT_DEFAULT"
-                log_info "Using default node count from variables.tf: $NODE_COUNT"
-            fi
-            
-            if [ -n "$PROJECT_NAME_DEFAULT" ]; then
-                PROJECT_NAME="$PROJECT_NAME_DEFAULT"
-                log_info "Using default project name from variables.tf: $PROJECT_NAME"
-            fi
+        if [ -n "$PROJECT_NAME_TF" ]; then
+            PROJECT_NAME="$PROJECT_NAME_TF"
+            log_info "Detected project name from terraform.tfvars: $PROJECT_NAME"
         fi
-    else
-        log_warning "Terraform command not found. Using default values."
+    fi
+    
+    # Fallback: try to get from variables.tf
+    if [ -f "variables.tf" ]; then
+        log_info "Reading default values from variables.tf..."
+        NODE_COUNT_DEFAULT=$(grep -A 5 'variable "node_count"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
+        PROJECT_NAME_DEFAULT=$(grep -A 5 'variable "project_name"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
+        
+        if [ -n "$NODE_COUNT_DEFAULT" ]; then
+            NODE_COUNT="$NODE_COUNT_DEFAULT"
+            log_info "Using default node count from variables.tf: $NODE_COUNT"
+        fi
+        
+        if [ -n "$PROJECT_NAME_DEFAULT" ]; then
+            PROJECT_NAME="$PROJECT_NAME_DEFAULT"
+            log_info "Using default project name from variables.tf: $PROJECT_NAME"
+        fi
     fi
 }
 
@@ -354,6 +361,9 @@ ENGINE_PORT=$ENGINE_PORT
 CONSENSUS_PORT=$CONSENSUS_PORT
 P2P_PORT=$P2P_PORT
 
+# All node IPs for bootnodes generation
+ALL_NODE_IPS="${NODE_IPS[*]}"
+
 # Generated secrets
 JWT_SECRET="${JWT_SECRETS[$i]}"
 P2P_SECRET_KEY="${P2P_SECRET_KEYS[$i]}"
@@ -361,12 +371,62 @@ P2P_PEER_ID="{{PEER_ID_$i}}"
 
 PEER_ADDRESSES="$PEER_ADDRESSES"
 
-# Network configuration
-END_IP=$((10 + NODE_COUNT - 1))
+# Logging configuration
+LOG_LEVEL="${LOG_LEVEL}"
 EOF
     
     log_success "Generated .env file for node $i"
 done
+
+# Generate committees.yml file (only once, not per node)
+log_info "Generating committees.yml file..."
+cat > "$CONFIG_DIR/committees.yml" << EOF
+epoch: 0
+authorities:
+$AUTHORITIES_LIST
+
+docker_network:
+  base_ip: 10.0.0
+  start_ip: 10
+  end_ip: $((10 + NODE_COUNT - 1))
+  port: 26657
+quorum_threshold: $NODE_COUNT
+validity_threshold: $NODE_COUNT
+EOF
+
+log_success "Generated committees.yml with correct IP addresses"
+
+# Generate parameters.yml file
+log_info "Generating parameters.yml file..."
+cat > "$CONFIG_DIR/parameters.yml" << EOF
+leader_timeout: {
+  secs: 0,
+  nanos: 200000000
+}
+min_round_delay: {
+  secs: 0,
+  nanos: 100000000
+}
+max_forward_time_drift: {
+  secs: 0,
+  nanos: 500000000
+}
+max_blocks_per_sync: 32
+max_blocks_per_fetch: 1000
+sync_last_known_own_block_timeout: {
+  secs: 5,
+  nanos: 0
+}
+round_prober_interval_ms: 5000
+round_prober_request_timeout_ms: 4000
+propagation_delay_stop_proposal_threshold: 5
+dag_state_cached_rounds: 500
+commit_sync_parallel_fetches: 8
+commit_sync_batch_size: 100
+commit_sync_batches_ahead: 32
+EOF
+
+log_success "Generated parameters.yml file"
 
 # Generate deployment packages
 log_info "Generating deployment packages..."
@@ -379,6 +439,8 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     
     # Copy shared files
     cp "$CONFIG_DIR/genesis.json" "$NODE_DIR/"
+    cp "$CONFIG_DIR/committees.yml" "$NODE_DIR/"
+    cp "$CONFIG_DIR/parameters.yml" "$NODE_DIR/"
     
     # Copy configuration templates
     TEMPLATES_DIR="${PROJECT_ROOT}/templates"

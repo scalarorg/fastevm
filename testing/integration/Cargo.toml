@@ -35,6 +35,8 @@ reth-stateless = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.
 reth-tracing = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-tracing" }
 reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie" }
 reth-trie-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie-db" }
+reth-cli-util = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-cli-util" }
+
 revm = { version = "28.0.1", default-features = false }
 
 alloy = { workspace = true }

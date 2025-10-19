@@ -7,11 +7,11 @@ set -e
 CLIENT_CONFIG_DIR="/home/ubuntu/client-config"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_NODE_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_ROOT="$(dirname "$(dirname "$CLIENT_NODE_DIR")")"
+PROJECT_ROOT="$(dirname "$CLIENT_NODE_DIR")"
 CONFIG_DIR="${CLIENT_NODE_DIR}/config"
 
 # Load configuration from environment file
-CONFIG_ENV_FILE="${SCRIPT_DIR}/../../fastevm.env"
+CONFIG_ENV_FILE="${PROJECT_ROOT}/fastevm.env"
 
 if [ -f "$CONFIG_ENV_FILE" ]; then
     echo "Loading configuration from $CONFIG_ENV_FILE"
@@ -55,18 +55,19 @@ detect_rpc_urls() {
     
     if [ -f "${PROJECT_ROOT}/deployment-info.json" ]; then
         log_info "Using deployment-info.json for RPC URLs"
-        RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-        RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-        RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-        RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        # For client node, prioritize external IPs since it's on a separate instance
+        RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
         
-        # If internal IPs not available, try external IPs
+        # If external IPs not available, try internal IPs as fallback
         if [ -z "$RPC_URL1" ] || [ "$RPC_URL1" = "null" ]; then
-            log_warning "Internal IPs not found, trying external IPs..."
-            RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-            RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-            RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-            RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            log_warning "External IPs not found, trying internal IPs as fallback..."
+            RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
         fi
     elif [ -f "${PROJECT_ROOT}/terraform.tfstate" ]; then
         log_info "Using terraform.tfstate for RPC URLs"
@@ -89,10 +90,20 @@ detect_rpc_urls() {
             exit 1
         fi
         
-        RPC_URL1=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-1"].internal_ip // empty' 2>/dev/null || echo "")
-        RPC_URL2=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-2"].internal_ip // empty' 2>/dev/null || echo "")
-        RPC_URL3=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-3"].internal_ip // empty' 2>/dev/null || echo "")
-        RPC_URL4=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-4"].internal_ip // empty' 2>/dev/null || echo "")
+        # For client node, prioritize external IPs since it's on a separate instance
+        RPC_URL1=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-1"].external_ip // empty' 2>/dev/null || echo "")
+        RPC_URL2=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-2"].external_ip // empty' 2>/dev/null || echo "")
+        RPC_URL3=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-3"].external_ip // empty' 2>/dev/null || echo "")
+        RPC_URL4=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-4"].external_ip // empty' 2>/dev/null || echo "")
+        
+        # If external IPs not available, try internal IPs as fallback
+        if [ -z "$RPC_URL1" ] || [ "$RPC_URL1" = "null" ]; then
+            log_warning "External IPs not found, trying internal IPs as fallback..."
+            RPC_URL1=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-1"].internal_ip // empty' 2>/dev/null || echo "")
+            RPC_URL2=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-2"].internal_ip // empty' 2>/dev/null || echo "")
+            RPC_URL3=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-3"].internal_ip // empty' 2>/dev/null || echo "")
+            RPC_URL4=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-4"].internal_ip // empty' 2>/dev/null || echo "")
+        fi
         cd "${CLIENT_NODE_DIR}"
     else
         log_error "No deployment information found!"
@@ -116,36 +127,38 @@ create_config_structure() {
     log_success "Configuration directories created"
 }
 
-# Function to generate test environment configuration
-generate_test_env() {
-    log_info "Generating test configuration..."
+# Function to update shared environment configuration
+update_shared_env() {
+    log_info "Updating shared fastevm.env with RPC URLs..."
     
-    cat > "${CONFIG_DIR}/fastevm.env" << EOF
-# FastEVM Client Test Configuration
-# Generated on $(date)
-
-# RPC Endpoints
-RPC_URL1=http://${RPC_URL1}:8545
-RPC_URL2=http://${RPC_URL2}:8545
-RPC_URL3=http://${RPC_URL3}:8545
-RPC_URL4=http://${RPC_URL4}:8545
-
-# Network Configuration
-CHAIN_ID=${CHAIN_ID}
-
-# Test Parameters
-TEST_SENDER_COUNT=${TEST_SENDER_COUNT}
-TEST_TRANSACTION_COUNT=${TEST_TRANSACTION_COUNT}
-TEST_TRANSACTION_VALUE=${TEST_TRANSACTION_VALUE}
-TEST_MNEMONIC="${TEST_MNEMONIC}"
-TEST_FETCH_NONCE=${TEST_FETCH_NONCE}
-TEST_WAITING_TIME_SECONDS=${TEST_WAITING_TIME_SECONDS}
-TEST_RPC_TIMEOUT=${TEST_RPC_TIMEOUT}
-TEST_MAX_RETRIES=${TEST_MAX_RETRIES}
-TEST_LOG_LEVEL=${TEST_LOG_LEVEL}
-EOF
-
-    log_success "Test configuration generated: ${CONFIG_DIR}/fastevm.env"
+    local shared_env_file="${PROJECT_ROOT}/fastevm.env"
+    
+    if [ ! -f "$shared_env_file" ]; then
+        log_error "Shared fastevm.env not found at: $shared_env_file"
+        log_error "Please ensure the main FastEVM deployment is completed first."
+        exit 1
+    fi
+    
+    # Create backup of original file
+    cp "$shared_env_file" "${shared_env_file}.backup"
+    log_info "Created backup: ${shared_env_file}.backup"
+    
+    # Update RPC URLs in the shared file
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS sed
+        sed -i "" "s|# RPC_URL1=.*|RPC_URL1=http://${RPC_URL1}:8545|g" "$shared_env_file"
+        sed -i "" "s|# RPC_URL2=.*|RPC_URL2=http://${RPC_URL2}:8545|g" "$shared_env_file"
+        sed -i "" "s|# RPC_URL3=.*|RPC_URL3=http://${RPC_URL3}:8545|g" "$shared_env_file"
+        sed -i "" "s|# RPC_URL4=.*|RPC_URL4=http://${RPC_URL4}:8545|g" "$shared_env_file"
+    else
+        # Linux sed
+        sed -i "s|# RPC_URL1=.*|RPC_URL1=http://${RPC_URL1}:8545|g" "$shared_env_file"
+        sed -i "s|# RPC_URL2=.*|RPC_URL2=http://${RPC_URL2}:8545|g" "$shared_env_file"
+        sed -i "s|# RPC_URL3=.*|RPC_URL3=http://${RPC_URL3}:8545|g" "$shared_env_file"
+        sed -i "s|# RPC_URL4=.*|RPC_URL4=http://${RPC_URL4}:8545|g" "$shared_env_file"
+    fi
+    
+    log_success "Shared fastevm.env updated with RPC URLs: $shared_env_file"
 }
 
 # Function to generate combined setup script
@@ -255,7 +268,7 @@ main() {
     
     detect_rpc_urls
     create_config_structure
-    generate_test_env
+    update_shared_env
     generate_setup_script
     
     log_success "Client node configuration preparation completed!"

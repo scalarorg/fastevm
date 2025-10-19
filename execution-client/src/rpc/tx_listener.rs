@@ -28,7 +28,7 @@ use tracing::{debug, error, info, warn};
 
 // Configuration constants for transaction batching
 const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 10 transactions
-const BATCH_TIMEOUT_MS: u64 = 10; // Send batch after 10 ms even if not full
+const BATCH_TIMEOUT_MS: u64 = 50; // Send batch after 10 ms even if not full
 
 /// Validates a raw transaction and converts it to a pool transaction
 /// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error

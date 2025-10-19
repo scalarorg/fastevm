@@ -179,8 +179,6 @@ build_binaries() {
         sudo cp target/release/cli /opt/fastevm-binaries/
         sudo chmod +x /opt/fastevm-binaries/*
         sudo chown -R ubuntu:ubuntu /opt/fastevm-binaries
-        
-        log_success 'Build completed successfully!'
     "
     
     log_success "Binaries built on build node"
