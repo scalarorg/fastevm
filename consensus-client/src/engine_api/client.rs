@@ -6,7 +6,8 @@ use consensus_core::{CertifiedBlocksOutput, CommittedSubDag};
 use jsonrpsee::core::client::SubscriptionClientT;
 use mysten_metrics::monitored_mpsc::UnboundedReceiver;
 use reth_extension::{
-    CommittedSubDag as RethCommittedSubDag, MysticetiConsensusApiClient, TxpoolListenerApiClient,
+    CommittedSubDag as RethCommittedSubDag, MysticetiConsensusApiClient,
+    MysticetiTransactionApiClient,
 };
 use reth_rpc_layer::{secret_to_bearer_header, AuthClientLayer, JwtSecret};
 use tokio::sync::mpsc;
@@ -131,9 +132,10 @@ impl ExecutionClient {
         // Try to connect to the execution client
         let ws_client = self.ws_client().await;
         let http_client = self.http_client();
-        let mut txpool_subscriber = TxpoolListenerApiClient::subscribe_raw_transactions(&ws_client)
-            .await
-            .expect("failed to subscribe");
+        let mut txpool_subscriber =
+            MysticetiTransactionApiClient::subscribe_raw_transactions(&ws_client)
+                .await
+                .expect("failed to subscribe");
 
         info!(
             "Engine API client started successfully. Polling every {}ms",

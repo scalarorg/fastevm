@@ -36,7 +36,7 @@ reth-tracing = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0"
 reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie" }
 reth-trie-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie-db" }
 reth-cli-util = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-cli-util" }
-
+reth-extension = { workspace = true }
 revm = { version = "28.0.1", default-features = false }
 
 alloy = { workspace = true }
@@ -45,6 +45,7 @@ alloy-rlp = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-provider = { workspace = true }
+alloy-transport-http = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-genesis = { workspace = true }
@@ -52,6 +53,7 @@ alloy-signer-local = { workspace = true }
 alloy-signer = { workspace = true }
 
 anyhow.workspace = true
+async-trait.workspace = true
 eyre.workspace = true
 hex.workspace = true
 jsonrpsee.workspace = true
@@ -79,3 +81,11 @@ dotenvy = "0.15.7"
 [[bin]]
 name = "fastevm-test"
 path = "src/bin/fastevm-test.rs"
+
+[[example]]
+name = "rpc_client_example"
+path = "examples/rpc_client_example.rs"
+
+[[example]]
+name = "integration_example"
+path = "examples/integration_example.rs"

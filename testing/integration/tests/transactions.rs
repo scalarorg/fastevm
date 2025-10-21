@@ -187,7 +187,7 @@ async fn broadcast_transaction() -> Result<()> {
     // Create and sign the transfer transaction
     // In evm network nonce start from 0
     let private_key = hex::decode_to_array::<_, 32>(&sender_privkey)?;
-    let tx_envelope = match create_transfer_transaction(
+    let raw_tx = match create_transfer_transaction(
         &private_key,
         &recipient_addr,
         chain_id,
@@ -196,7 +196,7 @@ async fn broadcast_transaction() -> Result<()> {
     )
     .await
     {
-        Ok(envelope) => envelope,
+        Ok(raw_tx) => raw_tx,
         Err(e) => {
             println!("⚠️  Warning: Could not create transaction");
             println!("   Error: {:?}", &e);
@@ -207,10 +207,9 @@ async fn broadcast_transaction() -> Result<()> {
             return Ok(());
         }
     };
-    println!("tx_envelope: {:?}", &tx_envelope);
-    println!("tx_envelope hash: {:?}", &tx_envelope.hash().encode_hex());
+    println!("raw_tx: {:?}", &raw_tx);
     // Broadcast the transaction to the network
-    match provider.send_tx_envelope(tx_envelope).await {
+    match provider.send_raw_transaction(&raw_tx).await {
         Ok(pending_tx) => {
             // Wait for transaction confirmation and retrieve receipt
             match pending_tx.get_receipt().await {
@@ -547,7 +546,7 @@ async fn test_multi_transactions() -> Result<()> {
 
                 // Create and sign the transaction
                 let private_key = hex::decode_to_array::<_, 32>(private_key)?;
-                let tx_envelope = match create_transfer_transaction(
+                let raw_tx = match create_transfer_transaction(
                     &private_key,
                     &recipient_address.to_string(),
                     chain_id,
@@ -556,7 +555,7 @@ async fn test_multi_transactions() -> Result<()> {
                 )
                 .await
                 {
-                    Ok(envelope) => envelope,
+                    Ok(raw_tx) => raw_tx,
                     Err(e) => {
                         println!("   ⚠️  Warning: Could not create transaction");
                         println!("   Error: {:?}", e);
@@ -565,7 +564,7 @@ async fn test_multi_transactions() -> Result<()> {
                 };
 
                 // Send the transaction
-                match provider.send_tx_envelope(tx_envelope).await {
+                match provider.send_raw_transaction(&raw_tx).await {
                     Ok(pending_tx) => {
                         println!("   ✅ Transaction sent successfully to {}", node_name);
 
@@ -776,7 +775,7 @@ async fn test_bulk_transactions() -> Result<()> {
         );
         // Create and sign the transfer transaction
         let private_key = hex::decode_to_array::<_, 32>(sender_privkey)?;
-        let tx_envelope = match create_transfer_transaction(
+        let raw_tx = match create_transfer_transaction(
             &private_key,
             &recipient.to_string(),
             chain_id,
@@ -785,7 +784,7 @@ async fn test_bulk_transactions() -> Result<()> {
         )
         .await
         {
-            Ok(envelope) => envelope,
+            Ok(raw_tx) => raw_tx,
             Err(e) => {
                 println!("   ❌ Failed to create transaction: {:?}", e);
                 failed_transactions += 1;
@@ -794,7 +793,7 @@ async fn test_bulk_transactions() -> Result<()> {
         };
         address_nonces.insert(sender_addr, current_nonce + 1);
         // Broadcast the transaction to the network
-        match provider.send_tx_envelope(tx_envelope).await {
+        match provider.send_raw_transaction(&raw_tx).await {
             Ok(pending_tx) => {
                 println!(
                     "   ✅ Transaction sent successfully (hash: {:?})",

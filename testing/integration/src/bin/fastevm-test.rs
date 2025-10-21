@@ -15,6 +15,7 @@ use std::{
 use testing::address::{generate_account_from_seed, Account};
 use testing::block_scan::{scan_blocks, BlockScanConfig};
 use testing::rpc::get_nonces;
+use testing::rpc_client::{DirectRpcClient, RpcClient};
 use testing::transactions::create_transfer_transaction;
 use tokio::time::sleep;
 
@@ -471,7 +472,7 @@ async fn send_batch_transfer_transactions(
     chain_id: u64,
     accounts: Vec<Account>,
     transactions_per_sender: usize,
-    _transaction_value: u64,
+    send_amount: u64,
     rpc_urls: Vec<String>,
     fetch_nonce: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -485,7 +486,10 @@ async fn send_batch_transfer_transactions(
     let number_of_senders = accounts.len();
 
     // Transaction amount in wei (0.001 ETH)
-    let transaction_amount = 1_000_000_000_000_000_u64;
+    let mut transaction_amount = send_amount;
+    if transaction_amount == 0 {
+        transaction_amount = 1_000_000_000_000_000_u64;
+    }
     let total_transactions = number_of_senders * transactions_per_sender;
     println!("Configuration:");
     println!("  Chain ID: {}", chain_id);
@@ -498,18 +502,15 @@ async fn send_batch_transfer_transactions(
     );
     println!("  RPC URLs: {:?}", rpc_urls);
 
-    // Connect to all RPC endpoints
-    let mut providers = Vec::new();
     let mut available_urls = Vec::new();
+    // Connect to all RPC endpoints
+    let mut rpc_clients = Vec::new();
 
     for (idx, rpc_url) in rpc_urls.iter().enumerate() {
         println!("Connecting to RPC endpoint {}: {}", idx + 1, rpc_url);
-        match alloy_provider::ProviderBuilder::new()
-            .connect(rpc_url)
-            .await
-        {
-            Ok(provider) => {
-                providers.push(provider);
+        match DirectRpcClient::new(rpc_url).await {
+            Ok(client) => {
+                rpc_clients.push(client);
                 available_urls.push(rpc_url.clone());
                 println!("  ✅ Connected to RPC endpoint {}", idx + 1);
             }
@@ -521,14 +522,45 @@ async fn send_batch_transfer_transactions(
                 );
             }
         }
+        // match ProviderRpcClient::new(rpc_url).await {
+        //     Ok(client) => {
+        //         rpc_clients.push(client);
+        //         available_urls.push(rpc_url.clone());
+        //         println!("  ✅ Connected to RPC endpoint {}", idx + 1);
+        //     }
+        //     Err(e) => {
+        //         println!(
+        //             "  ❌ Failed to connect to RPC endpoint {}: {:?}",
+        //             idx + 1,
+        //             e
+        //         );
+        //     }
+        // }
+        // match alloy_provider::ProviderBuilder::new()
+        //     .connect(rpc_url)
+        //     .await
+        // {
+        //     Ok(provider) => {
+        //         providers.push(provider);
+        //         available_urls.push(rpc_url.clone());
+        //         println!("  ✅ Connected to RPC endpoint {}", idx + 1);
+        //     }
+        //     Err(e) => {
+        //         println!(
+        //             "  ❌ Failed to connect to RPC endpoint {}: {:?}",
+        //             idx + 1,
+        //             e
+        //         );
+        //     }
+        // }
     }
 
-    if providers.is_empty() {
+    if rpc_clients.is_empty() {
         println!("⚠️  Warning: No RPC endpoints available. Skipping test...");
         return Ok(());
     }
 
-    println!("Connected to {} RPC endpoints", providers.len());
+    println!("Connected to {} RPC endpoints", rpc_clients.len());
 
     // Determine optimal number of parallel workers (chunks)
     let num_workers = std::cmp::min(8, number_of_senders); // Cap at 8 workers
@@ -541,7 +573,7 @@ async fn send_batch_transfer_transactions(
 
     // Create shared data for parallel processing
     let accounts_arc = std::sync::Arc::new(accounts);
-    let providers_arc = std::sync::Arc::new(providers);
+    let rpc_clients = std::sync::Arc::new(rpc_clients);
     let available_urls_arc = std::sync::Arc::new(available_urls);
 
     // Spawn parallel workers
@@ -556,7 +588,7 @@ async fn send_batch_transfer_transactions(
         }
 
         let accounts_clone = accounts_arc.clone();
-        let providers_clone = providers_arc.clone();
+        let rpc_clients_clone = rpc_clients.clone();
         let urls_clone = available_urls_arc.clone();
         let fetch_nonce_clone = fetch_nonce.clone();
         let handle = tokio::spawn(async move {
@@ -565,7 +597,7 @@ async fn send_batch_transfer_transactions(
                 start_idx,
                 end_idx,
                 accounts_clone,
-                providers_clone,
+                rpc_clients_clone,
                 urls_clone,
                 chain_id,
                 transaction_amount,
@@ -653,12 +685,12 @@ async fn send_batch_transfer_transactions(
 }
 
 /// Process a chunk of accounts in parallel
-async fn process_account_chunk<P>(
+async fn process_account_chunk<C>(
     worker_id: usize,
     start_idx: usize,
     end_idx: usize,
     accounts: std::sync::Arc<Vec<Account>>,
-    providers: std::sync::Arc<Vec<P>>,
+    rpc_clients: std::sync::Arc<Vec<C>>,
     available_urls: std::sync::Arc<Vec<String>>,
     chain_id: u64,
     transaction_amount: u64,
@@ -666,7 +698,7 @@ async fn process_account_chunk<P>(
     fetch_nonce: String,
 ) -> Result<(usize, usize, HashMap<String, usize>), Box<dyn std::error::Error + Send + Sync>>
 where
-    P: alloy_provider::Provider + Send + Sync,
+    C: RpcClient + Sync + Send,
 {
     let mut successful_transactions = 0;
     let mut failed_transactions = 0;
@@ -729,8 +761,8 @@ where
             let recipient_account = &accounts[recipient_idx];
 
             // Randomly select an RPC provider
-            let provider_idx = rand::thread_rng().gen_range(0..providers.len());
-            let provider = &providers[provider_idx];
+            let provider_idx = rand::thread_rng().gen_range(0..rpc_clients.len());
+            let rpc_client = &rpc_clients[provider_idx];
             let rpc_url = &available_urls[provider_idx];
 
             // Track RPC usage
@@ -740,7 +772,7 @@ where
             let current_nonce = address_nonces.get(&account.address).copied().unwrap_or(0);
 
             // Create and sign the transfer transaction
-            let tx_envelope = match create_transfer_transaction(
+            let raw_tx = match create_transfer_transaction(
                 &account.private_key,
                 &recipient_account.address.to_string(),
                 chain_id,
@@ -749,7 +781,7 @@ where
             )
             .await
             {
-                Ok(envelope) => envelope,
+                Ok(raw_tx) => raw_tx,
                 Err(e) => {
                     println!(
                         "❌ Worker {}: Failed to create transaction for account {}: {:?}",
@@ -760,9 +792,8 @@ where
                     continue;
                 }
             };
-
             // Broadcast the transaction to the network
-            match provider.send_tx_envelope(tx_envelope).await {
+            match rpc_client.send_raw_transaction(raw_tx).await {
                 Ok(_) => {
                     successful_transactions += 1;
                     // Update nonce for next transaction from this sender

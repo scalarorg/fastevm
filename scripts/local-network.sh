@@ -31,7 +31,7 @@ EXECUTION_CLIENT=$PROJECT_ROOT/target/release/fastevm-execution
 CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
 
 # Default values for account generation
-DEFAULT_ACCOUNT_NUMBER=10000
+DEFAULT_ACCOUNT_NUMBER=100000
 DEFAULT_ACCOUNT_AMOUNT="1000000000000000000000"  # 1000 ETH in wei
 DEFAULT_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 

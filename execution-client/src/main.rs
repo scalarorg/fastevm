@@ -26,7 +26,7 @@ use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
     pool::MysticetiPoolBuilder,
-    rpc::{MysticetiConsensusHandler, TxListener},
+    rpc::{MysticetiConsensusHandler, TransactionHandler},
     types::TxValidatorConfig,
 };
 
@@ -39,7 +39,7 @@ use reth_ethereum::{
         EthereumNode,
     },
 };
-use reth_extension::{MysticetiConsensusApiServer, TxpoolListenerApiServer};
+use reth_extension::{MysticetiConsensusApiServer, MysticetiTransactionApiServer};
 use std::sync::Arc;
 use tracing::{error, info};
 // Use in cli
@@ -117,7 +117,7 @@ fn main() {
                         let eth_api = ctx.registry.eth_api().clone();
 
                         let pool = ctx.pool();
-                        let mut listener = TxListener::new(pool.clone(), eth_api)
+                        let mut listener = TransactionHandler::new(pool.clone(), eth_api)
                             .with_config_receiver(config_receiver);
 
                         // Start validator reconstruction thread

@@ -1,9 +1,11 @@
 use crate::types::TxValidatorConfig;
 use alloy_primitives::Bytes;
+use async_trait::async_trait;
 use eyre::Result;
 use futures_util::StreamExt;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
+    types::{error::INVALID_REQUEST_CODE, ErrorObjectOwned},
     PendingSubscriptionSink, SubscriptionMessage,
 };
 use parking_lot::RwLock;
@@ -16,7 +18,7 @@ use reth_ethereum::{
         EthApi,
     },
 };
-use reth_extension::{encode_transactions, TxpoolListenerApiServer};
+use reth_extension::{encode_transactions, MysticetiTransactionApiServer};
 use reth_provider::{ChainSpecProvider, StateProviderFactory};
 use reth_transaction_pool::{
     BlobStore, EthTransactionValidator, NewTransactionEvent, PoolTransaction, TransactionOrigin,
@@ -24,11 +26,14 @@ use reth_transaction_pool::{
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
-
 // Configuration constants for transaction batching
 const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 10 transactions
 const BATCH_TIMEOUT_MS: u64 = 50; // Send batch after 10 ms even if not full
+const DEFAULT_BROADCAST_CAPACITY: usize = 100_000;
+const TX_QUEUE_CAPACITY: usize = 10_000; // Capacity of transaction processing queue
+const LOG_BATCH_SIZE: usize = 100; // Log every N transactions to reduce I/O overhead
 
 /// Validates a raw transaction and converts it to a pool transaction
 /// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
@@ -51,8 +56,8 @@ async fn validate_raw_transaction<
     Ok(true)
 }
 
-/// The type that implements the `txpool` rpc namespace trait\
-pub struct TxListener<
+/// The type that implements the `txpool` rpc namespace trait
+pub struct TransactionHandler<
     Pool: TransactionPool + Clone + 'static,
     N: RpcNodeCore,
     Rpc: RpcConvert,
@@ -64,6 +69,9 @@ pub struct TxListener<
     eth_api: EthApi<N, Rpc>,
     tx_validator: Arc<RwLock<Option<EthTransactionValidator<C, Pool::Transaction>>>>,
     config_receiver: Option<tokio::sync::oneshot::Receiver<TxValidatorConfig<C, S>>>,
+    tx_queue_sender: mpsc::Sender<Bytes>,
+    sender_raw_tx: broadcast::Sender<Bytes>,
+    worker_handle: tokio::task::JoinHandle<()>,
 }
 
 impl<
@@ -72,14 +80,71 @@ impl<
         Rpc: RpcConvert,
         C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
         S: BlobStore,
-    > TxListener<Pool, N, Rpc, C, S>
+    > TransactionHandler<Pool, N, Rpc, C, S>
 {
     pub fn new(pool: Pool, eth_api: EthApi<N, Rpc>) -> Self {
+        let (sender_raw_tx, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
+        let (tx_queue_sender, mut tx_queue_receiver) = mpsc::channel::<Bytes>(TX_QUEUE_CAPACITY);
+
+        // Start single worker for transaction processing
+        let pool_clone = pool.clone();
+        info!("Starting single transaction processing worker");
+        let worker_handle = tokio::spawn(async move {
+            let mut processed_txs = 0;
+            let mut last_log_count = 0;
+
+            while let Some(raw_tx) = tx_queue_receiver.recv().await {
+                processed_txs += 1;
+
+                // Process the transaction
+                match recover_raw_transaction(&raw_tx) {
+                    Ok(recovered) => {
+                        let pool_transaction =
+                            <Pool as TransactionPool>::Transaction::from_pooled(recovered);
+                        match pool_clone
+                            .add_transaction(TransactionOrigin::Local, pool_transaction)
+                            .await
+                        {
+                            Ok(_) => {
+                                // Only log debug messages occasionally to reduce I/O overhead
+                                if processed_txs % LOG_BATCH_SIZE == 0 {
+                                    debug!(
+                                        "Successfully added transaction to pool (total: {})",
+                                        processed_txs
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to add transaction to pool: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to recover transaction: {:?}", e);
+                    }
+                }
+
+                // Log progress every LOG_BATCH_SIZE transactions
+                if processed_txs - last_log_count >= LOG_BATCH_SIZE {
+                    info!("Processed {} transactions", processed_txs);
+                    last_log_count = processed_txs;
+                }
+            }
+
+            info!(
+                "Transaction processing worker shutting down (processed {} total)",
+                processed_txs
+            );
+        });
+
         Self {
             pool,
             eth_api,
             tx_validator: Arc::new(RwLock::new(None)),
             config_receiver: None,
+            tx_queue_sender,
+            sender_raw_tx,
+            worker_handle,
         }
     }
 
@@ -90,6 +155,13 @@ impl<
         self.config_receiver = Some(receiver);
         self
     }
+
+    /// Gracefully shutdown the worker thread
+    pub fn shutdown_worker(&self) {
+        info!("Shutting down transaction processing worker...");
+        self.worker_handle.abort();
+        info!("Transaction processing worker shut down");
+    }
 }
 impl<
         Pool,
@@ -97,7 +169,7 @@ impl<
         Rpc: RpcConvert,
         C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
         S: BlobStore,
-    > TxListener<Pool, N, Rpc, C, S>
+    > TransactionHandler<Pool, N, Rpc, C, S>
 where
     Pool: TransactionPool + Clone + 'static,
 {
@@ -169,20 +241,40 @@ where
     }
 }
 
+#[async_trait]
 impl<
         Pool,
         N: RpcNodeCore,
         Rpc: RpcConvert,
         C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
         S: BlobStore,
-    > TxpoolListenerApiServer for TxListener<Pool, N, Rpc, C, S>
+    > MysticetiTransactionApiServer for TransactionHandler<Pool, N, Rpc, C, S>
 where
     Pool: TransactionPool + Clone + 'static,
 {
     fn transaction_count(&self) -> RpcResult<usize> {
         Ok(self.pool.pool_size().total)
     }
+    async fn send_raw_transaction_async(&self, tx: Bytes) -> RpcResult<()> {
+        // Broadcast raw transaction to subscribers
 
+        let _ = self.sender_raw_tx.send(tx.clone());
+
+        // Try don't put transaction into reth pool
+        // Send transaction to processing queue
+
+        // if let Err(e) = self.tx_queue_sender.send(tx).await {
+        //     error!("Failed to send transaction to processing queue: {:?}", e);
+        //     return Err(ErrorObjectOwned::owned(
+        //         INVALID_REQUEST_CODE,
+        //         "Transaction queue is full".to_string(),
+        //         None::<()>,
+        //     ));
+        // }
+
+        debug!("Transaction queued for processing");
+        Ok(())
+    }
     fn subscribe_pending_transactions(
         &self,
         pending_subscription_sink: PendingSubscriptionSink,
@@ -307,7 +399,8 @@ where
         pending_subscription_sink: PendingSubscriptionSink,
     ) -> SubscriptionResult {
         info!("Subscribing to raw transactions with validation");
-        let mut receiver = self.eth_api.subscribe_to_raw_transactions();
+        //let mut receiver = self.eth_api.subscribe_to_raw_transactions();
+        let mut receiver = self.sender_raw_tx.subscribe();
         let tx_validator = Arc::clone(&self.tx_validator);
         tokio::spawn(Box::pin(async move {
             let sink = match pending_subscription_sink.accept().await {
@@ -387,7 +480,7 @@ mod tests {
     use super::*;
     use jsonrpsee::ws_client::WsClientBuilder;
     use reth_ethereum::pool::noop::NoopTransactionPool;
-    use reth_extension::TxpoolListenerApiClient;
+    use reth_extension::MysticetiTransactionApiClient;
     use reth_rpc_layer::{secret_to_bearer_header, JwtSecret};
 
     #[test]
@@ -463,7 +556,7 @@ mod tests {
             .await
             .expect("Failed to create ws client");
 
-        let mut sub = TxpoolListenerApiClient::subscribe_all_transactions(&client)
+        let mut sub = MysticetiTransactionApiClient::subscribe_all_transactions(&client)
             .await
             .expect("failed to subscribe");
 

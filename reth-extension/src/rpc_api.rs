@@ -1,4 +1,4 @@
-use alloy_primitives::Bytes;
+use alloy_primitives::{Bytes, B256};
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     proc_macros::rpc,
@@ -8,12 +8,14 @@ use crate::CommittedSubDag;
 /// trait interface for a custom rpc namespace: `txpool`
 ///
 /// This defines an additional namespace where all methods are configured as trait functions.
-#[rpc(server, client, namespace = "txpoolListener")]
-pub trait TxpoolListenerApi {
+#[rpc(server, client, namespace = "mysticeti")]
+pub trait MysticetiTransactionApi {
     /// Returns the number of transactions in the pool.
     #[method(name = "transactionCount")]
     fn transaction_count(&self) -> RpcResult<usize>;
-
+    /// Send a raw transaction to the network.
+    #[method(name = "sendRawTransactionAsync")]
+    async fn send_raw_transaction_async(&self, bytes: Bytes) -> RpcResult<()>;
     /// Creates a subscription that listens to pending transactions in the pool.
     #[subscription(name = "subscribePendingTransactions", item = Vec<Bytes>)]
     fn subscribe_pending_transactions(&self) -> SubscriptionResult;
