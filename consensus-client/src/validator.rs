@@ -131,26 +131,27 @@ impl ValidatorNode {
 
             // Create a periodic timer for batch timeout
             let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
+            let mut total_received_txs = 0_u64;
             let mut total_send_txs = 0_u64;
             loop {
                 tokio::select! {
                     // Handle new transaction events
                     Some(raw_tx) = txs_receiver.recv() => {
-                        info!("Received raw transactios: {:?}", raw_tx.len());
+                        total_received_txs += raw_tx.len() as u64;
                         // because of this push, buffer has at least 1 transaction
                         for tx in raw_tx {
                             buffer.push(tx.into());
                         }
                         // Send batch if threshold is reached
                         if buffer.len() >= max_transactions_in_block_count {
-                            total_send_txs += buffer.len() as u64;
-                            info!("Sending batch of {} transactions to mysticeti. Total sent transactions: {}", buffer.len(), total_send_txs);
-                            let batch = std::mem::take(&mut buffer);
+                            // Split buffer to send only max_transactions_in_block_count transactions
+                            let batch: Vec<_> = buffer.drain(0..max_transactions_in_block_count).collect();
                             let batch_size = batch.len();
+                            total_send_txs += batch_size as u64;
                             if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
-                                info!("Submitted batch of {} transactions. Block ref: {:?}", batch_size, block_ref);
+                                info!("[Threshold] Sending batch of {} transactions to mysticeti. Total sent/received transactions: {}/{}", batch_size, total_send_txs, total_received_txs);
                             } else {
-                                error!("Failed to submit batch of {} transactions", batch_size);
+                                error!("[Threshold] Failed to submit batch of {} transactions", batch_size);
                             }
                             batch_timer.reset();
                         }
@@ -158,13 +159,13 @@ impl ValidatorNode {
                     // Handle batch timeout
                     _ = batch_timer.tick() => {
                         if !buffer.is_empty() {
-                            total_send_txs += buffer.len() as u64;
-                            info!("Sending batch of {} transactions to mysticeti. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
+                            let batch_size = batch.len();
+                            total_send_txs += batch_size as u64;
                             if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
-                                info!("Submitted batch of {} transactions. Block ref: {:?}", buffer.len(), block_ref);
+                                info!("[Timer] Sending batch of {} transactions to mysticeti. Total sent/received transactions: {}/{}", batch_size, total_send_txs, total_received_txs);
                             } else {
-                                error!("Failed to submit batch of {} transactions", buffer.len());
+                                error!("[Timer] Failed to submit batch of {} transactions", batch_size);
                             }
                         }
                         batch_timer.reset();

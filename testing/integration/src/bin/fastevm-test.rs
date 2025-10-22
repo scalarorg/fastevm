@@ -19,6 +19,11 @@ use testing::rpc_client::{DirectRpcClient, RpcClient};
 use testing::transactions::create_transfer_transaction;
 use tokio::time::sleep;
 
+/// Batch size for transaction processing
+/// This determines how many transactions are grouped together before sending to RPC servers
+/// Larger batches reduce network overhead but may increase memory usage
+const BATCH_SIZE: usize = 50;
+
 /// Configuration loaded from environment variables
 #[derive(Debug, Clone)]
 struct TestConfig {
@@ -47,6 +52,7 @@ struct TestConfig {
     test_rpc_timeout: u64,
     test_max_retries: u64,
     test_log_level: String,
+    test_batch_size: usize,
 }
 
 impl Default for TestConfig {
@@ -68,6 +74,7 @@ impl Default for TestConfig {
             test_rpc_timeout: 30,
             test_max_retries: 3,
             test_log_level: "info".to_string(),
+            test_batch_size: BATCH_SIZE,
         }
     }
 }
@@ -123,6 +130,10 @@ impl TestConfig {
         }
 
         config.test_log_level = env::var("TEST_LOG_LEVEL").unwrap_or(config.test_log_level);
+
+        if let Ok(batch_size_str) = env::var("TEST_BATCH_SIZE") {
+            config.test_batch_size = batch_size_str.parse()?;
+        }
 
         Ok(config)
     }
@@ -373,6 +384,7 @@ async fn run_cli() -> Result<()> {
                 test_config.test_transaction_value,
                 test_config.get_rpc_urls(),
                 test_config.test_fetch_nonce.clone(),
+                test_config.clone(),
             )
             .await
             .map_err(|e| eyre::eyre!("Failed to send batch transactions: {}", e))?;
@@ -406,6 +418,7 @@ async fn send_transaction_with_check_nonce(
         transaction_value,
         rpc_urls.clone(),
         fetch_nonce,
+        TestConfig::default(), // Use default config for unused function
     )
     .await
     .map_err(|e| eyre::eyre!("Failed to send batch transactions: {}", e))?;
@@ -475,6 +488,7 @@ async fn send_batch_transfer_transactions(
     send_amount: u64,
     rpc_urls: Vec<String>,
     fetch_nonce: String,
+    test_config: TestConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Load environment variables from .env file if present
     dotenv::dotenv().ok();
@@ -563,7 +577,7 @@ async fn send_batch_transfer_transactions(
     println!("Connected to {} RPC endpoints", rpc_clients.len());
 
     // Determine optimal number of parallel workers (chunks)
-    let num_workers = std::cmp::min(8, number_of_senders); // Cap at 8 workers
+    let num_workers = std::cmp::min(32, number_of_senders); // Cap at 8 workers
     let chunk_size = (number_of_senders + num_workers - 1) / num_workers; // Ceiling division
 
     println!(
@@ -591,6 +605,7 @@ async fn send_batch_transfer_transactions(
         let rpc_clients_clone = rpc_clients.clone();
         let urls_clone = available_urls_arc.clone();
         let fetch_nonce_clone = fetch_nonce.clone();
+        let test_config_clone = test_config.clone();
         let handle = tokio::spawn(async move {
             process_account_chunk(
                 worker_id,
@@ -603,6 +618,7 @@ async fn send_batch_transfer_transactions(
                 transaction_amount,
                 transactions_per_sender,
                 fetch_nonce_clone,
+                test_config_clone,
             )
             .await
         });
@@ -696,6 +712,7 @@ async fn process_account_chunk<C>(
     transaction_amount: u64,
     transactions_per_sender: usize,
     fetch_nonce: String,
+    test_config: TestConfig,
 ) -> Result<(usize, usize, HashMap<String, usize>), Box<dyn std::error::Error + Send + Sync>>
 where
     C: RpcClient + Sync + Send,
@@ -704,6 +721,9 @@ where
     let mut failed_transactions = 0;
     let mut rpc_usage_stats = HashMap::new();
     let start_time = std::time::Instant::now();
+
+    // Round-robin RPC provider selection
+    let mut overall_tx_index = 0;
 
     let accounts_in_chunk = end_idx - start_idx;
     let total_transactions_in_chunk = accounts_in_chunk * transactions_per_sender;
@@ -715,6 +735,11 @@ where
         start_idx,
         end_idx - 1,
         transactions_per_sender
+    );
+    println!(
+        "🔄 Worker {}: Using round-robin RPC provider selection across {} endpoints",
+        worker_id,
+        rpc_clients.len()
     );
 
     // Get initial nonces for all sender addresses
@@ -746,7 +771,18 @@ where
 
     let mut processed_transactions = 0;
     let mut last_progress_time = std::time::Instant::now();
-    let progress_interval = std::time::Duration::from_secs(5); // Print progress every 5 seconds
+    let progress_interval = std::time::Duration::from_secs(10); // Print progress every 5 seconds
+
+    // Batch processing configuration
+    let batch_size = std::cmp::min(test_config.test_batch_size, total_transactions_in_chunk); // Use configurable batch size
+    let mut transaction_batches: Vec<Vec<(alloy_primitives::Bytes, usize, String)>> = Vec::new();
+    let mut current_batch = Vec::new();
+
+    // Pre-create all transactions and organize them into batches
+    println!(
+        "📦 Worker {}: Pre-creating {} transactions in batches of {}",
+        worker_id, total_transactions_in_chunk, batch_size
+    );
 
     for _tx_round in 0..transactions_per_sender {
         for sender_idx in start_idx..end_idx {
@@ -760,10 +796,10 @@ where
             }
             let recipient_account = &accounts[recipient_idx];
 
-            // Randomly select an RPC provider
-            let provider_idx = rand::thread_rng().gen_range(0..rpc_clients.len());
-            let rpc_client = &rpc_clients[provider_idx];
+            // Round-robin RPC provider selection
+            let provider_idx = overall_tx_index % rpc_clients.len();
             let rpc_url = &available_urls[provider_idx];
+            overall_tx_index += 1;
 
             // Track RPC usage
             *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += 1;
@@ -792,41 +828,19 @@ where
                     continue;
                 }
             };
-            // Broadcast the transaction to the network
-            match rpc_client.send_raw_transaction(raw_tx).await {
-                Ok(_) => {
-                    successful_transactions += 1;
-                    // Update nonce for next transaction from this sender
-                    address_nonces.insert(account.address, current_nonce + 1);
-                }
-                Err(e) => {
-                    let error_msg = format!("{e:?}");
-                    if error_msg.contains("already known") {
-                        // Transaction already known - count as success since it was processed
-                        successful_transactions += 1;
-                    } else if error_msg.contains("insufficient funds") {
-                        println!(
-                            "⚠️  Worker {}: Insufficient funds for account {}",
-                            worker_id, sender_idx
-                        );
-                        failed_transactions += 1;
-                    } else if error_msg.contains("gas") {
-                        println!(
-                            "⚠️  Worker {}: Gas error for account {}: {:?}",
-                            worker_id, sender_idx, e
-                        );
-                        failed_transactions += 1;
-                    } else {
-                        println!(
-                            "❌ Worker {}: Failed to send transaction for account {}: {:?}",
-                            worker_id, sender_idx, e
-                        );
-                        failed_transactions += 1;
-                    }
-                }
-            }
 
+            // Add transaction to current batch (raw_tx, provider_idx, rpc_url)
+            current_batch.push((raw_tx, provider_idx, rpc_url.clone()));
+
+            // Update nonce for next transaction from this sender
+            address_nonces.insert(account.address, current_nonce + 1);
             processed_transactions += 1;
+
+            // If batch is full, add it to batches and start a new one
+            if current_batch.len() >= batch_size {
+                transaction_batches.push(current_batch);
+                current_batch = Vec::new();
+            }
 
             // Print progress periodically
             if last_progress_time.elapsed() >= progress_interval {
@@ -856,6 +870,72 @@ where
             }
         }
     }
+
+    // Add any remaining transactions to the last batch
+    if !current_batch.is_empty() {
+        transaction_batches.push(current_batch);
+    }
+
+    // Send all batches using batch API
+    println!(
+        "🚀 Worker {}: Sending {} batches of transactions...",
+        worker_id,
+        transaction_batches.len()
+    );
+    let batch_send_start = std::time::Instant::now();
+
+    for (batch_idx, batch) in transaction_batches.iter().enumerate() {
+        // Group transactions by RPC provider for efficient batch sending
+        let mut provider_batches: HashMap<usize, Vec<alloy_primitives::Bytes>> = HashMap::new();
+
+        for (raw_tx, provider_idx, _rpc_url) in batch {
+            provider_batches
+                .entry(*provider_idx)
+                .or_insert_with(Vec::new)
+                .push(raw_tx.clone());
+        }
+
+        // Send batches for each provider
+        for (provider_idx, tx_batch) in provider_batches {
+            let rpc_client: &C = &rpc_clients[provider_idx];
+            let rpc_url: &String = &available_urls[provider_idx];
+
+            let batch_len = tx_batch.len();
+            match rpc_client.batch_send_raw_transaction(tx_batch).await {
+                Ok(_) => {
+                    successful_transactions += batch_len;
+                    *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += batch_len;
+                }
+                Err(e) => {
+                    let error_msg = format!("{e:?}");
+                    println!(
+                        "❌ Worker {}: Batch {} failed for provider {}: {:?}",
+                        worker_id, batch_idx, provider_idx, error_msg
+                    );
+                    failed_transactions += batch_len;
+                }
+            }
+        }
+
+        // Print batch progress
+        if batch_idx % 10 == 0 || batch_idx == transaction_batches.len() - 1 {
+            println!(
+                "📦 Worker {}: Sent batch {}/{} | ✅{} ❌{}",
+                worker_id,
+                batch_idx + 1,
+                transaction_batches.len(),
+                successful_transactions,
+                failed_transactions
+            );
+        }
+    }
+
+    let batch_send_duration = batch_send_start.elapsed();
+    println!(
+        "⚡ Worker {}: Batch sending completed in {:.2}s",
+        worker_id,
+        batch_send_duration.as_secs_f64()
+    );
 
     let total_duration = start_time.elapsed();
     let tx_per_second = total_transactions_in_chunk as f64 / total_duration.as_secs_f64();

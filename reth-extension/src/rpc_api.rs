@@ -16,6 +16,9 @@ pub trait MysticetiTransactionApi {
     /// Send a raw transaction to the network.
     #[method(name = "sendRawTransactionAsync")]
     async fn send_raw_transaction_async(&self, bytes: Bytes) -> RpcResult<()>;
+    /// Send multiple raw transactions to the network in a batch.
+    #[method(name = "batchSendRawTransactionAsync")]
+    async fn batch_send_raw_transaction_async(&self, transactions: Vec<Bytes>) -> RpcResult<()>;
     /// Creates a subscription that listens to pending transactions in the pool.
     #[subscription(name = "subscribePendingTransactions", item = Vec<Bytes>)]
     fn subscribe_pending_transactions(&self) -> SubscriptionResult;

@@ -5,7 +5,6 @@ use eyre::Result;
 use futures_util::StreamExt;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
-    types::{error::INVALID_REQUEST_CODE, ErrorObjectOwned},
     PendingSubscriptionSink, SubscriptionMessage,
 };
 use parking_lot::RwLock;
@@ -22,15 +21,22 @@ use reth_extension::{encode_transactions, MysticetiTransactionApiServer};
 use reth_provider::{ChainSpecProvider, StateProviderFactory};
 use reth_transaction_pool::{
     BlobStore, EthTransactionValidator, NewTransactionEvent, PoolTransaction, TransactionOrigin,
-    TransactionValidationTaskExecutor, TransactionValidator, ValidPoolTransaction,
+    TransactionValidationOutcome, TransactionValidationTaskExecutor, TransactionValidator,
+    ValidPoolTransaction,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc};
+use tokio::{
+    sync::{
+        broadcast,
+        mpsc::{self, Receiver},
+    },
+    task::JoinHandle,
+};
 use tracing::{debug, error, info, warn};
 // Configuration constants for transaction batching
-const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 10 transactions
-const BATCH_TIMEOUT_MS: u64 = 50; // Send batch after 10 ms even if not full
+const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 100 transactions
+const BATCH_TIMEOUT_MS: u64 = 100; // Send batch after 10 ms even if not full
 const DEFAULT_BROADCAST_CAPACITY: usize = 100_000;
 const TX_QUEUE_CAPACITY: usize = 10_000; // Capacity of transaction processing queue
 const LOG_BATCH_SIZE: usize = 100; // Log every N transactions to reduce I/O overhead
@@ -41,7 +47,7 @@ async fn validate_raw_transaction<
     Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
     Pool: TransactionPool,
 >(
-    tx_validator: Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
+    tx_validator: &Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
     raw_tx: &Bytes,
 ) -> Result<bool> {
     let transaction = recover_raw_transaction(&raw_tx)
@@ -54,6 +60,31 @@ async fn validate_raw_transaction<
         return Ok(outcome.is_valid());
     }
     Ok(true)
+}
+
+/// Validates a batch of raw transactions and converts it to a pool transaction
+/// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
+async fn validate_raw_transactions<
+    Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
+    Pool: TransactionPool,
+>(
+    tx_validator: &Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
+    raw_txs: &Vec<Bytes>,
+) -> Result<Vec<TransactionValidationOutcome<Pool::Transaction>>> {
+    let mut transactions = Vec::new();
+    for raw_tx in raw_txs {
+        let transaction = recover_raw_transaction(&raw_tx)
+            .map(|recovered| Pool::Transaction::from_pooled(recovered))?;
+        transactions.push(transaction);
+    }
+    let validator_guard = tx_validator.read();
+    if let Some(validator) = &*validator_guard {
+        let outcomes = validator
+            .validate_transactions_with_origin(TransactionOrigin::Local, transactions)
+            .await;
+        return Ok(outcomes);
+    }
+    Ok(Vec::new())
 }
 
 /// The type that implements the `txpool` rpc namespace trait
@@ -69,9 +100,9 @@ pub struct TransactionHandler<
     eth_api: EthApi<N, Rpc>,
     tx_validator: Arc<RwLock<Option<EthTransactionValidator<C, Pool::Transaction>>>>,
     config_receiver: Option<tokio::sync::oneshot::Receiver<TxValidatorConfig<C, S>>>,
-    tx_queue_sender: mpsc::Sender<Bytes>,
-    sender_raw_tx: broadcast::Sender<Bytes>,
-    worker_handle: tokio::task::JoinHandle<()>,
+    sender_raw_tx: broadcast::Sender<Vec<Bytes>>,
+    // tx_queue_sender: mpsc::Sender<Bytes>,
+    //worker_handle: tokio::task::JoinHandle<()>,
 }
 
 impl<
@@ -84,12 +115,26 @@ impl<
 {
     pub fn new(pool: Pool, eth_api: EthApi<N, Rpc>) -> Self {
         let (sender_raw_tx, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
-        let (tx_queue_sender, mut tx_queue_receiver) = mpsc::channel::<Bytes>(TX_QUEUE_CAPACITY);
+        let (tx_queue_sender, _tx_queue_receiver) = mpsc::channel::<Bytes>(TX_QUEUE_CAPACITY);
 
         // Start single worker for transaction processing
-        let pool_clone = pool.clone();
-        info!("Starting single transaction processing worker");
-        let worker_handle = tokio::spawn(async move {
+        //info!("Starting single transaction processing worker");
+        //let worker_handle = Self::start_worker(pool.clone(), tx_queue_receiver);
+
+        Self {
+            pool,
+            eth_api,
+            tx_validator: Arc::new(RwLock::new(None)),
+            config_receiver: None,
+            sender_raw_tx,
+            // tx_queue_sender,
+            // worker_handle,
+        }
+    }
+    /// Start transaction processing worker to send transactions to reth pool
+    /// This is not need if we use create payload from consensus pool only
+    fn start_worker(pool: Pool, mut tx_queue_receiver: Receiver<Bytes>) -> JoinHandle<()> {
+        tokio::spawn(async move {
             let mut processed_txs = 0;
             let mut last_log_count = 0;
 
@@ -101,7 +146,7 @@ impl<
                     Ok(recovered) => {
                         let pool_transaction =
                             <Pool as TransactionPool>::Transaction::from_pooled(recovered);
-                        match pool_clone
+                        match pool
                             .add_transaction(TransactionOrigin::Local, pool_transaction)
                             .await
                         {
@@ -135,19 +180,8 @@ impl<
                 "Transaction processing worker shutting down (processed {} total)",
                 processed_txs
             );
-        });
-
-        Self {
-            pool,
-            eth_api,
-            tx_validator: Arc::new(RwLock::new(None)),
-            config_receiver: None,
-            tx_queue_sender,
-            sender_raw_tx,
-            worker_handle,
-        }
+        })
     }
-
     pub fn with_config_receiver(
         mut self,
         receiver: tokio::sync::oneshot::Receiver<TxValidatorConfig<C, S>>,
@@ -156,12 +190,12 @@ impl<
         self
     }
 
-    /// Gracefully shutdown the worker thread
-    pub fn shutdown_worker(&self) {
-        info!("Shutting down transaction processing worker...");
-        self.worker_handle.abort();
-        info!("Transaction processing worker shut down");
-    }
+    // /// Gracefully shutdown the worker thread
+    // pub fn shutdown_worker(&self) {
+    //     info!("Shutting down transaction processing worker...");
+    //     self.worker_handle.abort();
+    //     info!("Transaction processing worker shut down");
+    // }
 }
 impl<
         Pool,
@@ -257,9 +291,7 @@ where
     }
     async fn send_raw_transaction_async(&self, tx: Bytes) -> RpcResult<()> {
         // Broadcast raw transaction to subscribers
-
-        let _ = self.sender_raw_tx.send(tx.clone());
-
+        let _ = self.sender_raw_tx.send(vec![tx]);
         // Try don't put transaction into reth pool
         // Send transaction to processing queue
 
@@ -272,7 +304,11 @@ where
         //     ));
         // }
 
-        debug!("Transaction queued for processing");
+        Ok(())
+    }
+    async fn batch_send_raw_transaction_async(&self, txs: Vec<Bytes>) -> RpcResult<()> {
+        // Broadcast raw transactions to subscribers
+        let _ = self.sender_raw_tx.send(txs.clone());
         Ok(())
     }
     fn subscribe_pending_transactions(
@@ -309,7 +345,7 @@ where
                             // Send batch if threshold is reached
                             if buffer.len() >= BATCH_SIZE_THRESHOLD {
                                 total_send_txs += buffer.len() as u64;
-                                info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                                info!("[Threshold] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                                 let batch = std::mem::take(&mut buffer);
                                 let msg = encode_transactions(batch);
                                 let _ = sink.send(msg).await;
@@ -320,12 +356,11 @@ where
                     _ = batch_timer.tick() => {
                         if !buffer.is_empty() {
                             total_send_txs += buffer.len() as u64;
-                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            info!("[Timer] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
                             let msg = encode_transactions(batch);
                             let _ = sink.send(msg).await;
                         }
-                        batch_timer.reset();
                     }
                 }
                 //End loop
@@ -422,43 +457,54 @@ where
             loop {
                 tokio::select! {
                     // Handle new transaction events
-                    Ok(raw_tx) = receiver.recv() => {
+                    Ok(raw_txs) = receiver.recv() => {
                         // Validate the raw transaction before adding to buffer
-                        let start_time = Instant::now();
-                        match validate_raw_transaction::<C, Pool>(Arc::clone(&tx_validator), &raw_tx).await {
-                            Ok(true) => {
-                                debug!("Transaction validated in {:?}", start_time.elapsed());
-                                // Transaction is valid, add to buffer
-                                buffer.push(raw_tx);
-
-                                // Send batch if threshold is reached
-                                if buffer.len() >= BATCH_SIZE_THRESHOLD {
-                                    total_send_txs += buffer.len() as u64;
-                                    info!("Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
-                                    let batch = std::mem::take(&mut buffer);
-                                    let msg = SubscriptionMessage::from(
-                                        serde_json::value::to_raw_value(&batch).expect("serialize batch"),
-                                    );
-                                    let _ = sink.send(msg).await;
-                                }
-                            }
-                            Ok(false) => {
-                                // Transaction failed validation, skip it
-                                validation_failures += 1;
-                                warn!("Skipping invalid transaction. Total validation failures: {}", validation_failures);
-                            },
-                            Err(e) => {
-                                // Fatal validation error
-                                error!("Fatal validation error: {}", e);
-                                validation_failures += 1;
-                            }
+                        // let start_time = Instant::now();
+                        buffer.extend(raw_txs);
+                        if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                            total_send_txs += buffer.len() as u64;
+                            info!("[Threshold] Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            let batch = std::mem::take(&mut buffer);
+                            let msg = SubscriptionMessage::from(
+                                serde_json::value::to_raw_value(&batch).expect("serialize batch"),
+                            );
+                            let _ = sink.send(msg).await;
                         }
+                        // TODO: Add validation logic
+                        // match validate_raw_transaction::<C, Pool>(&tx_validator, &raw_tx).await {
+                        //     Ok(true) => {
+                        //         // debug!("Transaction validated in {:?}", start_time.elapsed());
+                        //         // Transaction is valid, add to buffer
+                        //         buffer.push(raw_tx);
+
+                        //         // Send batch if threshold is reached
+                        //         if buffer.len() >= BATCH_SIZE_THRESHOLD {
+                        //             total_send_txs += buffer.len() as u64;
+                        //             info!("[Threshold] Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                        //             let batch = std::mem::take(&mut buffer);
+                        //             let msg = SubscriptionMessage::from(
+                        //                 serde_json::value::to_raw_value(&batch).expect("serialize batch"),
+                        //             );
+                        //             let _ = sink.send(msg).await;
+                        //         }
+                        //     }
+                        //     Ok(false) => {
+                        //         // Transaction failed validation, skip it
+                        //         validation_failures += 1;
+                        //         warn!("Skipping invalid transaction. Total validation failures: {}", validation_failures);
+                        //     },
+                        //     Err(e) => {
+                        //         // Fatal validation error
+                        //         error!("Fatal validation error: {}", e);
+                        //         validation_failures += 1;
+                        //     }
+                        // }
                     }
                     // Handle batch timeout
                     _ = batch_timer.tick() => {
                         if !buffer.is_empty() {
                             total_send_txs += buffer.len() as u64;
-                            info!("Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            info!("[Timer] Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
                             let msg = SubscriptionMessage::from(
                                 serde_json::value::to_raw_value(&batch).expect("serialize batch"),

@@ -9,7 +9,7 @@ use reth_extension::MysticetiConsensusApiServer;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error};
+use tracing::{error, info};
 
 /// The type that implements the `txpool` rpc namespace trait
 pub struct MysticetiConsensusHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
@@ -49,6 +49,8 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<P
     /// Add missing transactions from consensus pool to transaction pool
     async fn process_subdags(&self, subdags: Vec<CommittedSubDag>) -> Result<()> {
         let mut committed_subdags = Vec::new();
+        let fist_index = subdags.first().map(|subdag| subdag.commit_ref.index);
+        let last_index = subdags.last().map(|subdag| subdag.commit_ref.index);
         for subdag in subdags {
             let committed_subdag = MysticetiCommittedSubdag::<Pool::Transaction>::try_from(subdag)?;
             //Update transaction pool with committed transactions
@@ -58,13 +60,14 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<P
                 let mut total_txs = self.total_txs.lock().await;
                 *total_txs += committed_subdag.transactions.len() as u64;
             }
-            debug!(
-                "Commited Index: {:?}, Total transactions: {:?}",
-                committed_subdag.commit_ref.index,
-                *self.total_txs.lock().await
-            );
             committed_subdags.push(committed_subdag);
         }
+        info!(
+            "Processed subdags from index {:?} to {:?}, Total transactions: {:?}",
+            fist_index,
+            last_index,
+            *self.total_txs.lock().await
+        );
         self.consensus_pool.add_committed_subdags(committed_subdags);
 
         Ok(())
@@ -139,15 +142,6 @@ impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> Mystice
 {
     #[doc = " Submit commited subdag"]
     fn submit_committed_subdags(&self, subdags: Vec<CommittedSubDag>) -> RpcResult<()> {
-        // Log every 100 commits
-        // if let Some(subdag) = subdags.first() {
-        //     debug!(
-        //         "Received {} committed subdags start from index {:?}",
-        //         subdags.len(),
-        //         subdag.commit_ref.index
-        //     );
-        // }
-
         let handler = self.clone();
         tokio::spawn(Box::pin(async move {
             if let Err(e) = handler.process_subdags(subdags).await {

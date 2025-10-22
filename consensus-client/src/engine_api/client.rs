@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 const BATCH_SIZE: usize = 10;
-const SEND_INTERVAL: u64 = 500; //In milliseconds
+const SEND_INTERVAL: u64 = 1000; //In milliseconds
 
 pub type Transactions = Vec<Bytes>;
 pub struct ExecutionClient {
@@ -132,7 +132,7 @@ impl ExecutionClient {
         // Try to connect to the execution client
         let ws_client = self.ws_client().await;
         let http_client = self.http_client();
-        let mut txpool_subscriber =
+        let mut tx_subscriber =
             MysticetiTransactionApiClient::subscribe_raw_transactions(&ws_client)
                 .await
                 .expect("failed to subscribe");
@@ -145,7 +145,7 @@ impl ExecutionClient {
         let transaction_handler = tokio::spawn(async move {
             let mut total_received_txs = 0;
             loop {
-                if let Some(may_txs) = txpool_subscriber.next().await {
+                if let Some(may_txs) = tx_subscriber.next().await {
                     match may_txs {
                         Ok(txs) => {
                             total_received_txs += txs.len();
@@ -177,12 +177,14 @@ impl ExecutionClient {
                     let leader_round = subdag.leader.round;
                     let reth_subdag = RethCommittedSubDag::from(subdag);
                     total_committed_txs += reth_subdag.len();
-                    info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Leader round {:?}, Tx count {:?}, Total txs {:?}",
+                    if commit_index % 100 == 0 {
+                        info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Leader round {:?}, Tx count {:?}, Total txs {:?}",
                                         timestamp_ms,
                                         commit_index,
                                         leader_round,
                                         reth_subdag.len(),
                                         total_committed_txs);
+                    }
                     buffer.push(reth_subdag);
                 }
                 if buffer.len() >= BATCH_SIZE
