@@ -133,6 +133,33 @@ build_binaries() {
         
         log \"Starting FastEVM client binary build process...\"
         
+        # Wait for startup script to complete (package installation)
+        log \"Waiting for startup script to complete package installation...\"
+        while [ ! -f \"/var/log/client-startup-complete\" ]; do
+            log \"Startup script still running, waiting...\"
+            sleep 10
+        done
+        log \"Startup script completed, proceeding with build...\"
+        
+        # Refresh environment to ensure compilers are available
+        log \"Refreshing environment...\"
+        export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"
+        hash -r
+        
+        # Verify compilers are available before proceeding
+        log \"Verifying compiler availability...\"
+        if ! command -v cc &> /dev/null; then
+            log \"ERROR: C compiler (cc) not found\"
+            exit 1
+        fi
+        
+        if ! command -v gcc &> /dev/null; then
+            log \"ERROR: GCC compiler not found\"
+            exit 1
+        fi
+        
+        log \"Compilers verified, proceeding with build...\"
+        
         # Install Rust if not already installed
         if ! command -v cargo >/dev/null 2>&1; then
             log \"Installing Rust...\"
@@ -155,10 +182,17 @@ build_binaries() {
             cd fastevm
         fi
         
-        # Build test binary
+        # Build test binary with explicit linker configuration
         log \"Building FastEVM test binary...\"
         cd testing/integration
-        cargo build --release --bin fastevm-test
+        
+        # Set explicit linker environment variables to ensure cc is found
+        export CC=cc
+        export CXX=g++
+        export RUSTFLAGS=\"-C linker=cc\"
+        
+        # Build with verbose output to help debug any remaining issues
+        cargo build --release --bin fastevm-test --verbose
         
         if [ ! -f \"../../target/release/fastevm-test\" ]; then
             log \"ERROR: Build failed - binary not found\"

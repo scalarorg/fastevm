@@ -176,16 +176,19 @@ impl ExecutionClient {
                     let commit_index = subdag.commit_ref.index;
                     let leader_round = subdag.leader.round;
                     let reth_subdag = RethCommittedSubDag::from(subdag);
-                    total_committed_txs += reth_subdag.len();
-                    if commit_index % 100 == 0 {
+                    let current_len = reth_subdag.len();
+                    total_committed_txs += current_len;
+                    // Log every 100 commits or when the first non-empty subdag is committed
+                    if commit_index % 100 == 0 || total_committed_txs == current_len {
                         info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Leader round {:?}, Tx count {:?}, Total txs {:?}",
-                                        timestamp_ms,
-                                        commit_index,
-                                        leader_round,
-                                        reth_subdag.len(),
-                                        total_committed_txs);
+                            timestamp_ms,
+                            commit_index,
+                            leader_round,
+                            current_len,
+                            total_committed_txs);
                     }
-                    buffer.push(reth_subdag);
+                    // Try to check make consensus only
+                    // buffer.push(reth_subdag);
                 }
                 if buffer.len() >= BATCH_SIZE
                     || buffer.len() > 0

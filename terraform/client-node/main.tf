@@ -155,21 +155,54 @@ resource "google_compute_instance" "client_node" {
           lsb-release \
           openssh-client
       
-      # Verify C compiler is available
+      # Wait for package installation to fully complete
+      log "Waiting for package installation to complete..."
+      sleep 5
+      
+      # Refresh environment and verify compilers
+      log "Refreshing environment..."
+      export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      hash -r
+      
+      # Verify C compiler is available with retry logic
       log "Verifying C compiler installation..."
+      for i in {1..5}; do
+          if command -v cc &> /dev/null && command -v gcc &> /dev/null; then
+              log "C compiler verification passed (attempt $i)"
+              break
+          else
+              log "C compiler not found, retrying... (attempt $i/5)"
+              sleep 2
+              hash -r
+          fi
+      done
+      
+      # Final verification
       if ! command -v cc &> /dev/null; then
           log "ERROR: C compiler (cc) not found after installation"
           exit 1
       fi
       
-      # Verify gcc is available (build-essential should provide this)
       if ! command -v gcc &> /dev/null; then
           log "ERROR: GCC compiler not found after installation"
           exit 1
       fi
       
+      # Create completion marker for other scripts
+      log "Creating startup completion marker..."
+      touch /var/log/client-startup-complete
+      
+      # Final verification that everything is working
+      log "Performing final system verification..."
+      if command -v cc &> /dev/null && command -v gcc &> /dev/null; then
+          log "Final verification: Compilers are available"
+      else
+          log "WARNING: Compilers may not be properly available"
+      fi
+      
       log "Package installation completed successfully!"
       log "C compiler verification passed"
+      log "Startup script completed - ready for compilation"
       EOF
   }
 
