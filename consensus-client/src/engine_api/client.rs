@@ -179,7 +179,9 @@ impl ExecutionClient {
                     let current_len = reth_subdag.len();
                     total_committed_txs += current_len;
                     // Log every 100 commits or when the first non-empty subdag is committed
-                    if commit_index % 100 == 0 || total_committed_txs == current_len {
+                    if total_committed_txs > 0
+                        && (commit_index % 100 == 0 || total_committed_txs == current_len)
+                    {
                         info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Leader round {:?}, Tx count {:?}, Total txs {:?}",
                             timestamp_ms,
                             commit_index,
@@ -187,8 +189,7 @@ impl ExecutionClient {
                             current_len,
                             total_committed_txs);
                     }
-                    // Try to check make consensus only
-                    // buffer.push(reth_subdag);
+                    buffer.push(reth_subdag);
                 }
                 if buffer.len() >= BATCH_SIZE
                     || buffer.len() > 0

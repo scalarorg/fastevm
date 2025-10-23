@@ -40,14 +40,14 @@ where
             }
         }
         //TODO: Improve ordering algorithm
-        transactions.sort_by(|tx1, tx2| {
-            if tx1.sender() == tx2.sender() {
-                return tx1.nonce().cmp(&tx2.nonce());
-            } else {
-                //We don't care about the order of different senders
-                return Ordering::Equal;
-            }
-        });
+        // transactions.sort_by(|tx1, tx2| {
+        //     if tx1.sender() == tx2.sender() {
+        //         return tx1.nonce().cmp(&tx2.nonce());
+        //     } else {
+        //         //We don't care about the order of different senders
+        //         return Ordering::Equal;
+        //     }
+        // });
         // let subdag_txs = decode_transactions::<Transaction>(transactions)
         //     .map_err(|e| ErrorObjectOwned::owned(PARSE_ERROR_CODE, e.to_string(), None::<()>))?;
         // // Add subdag transactions to the pool
