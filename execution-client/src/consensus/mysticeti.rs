@@ -22,7 +22,7 @@ use reth_transaction_pool::TransactionPool;
 use std::{collections::VecDeque, sync::Arc};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 // const WAITING_PENDING_TXS_TIMEOUT: u64 = 3000; // 10 second timeout
 // const WAITING_PENDING_TXS_INTERVAL: u64 = 100; // 1 second interval
 use std::collections::HashSet;
@@ -228,14 +228,14 @@ where
                 new_built_payload = built_payload_stream.next() => {
                     match new_built_payload {
                         Some(new_payload) => {
-                            debug!("New built payload with number {}, put it to the buffer. Current payload buffer size: {:?}",
+                            info!("New built payload with number {}, put it to the buffer. Current payload buffer size: {:?}",
                                 new_payload.block().header().number(),
                                 self.payload_buffer.len() + 1);
                             self.last_built_payload.replace(new_payload.clone());
                             self.payload_buffer.push_back(new_payload);
                             if self.last_processing_payload.is_none() {
                                 if let Some(payload) = self.payload_buffer.pop_front() {
-                                    debug!("Last processing payload is None. Execute next proposal block.");
+                                    info!("Last processing payload is None. Execute next proposal block.");
                                     self.last_processing_payload.replace(payload);
                                     let payload = self.last_processing_payload.as_ref().unwrap();
                                     if let Err(e) = self.execute_pending_payload(payload).await {
@@ -261,10 +261,10 @@ where
                         Some(canonical_state) => {
                             // Pop payload from buffer
                             self.canonical_block_number = canonical_state.tip().number();
-                            debug!("Canonical state updated with block number: {:?}", canonical_state.tip().number());
+                            info!("Canonical state updated with block number: {:?}", canonical_state.tip().number());
                             let pending_block_number = self.last_processing_payload.as_ref().map(|payload| payload.block().header().number()).unwrap_or_default();
                             if pending_block_number == self.canonical_block_number  {
-                                debug!("Pending block number {:?} is executed. Remove mined transactions from consensus pool.", pending_block_number);
+                                info!("Pending block number {:?} is executed. Remove mined transactions from consensus pool.", pending_block_number);
                                 let payload = self.last_processing_payload.take().unwrap();
                                 let tx_hashes = payload.block().body().transactions().iter().map(|tx|  tx.tx_hash().clone()).collect::<HashSet<TxHash>>();
                                 // let tx_hashes = execution_payload
@@ -276,14 +276,14 @@ where
                                 self.consensus_pool.remove_mined_transactions(pending_block_number, &tx_hashes);
                                 // Try to execute next built payload
                                 if let Some(next_payload) = self.payload_buffer.pop_front() {
-                                    debug!("Execute next payload from buffer {:?}.", next_payload.block().header().number());
+                                    info!("Execute next payload from buffer {:?}.", next_payload.block().header().number());
                                     self.last_processing_payload.replace(next_payload);
                                     if let Err(e) = self.execute_pending_payload(self.last_processing_payload.as_ref().unwrap()).await {
                                         error!("Execute pending payload failed: {:?}", e);
                                     }
                                 }
                             } else {
-                                debug!("last executed block number is {:?}. Current canonical state number is {:?}. Skip removing mined transactions.",
+                                info!("last executed block number is {:?}. Current canonical state number is {:?}. Skip removing mined transactions.",
                                 pending_block_number, self.canonical_block_number );
                             }
                         }
@@ -322,9 +322,9 @@ where
         if let Some((first_committed_subdag, last_committed_subdag)) =
             self.consensus_pool.next_committed_subdag_batch()
         {
-            debug!(
+            info!(
                 "Create proposal block with committed batch size: {:?}:
-                FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
+                 FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
                  LastCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}
                  Queue size: {:?}",
                 last_committed_subdag.commit_ref.index - first_committed_subdag.commit_ref.index

@@ -13,8 +13,8 @@ use reth_rpc_layer::{secret_to_bearer_header, AuthClientLayer, JwtSecret};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-const BATCH_SIZE: usize = 10;
-const SEND_INTERVAL: u64 = 1000; //In milliseconds
+const BATCH_SIZE: usize = 5;
+const SEND_INTERVAL: u64 = 500; //In milliseconds
 
 pub type Transactions = Vec<Bytes>;
 pub struct ExecutionClient {
@@ -167,6 +167,7 @@ impl ExecutionClient {
         });
         let subdag_handler = tokio::spawn(async move {
             let mut total_committed_txs = 0;
+            let mut total_sent_txs = 0;
             let mut buffer = Vec::new();
             let mut last_sent = std::time::Instant::now();
             loop {
@@ -196,11 +197,22 @@ impl ExecutionClient {
                         && last_sent.elapsed() >= std::time::Duration::from_millis(SEND_INTERVAL)
                 {
                     let batch = std::mem::take(&mut buffer);
+                    let current_batch_size = batch.iter().map(|tx| tx.len()).sum::<usize>();
+                    let first_index = batch.first().map(|tx| tx.commit_ref.index);
+                    let last_index = batch.last().map(|tx| tx.commit_ref.index);
                     if let Err(e) =
                         MysticetiConsensusApiClient::submit_committed_subdags(&http_client, batch)
                             .await
                     {
                         error!("submit_committed_subdags failed: {:?}", e);
+                    } else {
+                        total_sent_txs += current_batch_size;
+                        info!("Sent batch of {} transactions from commit index {:?} to {:?}. Total sent transactions: {:?}",
+                            current_batch_size,
+                            first_index,
+                            last_index,
+                            total_sent_txs
+                        );
                     }
                     last_sent = std::time::Instant::now();
                 }

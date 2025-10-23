@@ -10,7 +10,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex, RwLock},
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Struct to store committed transactions and pooled transactions
 /// Pooled transactions are transactions from committed transactions that are added to the reth pool
@@ -103,7 +103,7 @@ where
         for committed_subdag in committed_subdags {
             committed_queue.insert(committed_subdag.commit_ref.index as u64, committed_subdag);
         }
-        debug!(
+        info!(
             "Added {} committed subdags to queue. Queue size: {:?}",
             len,
             committed_queue.len()

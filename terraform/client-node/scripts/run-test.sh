@@ -206,8 +206,8 @@ run_auto_test() {
     extract_rpc_urls
     
     # Get current block number
-    local current_block=$(get_current_block "$client_ip" "$RPC_URL1")
-    log_info "Initial block number captured: $current_block"
+    local start_block=$(get_current_block "$client_ip" "$RPC_URL1")
+    log_info "Initial block number captured: $start_block"
     
     # Get balance
     get_balance "$client_ip" "$RPC_URL1" "0x07076387734b5b0a2c81d3a84a892fa5e89cdc76"
@@ -220,7 +220,7 @@ run_auto_test() {
     sleep "$test_sleep_duration"
     
     # Run final block scan test
-    run_scan_test "$client_ip" "$current_block" "500" "Final block scan test completed" "⚠️ Final block scan test had issues"
+    run_scan_test "$client_ip" "$start_block" "200" "Final block scan test completed" "⚠️ Final block scan test had issues"
     
     log_success "🎉 Automated test sequence completed!"
 }
