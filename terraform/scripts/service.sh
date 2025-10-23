@@ -103,7 +103,7 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --p2p-secret-key /data/execution/p2p/secret.key \
     --bootnodes ${BOOTNODES} \
     --enable-tx-subscription \
-    --committed-subdags-per-block 30 \
+    --committed-subdags-per-block 10 \
     --block-build-interval-ms 100 \
     -$LOG_LEVEL
 Restart=always

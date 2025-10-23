@@ -463,7 +463,7 @@ where
         parent_header,
         attributes,
     } = config;
-
+    let start_time = Instant::now();
     let state_provider = client.state_by_block_hash(parent_header.hash())?;
     let state = StateProviderDatabase::new(&state_provider);
     let mut db = State::builder()
@@ -670,6 +670,11 @@ where
     let payload = EthBuiltPayload::new(attributes.id, sealed_block, total_fees, requests)
         // add blob sidecars from the executed txs
         .with_sidecars(blob_sidecars);
+    info!(
+        "Payload built in {:?} with {:?} transactions",
+        start_time.elapsed(),
+        block.transaction_count()
+    );
 
     Ok(BuildOutcome::Better {
         payload,

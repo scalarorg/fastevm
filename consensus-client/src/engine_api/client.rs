@@ -178,6 +178,12 @@ impl ExecutionClient {
                     let reth_subdag = RethCommittedSubDag::from(subdag);
                     let current_len = reth_subdag.len();
                     total_committed_txs += current_len;
+                    if let Err(e) =
+                        MysticetiConsensusApiClient::submit_committed_subdags(&http_client, batch)
+                            .await
+                    {
+                        error!("submit_committed_subdags failed: {:?}", e);
+                    }
                     // Log every 100 commits or when the first non-empty subdag is committed
                     if total_committed_txs > 0
                         && (commit_index % 100 == 0 || total_committed_txs == current_len)
@@ -189,29 +195,31 @@ impl ExecutionClient {
                             current_len,
                             total_committed_txs);
                     }
-                    buffer.push(reth_subdag);
+                    // buffer.push(reth_subdag);
                 }
-                if buffer.len() >= BATCH_SIZE {
-                    let batch = std::mem::take(&mut buffer);
-                    let current_batch_size = batch.iter().map(|tx| tx.len()).sum::<usize>();
-                    let first_index = batch.first().map(|tx| tx.commit_ref.index);
-                    let last_index = batch.last().map(|tx| tx.commit_ref.index);
-                    if let Err(e) =
-                        MysticetiConsensusApiClient::submit_committed_subdags(&http_client, batch)
-                            .await
-                    {
-                        error!("submit_committed_subdags failed: {:?}", e);
-                    } else {
-                        total_sent_txs += current_batch_size;
-                        info!("Sent batch of {} transactions from commit index {:?} to {:?}. Total sent transactions: {:?}",
-                            current_batch_size,
-                            first_index,
-                            last_index,
-                            total_sent_txs
-                        );
-                    }
-                    last_sent = std::time::Instant::now();
-                }
+                // Don't use buffer for now, the commit rate is 1/100ms is not too fast
+
+                // if buffer.len() >= BATCH_SIZE {
+                //     let batch = std::mem::take(&mut buffer);
+                //     let current_batch_size = batch.iter().map(|tx| tx.len()).sum::<usize>();
+                //     let first_index = batch.first().map(|tx| tx.commit_ref.index);
+                //     let last_index = batch.last().map(|tx| tx.commit_ref.index);
+                //     if let Err(e) =
+                //         MysticetiConsensusApiClient::submit_committed_subdags(&http_client, batch)
+                //             .await
+                //     {
+                //         error!("submit_committed_subdags failed: {:?}", e);
+                //     } else {
+                //         total_sent_txs += current_batch_size;
+                //         info!("Sent batch of {} transactions from commit index {:?} to {:?}. Total sent transactions: {:?}",
+                //             current_batch_size,
+                //             first_index,
+                //             last_index,
+                //             total_sent_txs
+                //         );
+                //     }
+                //     last_sent = std::time::Instant::now();
+                // }
             }
         });
         let _ = tokio::join!(transaction_handler, subdag_handler);

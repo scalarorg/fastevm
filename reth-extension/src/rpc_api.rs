@@ -43,4 +43,10 @@ pub trait MysticetiConsensusApi {
         &self,
         #[argument(rename = "subdag")] subdags: Vec<CommittedSubDag>,
     ) -> RpcResult<()>;
+
+    #[method(name = "submitCommittedSubdag")]
+    fn submit_committed_subdag(
+        &self,
+        #[argument(rename = "subdag")] subdag: CommittedSubDag,
+    ) -> RpcResult<()>;
 }

@@ -479,7 +479,7 @@ start_execution_node() {
         "--p2p-secret-key" "$data_dir/p2p/secret.key"
         "--bootnodes" "$bootnodes"
         "--enable-tx-subscription"
-        "--committed-subdags-per-block" "30"
+        "--committed-subdags-per-block" "10"
         "--block-build-interval-ms" "100"
         "$debug_level"
     )    

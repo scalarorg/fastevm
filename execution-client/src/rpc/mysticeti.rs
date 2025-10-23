@@ -145,6 +145,41 @@ impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> Mystice
     for MysticetiConsensusHandler<Pool, ChainSpec>
 {
     #[doc = " Submit commited subdag"]
+    fn submit_committed_subdag(&self, subdag: CommittedSubDag) -> RpcResult<()> {
+        // This method is called by consensus client to submit committed subdags each 100ms
+        // We don't need to process in separate thread
+        let mut committed_subdags = Vec::new();
+        let mut tx_counter = 0;
+        let start_time = std::time::Instant::now();
+        let commited_index = subdag.commit_ref.index;
+        let committed_subdag = MysticetiCommittedSubdag::<Pool::Transaction>::try_from(subdag)
+            .map_err(|e| {
+                ErrorObjectOwned::owned(
+                    PARSE_ERROR_CODE,
+                    format!(
+                        "Failed to convert committed subdag to MysticetiCommittedSubdag: {}",
+                        e
+                    ),
+                    None::<()>,
+                )
+            })?;
+        tx_counter += committed_subdag.transactions.len();
+        committed_subdags.push(committed_subdag);
+
+        self.consensus_pool.add_committed_subdags(committed_subdags);
+        let mut total_txs = self.total_txs.write();
+        *total_txs += tx_counter as u64;
+        info!(
+            "Processed subdag index {:?}  with {:?} transactions, Total transactions: {:?}. Time taken: {:?}",
+            commited_index,
+            tx_counter,
+            *total_txs,
+            start_time.elapsed()
+        );
+        Ok(())
+    }
+
+    #[doc = " Submit commited subdags"]
     fn submit_committed_subdags(&self, subdags: Vec<CommittedSubDag>) -> RpcResult<()> {
         // This method is called by consensus client to submit committed subdags each 100ms
         // We don't need to process in separate thread
