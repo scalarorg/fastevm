@@ -7,7 +7,7 @@ use alloy_primitives::TxHash;
 use reth_extension::MysticetiCommittedSubdag;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex, RwLock},
 };
 use tracing::{debug, info};

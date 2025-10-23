@@ -35,13 +35,14 @@ reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
 reth-evm = { workspace = true }
 reth-provider = { workspace = true }
+reth-revm = { workspace = true }
 reth-rpc-layer = { workspace = true }
 reth-transaction-pool = { workspace = true }
 reth-tracing = { workspace = true }
 reth-node-api = { workspace = true }
 reth-node-builder = { workspace = true }
 reth-payload-builder = { workspace = true }
-
+revm = { workspace = true }
 # Additional dependencies for RPC and caching
 jsonrpsee = { workspace = true }
 tokio = { workspace = true }

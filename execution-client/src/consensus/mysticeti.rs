@@ -228,8 +228,9 @@ where
                 new_built_payload = built_payload_stream.next() => {
                     match new_built_payload {
                         Some(new_payload) => {
-                            info!("New built payload with number {}, put it to the buffer. Current payload buffer size: {:?}",
+                            info!("New built payload with number {} and {} txs, put it to the buffer. Current payload buffer size: {:?}",
                                 new_payload.block().header().number(),
+                                new_payload.block().body().transactions().len(),
                                 self.payload_buffer.len() + 1);
                             self.last_built_payload.replace(new_payload.clone());
                             self.payload_buffer.push_back(new_payload);

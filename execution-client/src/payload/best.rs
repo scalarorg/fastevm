@@ -4,17 +4,17 @@ use reth_transaction_pool::{
 use std::{collections::VecDeque, sync::Arc};
 
 pub struct BestMysticetiTransactions<T: PoolTransaction> {
-    reth_best_txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
-    mysticeti_txs: VecDeque<Arc<ValidPoolTransaction<T>>>,
+    //reth_best_txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
+    mysticeti_txs: VecDeque<Arc<T>>,
 }
 
 impl<T: PoolTransaction> BestMysticetiTransactions<T> {
     pub fn new(
-        reth_best_txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
-        mysticeti_txs: VecDeque<Arc<ValidPoolTransaction<T>>>,
+        //reth_best_txs: Box<dyn BestTransactions<Item = Arc<ValidPoolTransaction<T>>>>,
+        mysticeti_txs: VecDeque<Arc<T>>,
     ) -> Self {
         Self {
-            reth_best_txs,
+            //reth_best_txs,
             mysticeti_txs,
         }
     }
@@ -29,19 +29,19 @@ impl<T: PoolTransaction> BestTransactions for BestMysticetiTransactions<T> {
         //     transaction.nonce(),
         //     kind
         // );
-        self.reth_best_txs.mark_invalid(transaction, kind);
+        // self.reth_best_txs.mark_invalid(transaction, kind);
     }
 
     fn no_updates(&mut self) {
-        self.reth_best_txs.no_updates();
+        // self.reth_best_txs.no_updates();
     }
 
     fn set_skip_blobs(&mut self, skip_blobs: bool) {
-        self.reth_best_txs.set_skip_blobs(skip_blobs);
+        // self.reth_best_txs.set_skip_blobs(skip_blobs);
     }
 }
 impl<T: PoolTransaction> Iterator for BestMysticetiTransactions<T> {
-    type Item = Arc<ValidPoolTransaction<T>>;
+    type Item = Arc<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         //1 Pick first transaction from mysticeti transactions

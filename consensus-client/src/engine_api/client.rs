@@ -14,7 +14,6 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 const BATCH_SIZE: usize = 5;
-const SEND_INTERVAL: u64 = 500; //In milliseconds
 
 pub type Transactions = Vec<Bytes>;
 pub struct ExecutionClient {
@@ -192,10 +191,7 @@ impl ExecutionClient {
                     }
                     buffer.push(reth_subdag);
                 }
-                if buffer.len() >= BATCH_SIZE
-                    || buffer.len() > 0
-                        && last_sent.elapsed() >= std::time::Duration::from_millis(SEND_INTERVAL)
-                {
+                if buffer.len() >= BATCH_SIZE {
                     let batch = std::mem::take(&mut buffer);
                     let current_batch_size = batch.iter().map(|tx| tx.len()).sum::<usize>();
                     let first_index = batch.first().map(|tx| tx.commit_ref.index);

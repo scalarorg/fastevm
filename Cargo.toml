@@ -85,7 +85,10 @@ reth-network-peers = { git = "https://github.com/paradigmxyz/reth.git", tag = "v
 # reth-tokio-util = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-tokio-util" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-transaction-pool" }
 
-revm = { version = "28.0.1", default-features = false }
+revm = { version = "27.0.3", default-features = false }
+revm-context = { version = "8.0.2", default-features = false }
+revm-context-interface = { version = "8.0.1", default-features = false }
+
 walkdir = "2.3.3"
 
 base64 = "0.22.1"
