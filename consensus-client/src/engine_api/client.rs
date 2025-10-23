@@ -178,9 +178,11 @@ impl ExecutionClient {
                     let reth_subdag = RethCommittedSubDag::from(subdag);
                     let current_len = reth_subdag.len();
                     total_committed_txs += current_len;
-                    if let Err(e) =
-                        MysticetiConsensusApiClient::submit_committed_subdags(&http_client, batch)
-                            .await
+                    if let Err(e) = MysticetiConsensusApiClient::submit_committed_subdag(
+                        &http_client,
+                        reth_subdag,
+                    )
+                    .await
                     {
                         error!("submit_committed_subdags failed: {:?}", e);
                     }

@@ -188,10 +188,11 @@ where
             .commit_ref
             .index;
         self.append_proposal_transactions(&mut pending_transactions, next_committed_subdags_batch);
-        debug!(
-            "Get proposal transactions with {:?} transactions. Last committed index: {:?}",
-            pending_transactions.len(),
-            last_committed_index
+        info!(
+            "Get proposal transactions from committed subdag {:?} to {:?} with {:?} transactions.",
+            next_committed_index,
+            last_committed_index,
+            pending_transactions.len()
         );
         //Clone pending transactions for building a BestTransactions iterator
         return pending_transactions;
