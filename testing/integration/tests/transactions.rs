@@ -9,7 +9,6 @@
 //! Note: Some tests require a local EVM network (like Anvil, Hardhat, or Ganache)
 //! to be running and properly configured with test accounts.
 
-use alloy::hex::ToHexExt;
 use alloy_primitives::{hex, Address};
 use alloy_provider::{Provider, ProviderBuilder};
 use eyre::Result;

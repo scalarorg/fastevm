@@ -745,7 +745,7 @@ where
     // Get initial nonces for all sender addresses
     println!("📡 Worker {}: Fetching initial nonces...", worker_id);
     let nonce_start_time = std::time::Instant::now();
-    let url_idx = rand::thread_rng().gen_range(0..available_urls.len());
+    let url_idx = rand::rng().random_range(0..available_urls.len());
     let mut address_nonces = if fetch_nonce == "true" {
         get_nonces(
             &accounts
@@ -790,9 +790,9 @@ where
             let number_of_senders = accounts.len();
 
             // Randomly select a recipient from the sender addresses (excluding self)
-            let mut recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+            let mut recipient_idx = rand::rng().random_range(0..number_of_senders);
             while recipient_idx == sender_idx {
-                recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+                recipient_idx = rand::rng().random_range(0..number_of_senders);
             }
             let recipient_account = &accounts[recipient_idx];
 

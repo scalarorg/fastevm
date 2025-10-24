@@ -1,4 +1,5 @@
 use crate::consensus::ConsensusPool;
+use alloy_consensus::transaction::TxHashRef;
 use alloy_consensus::BlockHeader;
 use alloy_primitives::{Address, TxHash, B256};
 use alloy_rpc_types_engine::PayloadAttributes;
