@@ -150,6 +150,7 @@ resource "google_compute_instance" "fastevm_nodes" {
   attached_disk {
     source      = google_compute_disk.fastevm_disks[count.index].id
     device_name = "fastevm-data"
+    mode        = "READ_WRITE"
   }
 
   network_interface {

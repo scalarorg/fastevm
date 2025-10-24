@@ -167,8 +167,8 @@ impl ExecutionClient {
         let subdag_handler = tokio::spawn(async move {
             let mut total_committed_txs = 0;
             let mut total_sent_txs = 0;
-            let mut buffer = Vec::new();
-            let mut last_sent = std::time::Instant::now();
+            // let mut buffer = Vec::new();
+            // let mut last_sent = std::time::Instant::now();
             loop {
                 if let Some(subdag) = commit_receiver.recv().await {
                     //TODO: findout why timestamp_ms is 0
