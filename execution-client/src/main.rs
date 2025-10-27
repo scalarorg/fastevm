@@ -11,12 +11,14 @@
 // alloy_consensus is used in transaction_listener.rs
 use alloy_consensus as _;
 mod consensus;
+mod executor;
 mod payload;
 mod pool;
 mod rpc;
 mod types;
-
 use clap::Parser;
+
+use executor::*;
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_transaction_pool::blobstore::DiskFileBlobStore;
 use tokio::sync::mpsc::unbounded_channel;
@@ -99,6 +101,7 @@ fn main() {
                 // use default ethereum components but use our custom payload builder
                 .with_components(
                     EthereumNode::components()
+                        .executor(ScalarExecutorBuilder::default())
                         .payload(mysticeti_payload_builder)
                         .pool(
                             MysticetiPoolBuilder::<_, DiskFileBlobStore>::default()

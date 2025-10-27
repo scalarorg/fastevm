@@ -19,6 +19,7 @@ alloy-primitives = { workspace = true, default-features = false, features = ["ma
 alloy-rpc-types-engine = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
+alloy-evm = { workspace = true }
 # alloy-rlp = { workspace = true }
 eyre = { workspace = true}
 futures-util = { workspace = true}

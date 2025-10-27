@@ -36,6 +36,7 @@ fastcrypto-zkp = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d4
 # Core dependencies
 alloy-consensus = { version = "1.0.37", default-features = false }
 alloy-eips = { version = "1.0.37", default-features = false }
+alloy-evm = { version = "0.21.0", default-features = false }
 alloy-network = { version = "1.0.37", default-features = false }
 alloy-rpc-types-engine = { version = "1.0.37", default-features = false }
 alloy-rpc-types-eth = { version = "1.0.37", default-features = false }
