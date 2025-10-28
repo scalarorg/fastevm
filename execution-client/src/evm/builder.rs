@@ -3,7 +3,7 @@ use reth_node_api::{FullNodeTypes, NodeTypes};
 use reth_node_builder::{components::ExecutorBuilder, BuilderContext};
 // use reth_provider::LatestStateProviderRef;
 
-use crate::executor::{ScalarEvmConfig, ScalarEvmFactory};
+use crate::evm::{ScalarEvmConfig, ScalarEvmFactory};
 
 /// Builds a regular ethereum block executor that uses the custom EVM.
 #[derive(Debug, Default, Clone, Copy)]

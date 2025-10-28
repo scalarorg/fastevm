@@ -31,6 +31,7 @@ secp256k1 = { workspace = true }
 # Reth
 reth-network-peers = { workspace = true }
 reth-basic-payload-builder = { workspace = true }
+reth-chainspec = { workspace = true }
 reth-ethereum = { workspace = true }
 reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
@@ -59,7 +60,7 @@ sha2 = { version = "0.10", default-features = false }
 
 # Consensus dependencies
 # consensus-core = { workspace = true }
-
+auto_impl.workspace = true
 [dev-dependencies]
 tokio-test = { workspace = true }
 tempfile = "3"
