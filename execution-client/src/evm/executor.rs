@@ -16,7 +16,7 @@ use reth_evm::{
     FromRecoveredTx, FromTxWithEncoded,
 };
 use revm::{context::result::ResultAndState, database::State};
-use tracing::info;
+use tracing::{debug, info};
 
 // /// A generic block executor that uses a [`BlockExecutor`] to
 // /// execute blocks.
@@ -188,7 +188,7 @@ where
         tx: impl ExecutableTx<Self>,
     ) -> Result<u64, BlockExecutionError> {
         let result = self.inner.commit_transaction(output, tx)?;
-        info!(
+        debug!(
             "[ScalarBlockExecutor] Committing transaction with gas used: {}",
             result
         );
@@ -197,7 +197,7 @@ where
     }
 
     fn finish(self) -> Result<(Self::Evm, BlockExecutionResult<R::Receipt>), BlockExecutionError> {
-        info!("[ScalarBlockExecutor] Finish");
+        info!(target: "ScalarBlockExecutor", "Finish");
         self.inner.finish()
     }
 
