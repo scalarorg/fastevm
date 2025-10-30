@@ -15,12 +15,15 @@ path = "src/cli.rs"
 reth-extension = { workspace = true }
 # Ethereum
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
-# alloy-rpc-types-eth = { workspace = true }
 alloy-rpc-types-engine = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-evm = { workspace = true }
+# alloy-rpc-types-eth = { workspace = true }
 # alloy-rlp = { workspace = true }
+# alloy = { workspace = true, features = ["network", "rpc"] }
+# alloy-signer-local = { workspace = true }
+
 eyre = { workspace = true}
 futures-util = { workspace = true}
 tracing = { workspace = true }
@@ -36,34 +39,49 @@ reth-ethereum = { workspace = true }
 reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
 reth-evm = { workspace = true }
+reth-primitives-traits = { workspace = true }
 reth-provider = { workspace = true }
 reth-revm = { workspace = true }
 reth-rpc-layer = { workspace = true }
 reth-transaction-pool = { workspace = true }
 reth-tracing = { workspace = true }
+reth-db-api = { workspace = true }
+reth-metrics = { workspace = true }
 reth-node-api = { workspace = true }
 reth-node-builder = { workspace = true }
+reth-node-core = { workspace = true }
+reth-libmdbx = { workspace = true }
+reth-db = { workspace = true, features = ["mdbx"] }
 reth-payload-builder = { workspace = true }
+reth-fs-util = { workspace = true }
+reth-storage-errors = { workspace = true }
 revm = { workspace = true }
+
 # Additional dependencies for RPC and caching
 jsonrpsee = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
+page_size = { workspace = true }
 async-trait = { workspace = true }
 tokio-stream = "0.1.11"
 parking_lot = { workspace = true }
+metrics = { workspace = true }
+
 # Dependencies for mnemonic and account generation
 bip39 = "2.0"
 hdwallet = "0.3"
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 sha2 = { version = "0.10", default-features = false }
-
+thiserror = { workspace = true }
 # Consensus dependencies
 # consensus-core = { workspace = true }
 auto_impl.workspace = true
+rustc-hash.workspace = true
+strum = { workspace = true }
+sysinfo = { workspace = true }
 [dev-dependencies]
 tokio-test = { workspace = true }
 tempfile = "3"
-# alloy = { workspace = true, features = ["network", "rpc"] }
-# alloy-signer-local = { workspace = true }
 http = { workspace = true }
+metrics = { workspace = true }
+assert_matches = { workspace = true }

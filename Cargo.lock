@@ -1550,6 +1550,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "155a5a185e42c6b77ac7b88a15143d930a9e9727a5b7b77eed417404ab15c247"
 
 [[package]]
+name = "assert_matches"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
+
+[[package]]
 name = "async-compression"
 version = "0.4.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3896,6 +3902,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rpc-types-engine",
  "anyhow",
+ "assert_matches",
  "async-trait",
  "auto_impl",
  "bip39",
@@ -3906,28 +3913,42 @@ dependencies = [
  "hex",
  "http",
  "jsonrpsee",
+ "metrics",
+ "page_size",
  "parking_lot",
  "reth-basic-payload-builder",
  "reth-chainspec",
+ "reth-db",
+ "reth-db-api",
  "reth-ethereum",
  "reth-ethereum-engine-primitives",
  "reth-ethereum-payload-builder",
  "reth-evm",
  "reth-extension",
+ "reth-fs-util",
+ "reth-libmdbx",
+ "reth-metrics",
  "reth-network-peers",
  "reth-node-api",
  "reth-node-builder",
+ "reth-node-core",
  "reth-payload-builder",
+ "reth-primitives-traits",
  "reth-provider",
  "reth-revm",
  "reth-rpc-layer",
+ "reth-storage-errors",
  "reth-tracing",
  "reth-transaction-pool",
  "revm",
+ "rustc-hash 2.1.1",
  "secp256k1 0.30.0",
  "serde_json",
  "sha2 0.10.9",
+ "strum 0.27.2",
+ "sysinfo",
  "tempfile",
+ "thiserror 2.0.16",
  "tokio",
  "tokio-stream",
  "tokio-test",

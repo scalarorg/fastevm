@@ -515,14 +515,14 @@ where
             let number_of_senders = accounts.len();
 
             // Randomly select a recipient from the sender addresses (excluding self)
-            let mut recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+            let mut recipient_idx = rand::rng().random_range(0..number_of_senders);
             while recipient_idx == sender_idx {
-                recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+                recipient_idx = rand::rng().random_range(0..number_of_senders);
             }
             let recipient_account = &accounts[recipient_idx];
 
             // Randomly select an RPC provider
-            let provider_idx = rand::thread_rng().gen_range(0..providers.len());
+            let provider_idx = rand::rng().random_range(0..providers.len());
             let provider = &providers[provider_idx];
             let rpc_url = &available_urls[provider_idx];
 

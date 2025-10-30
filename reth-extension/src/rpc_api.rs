@@ -1,4 +1,4 @@
-use alloy_primitives::{Bytes, B256};
+use alloy_primitives::Bytes;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     proc_macros::rpc,

@@ -11,13 +11,15 @@
 // alloy_consensus is used in transaction_listener.rs
 use alloy_consensus as _;
 mod consensus;
+mod db;
 mod evm;
 mod payload;
 mod pool;
 mod rpc;
+
 mod types;
 use clap::Parser;
-
+use db::init_db;
 use evm::*;
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_transaction_pool::blobstore::DiskFileBlobStore;
@@ -26,6 +28,7 @@ use tokio::sync::oneshot;
 // Suppress warnings for dependencies used by CLI binary
 use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
+    db::DatabaseArguments,
     payload::MysticetiPayloadBuilderFactory,
     pool::MysticetiPoolBuilder,
     rpc::{MysticetiConsensusHandler, TransactionHandler},
@@ -36,7 +39,7 @@ use reth_ethereum::{
     chainspec::ChainSpecProvider,
     cli::{chainspec::EthereumChainSpecParser, interface::Cli},
     node::{
-        builder::{components::BasicPayloadServiceBuilder, NodeHandle},
+        builder::{components::BasicPayloadServiceBuilder, NodeBuilder, NodeHandle},
         node::EthereumAddOns,
         EthereumNode,
     },
@@ -80,6 +83,24 @@ pub(crate) struct CliMysticetiArgs {
 fn main() {
     Cli::<EthereumChainSpecParser, CliMysticetiArgs>::parse()
         .run(|builder, args| async move {
+            // Extract config and create custom database
+            let config = builder.config();
+            let datadir = config.datadir();
+            let db_path = datadir.db();
+
+            info!(path = ?db_path, "Creating custom database");
+            let db_args = DatabaseArguments::from(&config.db);
+            let custom_database = Arc::new(init_db(db_path, db_args)?);
+
+            // Create task executor and rebuild builder with custom database
+            let task_executor = builder.task_executor().clone();
+            let config = config.clone();
+
+            // Build node from scratch with custom database (cleaner approach)
+            let builder = NodeBuilder::new(config)
+                .with_database(custom_database)
+                .with_launch_context(task_executor);
+
             // Create a channel for sending built payload to mysticeti consensus
             let (tx_built_payload, rx_built_payload) = unbounded_channel();
 
