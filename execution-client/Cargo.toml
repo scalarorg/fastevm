@@ -35,7 +35,9 @@ secp256k1 = { workspace = true }
 reth-network-peers = { workspace = true }
 reth-basic-payload-builder = { workspace = true }
 reth-chainspec = { workspace = true }
+reth-cli-runner = { workspace = true }
 reth-ethereum = { workspace = true }
+reth-ethereum-cli = { workspace = true, default-features = false }
 reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
 reth-evm = { workspace = true }

@@ -1,5 +1,5 @@
 [workspace.package]
-version = "1.6.0"
+version = "1.8.2"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -13,6 +13,7 @@ members = [
     "execution-client",
     "consensus-client",
     "testing/integration"
+
 ]
 resolver = "2"
 
@@ -34,6 +35,7 @@ fastcrypto-tbls = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d
 fastcrypto-zkp = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9", package = "fastcrypto-zkp" }
 
 # Core dependencies
+alloy-chains = { version = "0.2.5", default-features = false }
 alloy-consensus = { version = "1.0.37", default-features = false }
 alloy-eips = { version = "1.0.37", default-features = false }
 alloy-evm = { version = "0.21.0", default-features = false }
@@ -56,6 +58,7 @@ alloy-transport-ws = { version = "1.0.37", default-features = false }
 reth-basic-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-basic-payload-builder" }
 reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-payload-builder" }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-chainspec" }
+reth-cli-runner = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-cli-runner" }
 reth-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-consensus" }
 reth-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-db", features = ["mdbx", "test-utils", "disable-lock"] }
 reth-db-api= { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-db-api" }
@@ -93,12 +96,66 @@ revm = { version = "29.0.1", default-features = false }
 revm-context = { version = "9.1.0", default-features = false }
 revm-context-interface = { version = "10.2.0", default-features = false }
 
+# Additional reth crates required by local reth/cli crates
+reth-cli = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-cli" }
+reth-cli-commands = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-cli-commands" }
+reth-cli-util = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-cli-util" }
+reth-codecs = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-codecs" }
+reth-config = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-config" }
+reth-downloaders = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-downloaders" }
+reth-ecies = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-ecies" }
+reth-eth-wire = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-eth-wire" }
+reth-era = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-era" }
+reth-era-downloader = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-era-downloader" }
+reth-era-utils = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-era-utils" }
+reth-etl = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-etl" }
+reth-exex = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-exex" }
+reth-net-nat = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-net-nat" }
+reth-network = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-network" }
+reth-network-p2p = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-network-p2p" }
+reth-node-events = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-node-events" }
+reth-node-metrics = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-node-metrics" }
+reth-prune = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-prune" }
+reth-prune-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-prune-types" }
+reth-stages = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-stages" }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-stages-types" }
+reth-static-file = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-static-file" }
+reth-static-file-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-static-file-types" }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-trie-common" }
+reth-discv4 = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-discv4" }
+reth-discv5 = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-discv5" }
+reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-ethereum-cli" }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-node-ethereum" }
+reth-rpc-server-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-rpc-server-types" }
+reth-nippy-jar = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-nippy-jar" }
+tempfile = "3"
+
+# Third-party crates used by reth/cli crates
+clap = { version = "4", features = ["derive", "env"] }
+shellexpand = "3"
+toml = { version = "0.8", features = ["display"] }
+humantime = "2"
+human_bytes = "0.4"
+lz4 = "1"
+zstd = "0.13"
+fdlimit = "0.3"
+comfy-table = "7"
+crossterm = "0.28"
+ratatui = { version = "0.28", features = ["crossterm"] }
+tokio-stream = "0.1"
+backon = "1"
+tar = "0.4"
+itertools = "0.13"
+proptest = "1"
+proptest-arbitrary-interop = "0.1"
+
 walkdir = "2.3.3"
 anyhow = "1.0"
 auto_impl = "1"
 base64 = "0.22.1"
 bincode = "2.0"
 bytes = { version = "1.5.0", features = ["serde"] }
+derive_more = "1.0.0"
 
 page_size = "0.6.0"
 rand = "0.9"
@@ -176,3 +233,10 @@ codegen-units = 1
 
 [profile.test]
 opt-level = 1
+
+[patch."https://github.com/paradigmxyz/reth.git"]
+# Override upstream reth CLI crates with local copies in `reth/`
+reth-cli = { path = "reth/cli/cli" }
+reth-cli-commands = { path = "reth/cli/commands" }
+reth-db = { path = "reth/storage/db" }
+reth-ethereum-cli = { path = "reth/ethereum/cli" }
