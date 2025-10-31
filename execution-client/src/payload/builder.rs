@@ -519,8 +519,14 @@ where
         .as_ref()
         .map(|params| params.max_blob_count)
         .unwrap_or_default();
-
+    let mut nonce_too_low_txs = 0;
+    let mut side_car_invalid_txs = 0;
+    let mut block_gas_invalid_txs = 0;
+    let mut max_blob_count_invalid_txs = 0;
+    let mut executed_failed_txs = 0;
+    let mut lookex_txs = 0;
     while let Some(pool_tx) = best_txs.next() {
+        lookex_txs += 1;
         // ensure we still have capacity for this transaction
         if cumulative_gas_used + pool_tx.gas_limit() > block_gas_limit {
             // we can't fit this transaction into the block, so we need to mark it as invalid
@@ -530,6 +536,7 @@ where
                 &pool_tx,
                 InvalidPoolTransactionError::ExceedsGasLimit(pool_tx.gas_limit(), block_gas_limit),
             );
+            block_gas_invalid_txs += 1;
             continue;
         }
 
@@ -562,6 +569,7 @@ where
                         },
                     ),
                 );
+                max_blob_count_invalid_txs += 1;
                 continue;
             }
 
@@ -590,6 +598,7 @@ where
                 Ok(sidecar) => Some(sidecar),
                 Err(error) => {
                     best_txs.mark_invalid(&pool_tx, InvalidPoolTransactionError::Eip4844(error));
+                    side_car_invalid_txs += 1;
                     continue;
                 }
             };
@@ -601,11 +610,13 @@ where
                 error, ..
             })) => {
                 if error.is_nonce_too_low() {
+                    nonce_too_low_txs += 1;
                     // if the nonce is too low, we can skip this transaction
                     trace!(target: "payload_builder", %error, ?tx, "skipping nonce too low transaction");
                 } else {
                     // if the transaction is invalid, we can skip it and all of its
                     // descendants
+                    executed_failed_txs += 1;
                     trace!(target: "payload_builder", %error, ?tx, "skipping invalid transaction and its descendants");
                     best_txs.mark_invalid(
                         &pool_tx,
@@ -671,9 +682,22 @@ where
         // add blob sidecars from the executed txs
         .with_sidecars(blob_sidecars);
     info!(
-        "Payload built in {:?} with {:?} transactions",
-        start_time.elapsed(),
-        block.transaction_count()
+        "[mysticeti_ethereum_payload] Payload built. Looked at {:?} transactions and {:?} valid transactions, 
+            nonce too low transactions: {:?}, 
+            side car invalid transactions: {:?}, 
+            block gas invalid transactions: {:?}, 
+            max blob count invalid transactions: {:?}, 
+            executed failed transactions: {:?}, 
+            total gas used: {:?}. Elapsed time: {:?}",
+        lookex_txs,
+        block.transaction_count(),
+        nonce_too_low_txs,
+        side_car_invalid_txs,
+        block_gas_invalid_txs,
+        max_blob_count_invalid_txs,
+        executed_failed_txs,
+        cumulative_gas_used,
+        start_time.elapsed()
     );
 
     Ok(BuildOutcome::Better {

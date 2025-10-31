@@ -111,11 +111,11 @@ where
     }
     /// Append transactions from next committed subdags to pending transactions
     /// Sort transactions by nonce-based ordering
-    pub fn append_proposal_transactions(
+    pub fn create_proposal_transactions(
         &self,
-        pending_transactions: &mut Vec<Arc<Pool::Transaction>>,
+        pending_transactions: &Vec<Arc<Pool::Transaction>>,
         next_committed_subdags_batch: Vec<MysticetiCommittedSubdag<Pool::Transaction>>,
-    ) {
+    ) -> Vec<Arc<Pool::Transaction>> {
         let first_committed_transactions = next_committed_subdags_batch.first().unwrap();
         let last_committed_transactions = next_committed_subdags_batch.last().unwrap();
         debug!(
@@ -156,7 +156,7 @@ where
             }
         }
         debug!("Total pending transactions: {}", sorted_transactions.len());
-        *pending_transactions = sorted_transactions;
+        return sorted_transactions;
     }
 
     /// Get all pending transactions and transactions from next {committed_subdags_per_block} committed subdags
@@ -165,7 +165,6 @@ where
     /// Make sure this method is not change underly pending transactions except first call
     pub fn get_proposal_transactions(&self) -> Vec<Arc<Pool::Transaction>> {
         // 1. Append transactions from next committed subdag to pending transactions
-        let mut pending_transactions = self.pending_transactions.read().unwrap().clone();
         let committed_queue = self.commited_queue.read().unwrap();
         //Check if there are enough committed transactions to fill the block
         if committed_queue.len() < self.committed_subdags_per_block {
@@ -187,15 +186,21 @@ where
             .unwrap()
             .commit_ref
             .index;
-        self.append_proposal_transactions(&mut pending_transactions, next_committed_subdags_batch);
-        info!(
-            "Get proposal transactions from committed subdag {:?} to {:?} with {:?} transactions.",
-            next_committed_index,
-            last_committed_index,
-            pending_transactions.len()
-        );
+        let pending_transactions = self.pending_transactions.read().unwrap().clone();
+        for tx in pending_transactions.iter() {
+            debug!("Transaction: {:?} nonce: {:?}", tx.sender(), tx.nonce());
+        }
+        let sorted_transactions =
+            self.create_proposal_transactions(&pending_transactions, next_committed_subdags_batch);
+        for tx in sorted_transactions.iter() {
+            debug!(
+                "Sorted Transaction: {:?} nonce: {:?}",
+                tx.sender(),
+                tx.nonce()
+            );
+        }
         //Clone pending transactions for building a BestTransactions iterator
-        return pending_transactions;
+        return sorted_transactions;
     }
     /// Remove mined transactions from both pending transactions and committed queue
     pub fn remove_mined_transactions(&self, block_number: u64, tx_hashes: &HashSet<TxHash>) {
@@ -203,7 +208,7 @@ where
         //make sure committed queue is not modified while removing mined transactions
         let _lock = self.lock.lock().unwrap();
         // Lock both collections to ensure thread safety
-        let mut pending_transactions = self.pending_transactions.write().unwrap();
+        let pending_transactions = self.pending_transactions.read().unwrap().clone();
         let mut committed_queue = self.commited_queue.write().unwrap();
         let mut next_committed_index = self.next_committed_index.write().unwrap();
         let mut next_committed_subdags_batch = Vec::new();
@@ -213,10 +218,13 @@ where
             assert!(committed_transactions.is_some());
             next_committed_subdags_batch.push(committed_transactions.unwrap());
         }
-        self.append_proposal_transactions(&mut pending_transactions, next_committed_subdags_batch);
+        let mut sorted_transactions =
+            self.create_proposal_transactions(&pending_transactions, next_committed_subdags_batch);
         let initial_pending_len = pending_transactions.len();
         // Remove mined transactions from pending transactions
-        pending_transactions.retain(|tx| !tx_hashes.contains(tx.hash()));
+        sorted_transactions.retain(|tx| !tx_hashes.contains(tx.hash()));
+        let mut pending_transactions = self.pending_transactions.write().unwrap();
+        *pending_transactions = sorted_transactions;
         //Increase next committed index for next batch
         *next_committed_index += self.committed_subdags_per_block as u64;
 

@@ -188,10 +188,10 @@ where
         tx: impl ExecutableTx<Self>,
     ) -> Result<u64, BlockExecutionError> {
         let result = self.inner.commit_transaction(output, tx)?;
-        debug!(
-            "[ScalarBlockExecutor] Committing transaction with gas used: {}",
-            result
-        );
+        // debug!(
+        //     "[ScalarBlockExecutor] Committing transaction with gas used: {}",
+        //     result
+        // );
         self.gas_used += result;
         Ok(result)
     }

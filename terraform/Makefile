@@ -1,7 +1,7 @@
 # FastEVM Terraform Deployment Makefile
 # Easy management of GCP infrastructure deployment
 
-.PHONY: help init plan apply destroy status logs clean validate format check test extract-test-config build-test-command run-batch-test wait-for-transactions scan-blocks clean-test
+.PHONY: help init plan apply destroy status logs clean validate format check test extract-test-config build-test-command run-batch-test wait-for-transactions scan-blocks clean-test ssh-node ssh-copy ssh-node-gcloud
 
 # Load environment variables from fastevm.env if it exists
 ifneq (,$(wildcard fastevm.env))
@@ -146,6 +146,34 @@ ssh-node: ## SSH to a specific node (usage: make ssh-node NODE=1)
 		echo "Connecting to $(PROJECT_NAME)-node-$(NODE) ($$NODE_IP)..."; \
 		ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
 			-i fastevm-deploy-key ubuntu@$$NODE_IP; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
+# Copy a file from a specific node's /data/logs directory
+ssh-copy: ## Copy file from node's /data/logs (usage: make ssh-copy NODE=1 FILE=logfile.txt)
+	@if [ -z "$(NODE)" ]; then echo "Usage: make ssh-copy NODE=1 FILE=logfile.txt"; exit 1; fi
+	@if [ -z "$(FILE)" ]; then echo "Usage: make ssh-copy NODE=1 FILE=logfile.txt"; exit 1; fi
+	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@chmod 600 fastevm-deploy-key
+	@echo "Getting node IP for node $(NODE)..."
+	@if [ -f "../deployment-info.json" ]; then \
+		NODE_IP=$$(jq -r ".instance_external_ips.value[$$((NODE-1))]" ../deployment-info.json 2>/dev/null || jq -r ".instance_ips.value[$$((NODE-1))]" ../deployment-info.json 2>/dev/null); \
+		if [ -z "$$NODE_IP" ] || [ "$$NODE_IP" = "null" ]; then \
+			echo "Could not get IP for node $(NODE)"; \
+			exit 1; \
+		fi; \
+		echo "Copying $(FILE) from $(PROJECT_NAME)-node-$(NODE) ($$NODE_IP):/data/logs/..."; \
+		scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+			-i fastevm-deploy-key \
+			ubuntu@$$NODE_IP:/data/logs/$(FILE) \
+			./$(FILE); \
+		if [ $$? -eq 0 ]; then \
+			echo "✅ Successfully copied $(FILE) to ./$(FILE)"; \
+		else \
+			echo "❌ Failed to copy $(FILE)"; \
+			exit 1; \
+		fi; \
 	else \
 		echo "No deployment info found. Run 'make apply' first."; \
 		exit 1; \

@@ -371,6 +371,9 @@ P2P_PEER_ID="{{PEER_ID_$i}}"
 
 PEER_ADDRESSES="$PEER_ADDRESSES"
 
+# Blockchain configuration
+SUBDAGS_PER_BLOCK="${SUBDAGS_PER_BLOCK}"
+
 # Logging configuration
 LOG_LEVEL="${LOG_LEVEL}"
 EOF
