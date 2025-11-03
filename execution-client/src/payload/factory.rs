@@ -15,6 +15,7 @@ use reth_ethereum_payload_builder::EthereumBuilderConfig;
 use reth_payload_builder::{EthBuiltPayload, EthPayloadBuilderAttributes};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
+use tracing::debug;
 // use reth_transaction_pool::{PoolTransaction, TransactionPool};
 
 #[non_exhaustive]
@@ -74,7 +75,7 @@ where
         let conf = ctx.payload_builder_config();
         let chain = ctx.chain_spec().chain();
         let gas_limit = conf.gas_limit_for(chain);
-
+        debug!(target: "build_payload_builder", "Gas limit: {:?}", gas_limit);
         // Ok(reth_ethereum_payload_builder::EthereumPayloadBuilder::new(
         //     ctx.provider().clone(),
         //     pool,

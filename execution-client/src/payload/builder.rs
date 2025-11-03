@@ -361,8 +361,9 @@ where
     ) -> Result<BuildOutcome<EthBuiltPayload>, PayloadBuilderError> {
         let proposal_transactions = self.consensus_pool.get_proposal_transactions();
         info!(
-            "[MysticetiPayloadBuilder] Try to build payload with proposal transactions count: {:?}",
-            proposal_transactions.len()
+            "[MysticetiPayloadBuilder] Try to build payload with proposal transactions count: {:?}, builder config: {:?}",
+            proposal_transactions.len(),
+            &self.builder_config
         );
         let payload = mysticeti_ethereum_payload(
             self.evm_config.clone(),
@@ -470,7 +471,8 @@ where
         .with_database(cached_reads.as_db_mut(state))
         .with_bundle_update()
         .build();
-
+    let gas_limit = builder_config.gas_limit(parent_header.gas_limit);
+    debug!(target: "mysticeti_ethereum_payload", "desired_gas_limit: {}. Parent gas limit: {:?}, Gas limit: {:?}", builder_config.desired_gas_limit, parent_header.gas_limit, gas_limit);
     let mut builder = evm_config
         .builder_for_next_block(
             &mut db,
@@ -682,13 +684,7 @@ where
         // add blob sidecars from the executed txs
         .with_sidecars(blob_sidecars);
     info!(
-        "[mysticeti_ethereum_payload] Payload built. Looked at {:?} transactions and {:?} valid transactions, 
-            nonce too low transactions: {:?}, 
-            side car invalid transactions: {:?}, 
-            block gas invalid transactions: {:?}, 
-            max blob count invalid transactions: {:?}, 
-            executed failed transactions: {:?}, 
-            total gas used: {:?}. Elapsed time: {:?}",
+        "[mysticeti_ethereum_payload] Payload built. Looked at {:?} transactions and {:?} valid transactions, nonce too low transactions: {:?}, side car invalid transactions: {:?}, block gas invalid transactions: {:?}, max blob count invalid transactions: {:?}, executed failed transactions: {:?}, total gas used: {:?}. Elapsed time: {:?}",
         lookex_txs,
         block.transaction_count(),
         nonce_too_low_txs,

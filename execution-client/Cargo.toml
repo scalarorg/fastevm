@@ -87,3 +87,9 @@ tempfile = "3"
 http = { workspace = true }
 metrics = { workspace = true }
 assert_matches = { workspace = true }
+alloy-signer-local = { workspace = true }
+alloy-network = { workspace = true }
+alloy-rpc-types-eth = { workspace = true }
+sha2 = { version = "0.10", default-features = false }
+consensus-config = { workspace = true }
+consensus-core = { workspace = true }
