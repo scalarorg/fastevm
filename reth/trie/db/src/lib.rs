@@ -2,6 +2,10 @@
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
+#[cfg(feature = "metrics")]
+#[macro_use]
+extern crate metrics;
+
 mod cached_cursor;
 mod hashed_cursor;
 mod prefix_set;

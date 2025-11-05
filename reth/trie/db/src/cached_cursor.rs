@@ -16,6 +16,7 @@ use reth_trie::{
 };
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::{debug, trace};
 
 use super::{
     DatabaseAccountTrieCursor, DatabaseHashedAccountCursor, DatabaseHashedCursorFactory,
@@ -107,6 +108,15 @@ pub struct CachedTrieCursorFactory<'a, TX> {
     cache: Arc<TrieCache>,
 }
 
+impl<TX> Clone for CachedTrieCursorFactory<'_, TX> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            cache: self.cache.clone(),
+        }
+    }
+}
+
 impl<'a, TX> CachedTrieCursorFactory<'a, TX> {
     /// Create a new cached trie cursor factory.
     pub fn new(tx: &'a TX, cache: Arc<TrieCache>) -> Self {
@@ -167,8 +177,16 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Check cache first
         if let Some(node) = self.cache.trie_nodes.read().get(&key) {
+            trace!(target: "trie_cache", "Account trie cache hit: seek_exact for key {:?}", key);
+            #[cfg(feature = "metrics")]
+            counter!("trie_cache_account_trie_hits_total", "operation" => "seek_exact")
+                .increment(1);
             return Ok(Some((key, node.clone())));
         }
+
+        trace!(target: "trie_cache", "Account trie cache miss: seek_exact for key {:?}", key);
+        #[cfg(feature = "metrics")]
+        counter!("trie_cache_account_trie_misses_total", "operation" => "seek_exact").increment(1);
 
         // Fall back to database
         let result = self.inner.seek_exact(key)?;
@@ -176,6 +194,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
+            // debug!(target: "trie_cache", "Cached account trie node: seek_exact for key {:?}", k);
         }
 
         Ok(result)
@@ -187,8 +206,15 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Check cache first
         if let Some(node) = self.cache.trie_nodes.read().get(&key) {
+            trace!(target: "trie_cache", "Account trie cache hit: seek for key {:?}", key);
+            #[cfg(feature = "metrics")]
+            counter!("trie_cache_account_trie_hits_total", "operation" => "seek").increment(1);
             return Ok(Some((key, node.clone())));
         }
+
+        trace!(target: "trie_cache", "Account trie cache miss: seek for key {:?}", key);
+        #[cfg(feature = "metrics")]
+        counter!("trie_cache_account_trie_misses_total", "operation" => "seek").increment(1);
 
         // Fall back to database
         let result = self.inner.seek(key)?;
@@ -196,6 +222,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
+            // debug!(target: "trie_cache", "Cached account trie node: seek for key {:?}", k);
         }
 
         Ok(result)
@@ -209,6 +236,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
+            // debug!(target: "trie_cache", "Cached account trie node: next for key {:?}", k);
         }
 
         Ok(result)
@@ -244,8 +272,16 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Check cache first
         if let Some(node) = self.cache.trie_nodes.read().get(&key) {
+            trace!(target: "trie_cache", "Storage trie cache hit: seek_exact for key {:?}", key);
+            #[cfg(feature = "metrics")]
+            counter!("trie_cache_storage_trie_hits_total", "operation" => "seek_exact")
+                .increment(1);
             return Ok(Some((key, node.clone())));
         }
+
+        trace!(target: "trie_cache", "Storage trie cache miss: seek_exact for key {:?}", key);
+        #[cfg(feature = "metrics")]
+        counter!("trie_cache_storage_trie_misses_total", "operation" => "seek_exact").increment(1);
 
         // Fall back to database
         let result = self.inner.seek_exact(key)?;
@@ -253,6 +289,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
+            debug!(target: "trie_cache", "Cached storage trie node: seek_exact for key {:?}", k);
         }
 
         Ok(result)
@@ -264,8 +301,15 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
     ) -> Result<Option<(Nibbles, BranchNodeCompact)>, DatabaseError> {
         // Check cache first
         if let Some(node) = self.cache.trie_nodes.read().get(&key) {
+            trace!(target: "trie_cache", "Storage trie cache hit: seek for key {:?}", key);
+            #[cfg(feature = "metrics")]
+            counter!("trie_cache_storage_trie_hits_total", "operation" => "seek").increment(1);
             return Ok(Some((key, node.clone())));
         }
+
+        trace!(target: "trie_cache", "Storage trie cache miss: seek for key {:?}", key);
+        #[cfg(feature = "metrics")]
+        counter!("trie_cache_storage_trie_misses_total", "operation" => "seek").increment(1);
 
         // Fall back to database
         let result = self.inner.seek(key)?;
@@ -273,6 +317,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
+            debug!(target: "trie_cache", "Cached storage trie node: seek for key {:?}", k);
         }
 
         Ok(result)
@@ -286,6 +331,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
+            debug!(target: "trie_cache", "Cached storage trie node: next for key {:?}", k);
         }
 
         Ok(result)
@@ -297,10 +343,19 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
 }
 
 /// A cached wrapper around `DatabaseHashedCursorFactory`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CachedHashedCursorFactory<'a, TX> {
     inner: DatabaseHashedCursorFactory<'a, TX>,
     cache: Arc<TrieCache>,
+}
+
+impl<TX> Clone for CachedHashedCursorFactory<'_, TX> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            cache: self.cache.clone(),
+        }
+    }
 }
 
 impl<'a, TX> CachedHashedCursorFactory<'a, TX> {
@@ -363,8 +418,15 @@ impl<C: HashedCursor<Value = Account> + Send + Sync> HashedCursor for CachedHash
     fn seek(&mut self, key: B256) -> Result<Option<(B256, Self::Value)>, DatabaseError> {
         // Check cache first
         if let Some(account) = self.cache.hashed_accounts.read().get(&key) {
+            trace!(target: "trie_cache", "Hashed account cache hit: seek for key {:?}", key);
+            #[cfg(feature = "metrics")]
+            counter!("trie_cache_hashed_account_hits_total", "operation" => "seek").increment(1);
             return Ok(Some((key, account.clone())));
         }
+
+        trace!(target: "trie_cache", "Hashed account cache miss: seek for key {:?}", key);
+        #[cfg(feature = "metrics")]
+        counter!("trie_cache_hashed_account_misses_total", "operation" => "seek").increment(1);
 
         // Fall back to database
         let result = self.inner.seek(key)?;
@@ -375,6 +437,7 @@ impl<C: HashedCursor<Value = Account> + Send + Sync> HashedCursor for CachedHash
                 .hashed_accounts
                 .write()
                 .insert(k, account.clone());
+            //debug!(target: "trie_cache", "Cached hashed account: seek for key {:?}", k);
         }
 
         Ok(result)
@@ -391,6 +454,7 @@ impl<C: HashedCursor<Value = Account> + Send + Sync> HashedCursor for CachedHash
                 .hashed_accounts
                 .write()
                 .insert(k, account.clone());
+            //debug!(target: "trie_cache", "Cached hashed account: next for key {:?}", k);
         }
 
         Ok(result)
@@ -430,8 +494,15 @@ impl<C: HashedStorageCursor<Value = U256> + Send + Sync> HashedCursor
 
         // Check cache first
         if let Some(value) = self.cache.hashed_storage.read().get(&cache_key) {
+            trace!(target: "trie_cache", "Hashed storage cache hit: seek for address {:?}, subkey {:?}", self.hashed_address, subkey);
+            #[cfg(feature = "metrics")]
+            counter!("trie_cache_hashed_storage_hits_total", "operation" => "seek").increment(1);
             return Ok(Some((subkey, value.clone())));
         }
+
+        trace!(target: "trie_cache", "Hashed storage cache miss: seek for address {:?}, subkey {:?}", self.hashed_address, subkey);
+        #[cfg(feature = "metrics")]
+        counter!("trie_cache_hashed_storage_misses_total", "operation" => "seek").increment(1);
 
         // Fall back to database
         let result = self.inner.seek(subkey)?;
@@ -442,6 +513,7 @@ impl<C: HashedStorageCursor<Value = U256> + Send + Sync> HashedCursor
                 .hashed_storage
                 .write()
                 .insert((self.hashed_address, k), value);
+            debug!(target: "trie_cache", "Cached hashed storage: seek for address {:?}, subkey {:?}", self.hashed_address, k);
         }
 
         Ok(result)
@@ -458,6 +530,7 @@ impl<C: HashedStorageCursor<Value = U256> + Send + Sync> HashedCursor
                 .hashed_storage
                 .write()
                 .insert((self.hashed_address, k), value);
+            debug!(target: "trie_cache", "Cached hashed storage: next for address {:?}, subkey {:?}", self.hashed_address, k);
         }
 
         Ok(result)

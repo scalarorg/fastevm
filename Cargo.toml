@@ -60,12 +60,25 @@ reth-payload-builder = { git = "https://github.com/paradigmxyz/reth.git", tag = 
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-chainspec" }
 reth-cli-runner = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-cli-runner" }
 reth-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-consensus" }
+reth-chain-state = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-chain-state" }
 reth-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-db", features = ["mdbx", "test-utils", "disable-lock"] }
 reth-db-api= { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-db-api" }
 reth-db-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-db-common" }
 reth-libmdbx = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-libmdbx" }
 reth-errors = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-errors" }
 reth-storage-errors = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-storage-errors" }
+# Reth engine
+reth-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-engine-primitives" }
+reth-engine-tree = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-engine-tree" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-execution-types" }
+reth-payload-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-payload-primitives" }
+reth-stages-api = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-stages-api" }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-tasks" }
+reth-trie-parallel = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-trie-parallel" }
+reth-trie-sparse = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-trie-sparse" }
+reth-trie-sparse-parallel = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-trie-sparse-parallel" }
+reth-exex-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-exex-types" }
+
 reth-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-ethereum", features = ["node", "pool", "cli"] }
 reth-ethereum-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-ethereum-consensus" }
 reth-ethereum-engine-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-ethereum-engine-primitives" }
@@ -125,12 +138,16 @@ reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1
 reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-node-ethereum" }
 reth-rpc-server-types = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-rpc-server-types" }
 reth-nippy-jar = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-nippy-jar" }
+reth-e2e-test-utils = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-e2e-test-utils" }
+reth-testing-utils = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.8.2", package = "reth-testing-utils" }
 
 # Revm
 revm = { version = "29.0.1", default-features = false }
 revm-context = { version = "9.1.0", default-features = false }
 revm-context-interface = { version = "10.2.0", default-features = false }
 revm-database = { version = "7.0.5", default-features = false }
+revm-state = { version = "7.0.5", default-features = false }
+revm-primitives = { version = "20.2.1", default-features = false }
 
 tempfile = "3"
 
@@ -159,10 +176,10 @@ auto_impl = "1"
 base64 = "0.22.1"
 bincode = "2.0"
 bytes = { version = "1.5.0", features = ["serde"] }
-derive_more = "1.0.0"
 
 page_size = "0.6.0"
 rand = "0.9"
+rand_08 = { package = "rand", version = "0.8" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 strum = { version = "0.27", default-features = false }
@@ -200,7 +217,11 @@ sha3 = "0.10.5"
 secp256k1 = { version = "0.30", default-features = false, features = ["global-context", "recovery"] }
 hex = "0.4"
 rustc-hash = { version = "2.0", default-features = false }
+schnellru = "0.2"
+smallvec = "1"
 triehash = "0.8"
+
+crossbeam-channel = "0.5.13"
 
 # Ethereum types
 ethereum-types = "0.15.1"
@@ -218,6 +239,7 @@ metrics-process = "2.1.0"
 metrics-util = { default-features = false, version = "0.19.0" }
 
 derive-getters = "0.5.0"
+derive_more = { version = "2", default-features = false, features = ["full"] }
 
 # Testing dependencies
 tokio-test = "0.4"
@@ -248,5 +270,7 @@ opt-level = 1
 reth-cli = { path = "reth/cli/cli" }
 reth-cli-commands = { path = "reth/cli/commands" }
 reth-db = { path = "reth/storage/db" }
+reth-engine-tree = { path = "reth/engine/tree" }
 reth-ethereum-cli = { path = "reth/ethereum/cli" }
 reth-trie-db = { path = "reth/trie/db" }
+reth-trie-parallel = { path = "reth/trie/parallel" }

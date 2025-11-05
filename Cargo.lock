@@ -8282,7 +8282,7 @@ name = "reth-db"
 version = "1.8.2"
 dependencies = [
  "alloy-primitives",
- "derive_more 1.0.0",
+ "derive_more 2.0.1",
  "eyre",
  "metrics",
  "page_size",
@@ -8583,7 +8583,6 @@ dependencies = [
 [[package]]
 name = "reth-engine-tree"
 version = "1.8.2"
-source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.8.2#9c30bf7af5e0d45deaf5917375c9922c16654b28"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -10468,6 +10467,7 @@ name = "reth-trie-db"
 version = "1.8.2"
 dependencies = [
  "alloy-primitives",
+ "metrics",
  "mini-moka",
  "parking_lot",
  "reth-db-api",
@@ -10480,12 +10480,11 @@ dependencies = [
 [[package]]
 name = "reth-trie-parallel"
 version = "1.8.2"
-source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.8.2#9c30bf7af5e0d45deaf5917375c9922c16654b28"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "derive_more 2.0.1",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "metrics",
  "rayon",
  "reth-db-api",

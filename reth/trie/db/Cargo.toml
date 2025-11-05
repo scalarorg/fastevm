@@ -28,6 +28,9 @@ parking_lot.workspace = true
 # tracing
 tracing.workspace = true
 
+# metrics
+metrics = { workspace = true, optional = true }
+
 [dev-dependencies]
 # reth
 reth-chainspec.workspace = true
@@ -52,7 +55,7 @@ serde_json.workspace = true
 similar-asserts.workspace = true
 
 [features]
-metrics = ["reth-trie/metrics"]
+metrics = ["reth-trie/metrics", "dep:metrics"]
 serde = [
     "similar-asserts/serde",
     "alloy-consensus/serde",
