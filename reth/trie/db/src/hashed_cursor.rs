@@ -9,7 +9,7 @@ use reth_primitives_traits::Account;
 use reth_trie::hashed_cursor::{HashedCursor, HashedCursorFactory, HashedStorageCursor};
 use std::sync::Arc;
 
-use crate::cached_cursor::TrieCache;
+use crate::cached::TrieCache;
 
 /// A struct wrapping database transaction that implements [`HashedCursorFactory`].
 #[derive(Debug)]
@@ -30,34 +30,29 @@ impl<TX> Clone for DatabaseHashedCursorFactory<'_, TX> {
 
 impl<'a, TX> DatabaseHashedCursorFactory<'a, TX> {
     /// Create new database hashed cursor factory without caching.
-    pub const fn new(tx: &'a TX) -> Self {
-        Self { tx, cache: None }
-    }
-
-    /// Create new database hashed cursor factory with caching enabled.
-    pub fn with_cache(tx: &'a TX, cache: Arc<TrieCache>) -> Self {
+    pub fn new(tx: &'a TX) -> Self {
         Self {
             tx,
-            cache: Some(cache),
+            cache: Some(Arc::new(TrieCache::large_cache())),
         }
     }
 }
 
 impl<TX: DbTx> HashedCursorFactory for DatabaseHashedCursorFactory<'_, TX> {
-    type AccountCursor = crate::cached_cursor::CachedHashedAccountCursor<
+    type AccountCursor = crate::cached::CachedHashedAccountCursor<
         DatabaseHashedAccountCursor<<TX as DbTx>::Cursor<tables::HashedAccounts>>,
     >;
-    type StorageCursor = crate::cached_cursor::CachedHashedStorageCursor<
+    type StorageCursor = crate::cached::CachedHashedStorageCursor<
         DatabaseHashedStorageCursor<<TX as DbTx>::DupCursor<tables::HashedStorages>>,
     >;
 
     fn hashed_account_cursor(&self) -> Result<Self::AccountCursor, DatabaseError> {
         let inner = DatabaseHashedAccountCursor(self.tx.cursor_read::<tables::HashedAccounts>()?);
         Ok(if let Some(cache) = &self.cache {
-            crate::cached_cursor::CachedHashedAccountCursor::new(inner, cache.clone())
+            crate::cached::CachedHashedAccountCursor::new(inner, cache.clone())
         } else {
             let dummy_cache = Arc::new(TrieCache::with_sizes(0, 0, 0));
-            crate::cached_cursor::CachedHashedAccountCursor::new(inner, dummy_cache)
+            crate::cached::CachedHashedAccountCursor::new(inner, dummy_cache)
         })
     }
 
@@ -70,14 +65,10 @@ impl<TX: DbTx> HashedCursorFactory for DatabaseHashedCursorFactory<'_, TX> {
             hashed_address,
         );
         Ok(if let Some(cache) = &self.cache {
-            crate::cached_cursor::CachedHashedStorageCursor::new(
-                inner,
-                cache.clone(),
-                hashed_address,
-            )
+            crate::cached::CachedHashedStorageCursor::new(inner, cache.clone(), hashed_address)
         } else {
             let dummy_cache = Arc::new(TrieCache::with_sizes(0, 0, 0));
-            crate::cached_cursor::CachedHashedStorageCursor::new(inner, dummy_cache, hashed_address)
+            crate::cached::CachedHashedStorageCursor::new(inner, dummy_cache, hashed_address)
         })
     }
 }

@@ -53,7 +53,9 @@ impl TrieCache {
     pub fn new() -> Self {
         Self::with_sizes(200_000, 50_000, 200_000)
     }
-
+    pub fn large_cache() -> Self {
+        Self::with_sizes(500_000, 100_000, 500_000)
+    }
     /// Create a new `TrieCache` with custom sizes.
     pub fn with_sizes(
         trie_nodes_size: u64,
@@ -101,56 +103,6 @@ impl Default for TrieCache {
     }
 }
 
-/// A cached wrapper around `DatabaseTrieCursorFactory`.
-#[derive(Debug)]
-pub struct CachedTrieCursorFactory<'a, TX> {
-    inner: DatabaseTrieCursorFactory<'a, TX>,
-    cache: Arc<TrieCache>,
-}
-
-impl<TX> Clone for CachedTrieCursorFactory<'_, TX> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            cache: self.cache.clone(),
-        }
-    }
-}
-
-impl<'a, TX> CachedTrieCursorFactory<'a, TX> {
-    /// Create a new cached trie cursor factory.
-    pub fn new(tx: &'a TX, cache: Arc<TrieCache>) -> Self {
-        Self {
-            inner: DatabaseTrieCursorFactory::with_cache(tx, cache.clone()),
-            cache,
-        }
-    }
-}
-
-impl<'a, TX: reth_db_api::transaction::DbTx> TrieCursorFactory for CachedTrieCursorFactory<'a, TX> {
-    type AccountTrieCursor = CachedAccountTrieCursor<
-        DatabaseAccountTrieCursor<
-            <TX as reth_db_api::transaction::DbTx>::Cursor<reth_db_api::tables::AccountsTrie>,
-        >,
-    >;
-    type StorageTrieCursor = CachedStorageTrieCursor<
-        DatabaseStorageTrieCursor<
-            <TX as reth_db_api::transaction::DbTx>::DupCursor<reth_db_api::tables::StoragesTrie>,
-        >,
-    >;
-
-    fn account_trie_cursor(&self) -> Result<Self::AccountTrieCursor, DatabaseError> {
-        self.inner.account_trie_cursor()
-    }
-
-    fn storage_trie_cursor(
-        &self,
-        hashed_address: B256,
-    ) -> Result<Self::StorageTrieCursor, DatabaseError> {
-        self.inner.storage_trie_cursor(hashed_address)
-    }
-}
-
 /// A cached wrapper around an account trie cursor.
 #[derive(Debug)]
 pub struct CachedAccountTrieCursor<C> {
@@ -194,7 +146,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
-            // debug!(target: "trie_cache", "Cached account trie node: seek_exact for key {:?}", k);
+            trace!(target: "trie_cache", "Cached account trie node: seek_exact for key {:?}", k);
         }
 
         Ok(result)
@@ -222,7 +174,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
-            // debug!(target: "trie_cache", "Cached account trie node: seek for key {:?}", k);
+            trace!(target: "trie_cache", "Cached account trie node: seek for key {:?}", k);
         }
 
         Ok(result)
@@ -236,7 +188,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedAccountTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
-            // debug!(target: "trie_cache", "Cached account trie node: next for key {:?}", k);
+            trace!(target: "trie_cache", "Cached account trie node: next for key {:?}", k);
         }
 
         Ok(result)
@@ -317,7 +269,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
-            debug!(target: "trie_cache", "Cached storage trie node: seek for key {:?}", k);
+            trace!(target: "trie_cache", "Cached storage trie node: seek for key {:?}", k);
         }
 
         Ok(result)
@@ -331,7 +283,7 @@ impl<C: TrieCursor + Send + Sync> TrieCursor for CachedStorageTrieCursor<C> {
         // Cache result if found
         if let Some((k, ref node)) = result {
             self.cache.trie_nodes.write().insert(k, node.clone());
-            debug!(target: "trie_cache", "Cached storage trie node: next for key {:?}", k);
+            trace!(target: "trie_cache", "Cached storage trie node: next for key {:?}", k);
         }
 
         Ok(result)
@@ -358,15 +310,15 @@ impl<TX> Clone for CachedHashedCursorFactory<'_, TX> {
     }
 }
 
-impl<'a, TX> CachedHashedCursorFactory<'a, TX> {
-    /// Create a new cached hashed cursor factory.
-    pub fn new(tx: &'a TX, cache: Arc<TrieCache>) -> Self {
-        Self {
-            inner: DatabaseHashedCursorFactory::with_cache(tx, cache.clone()),
-            cache,
-        }
-    }
-}
+// impl<'a, TX> CachedHashedCursorFactory<'a, TX> {
+//     /// Create a new cached hashed cursor factory.
+//     pub fn new(tx: &'a TX, cache: Arc<TrieCache>) -> Self {
+//         Self {
+//             inner: DatabaseHashedCursorFactory::with_cache(tx, cache.clone()),
+//             cache,
+//         }
+//     }
+// }
 
 impl<'a, TX: reth_db_api::transaction::DbTx> HashedCursorFactory
     for CachedHashedCursorFactory<'a, TX>
@@ -437,7 +389,7 @@ impl<C: HashedCursor<Value = Account> + Send + Sync> HashedCursor for CachedHash
                 .hashed_accounts
                 .write()
                 .insert(k, account.clone());
-            //debug!(target: "trie_cache", "Cached hashed account: seek for key {:?}", k);
+            trace!(target: "trie_cache", "Cached hashed account: seek for key {:?}", k);
         }
 
         Ok(result)
@@ -454,7 +406,7 @@ impl<C: HashedCursor<Value = Account> + Send + Sync> HashedCursor for CachedHash
                 .hashed_accounts
                 .write()
                 .insert(k, account.clone());
-            //debug!(target: "trie_cache", "Cached hashed account: next for key {:?}", k);
+            trace!(target: "trie_cache", "Cached hashed account: next for key {:?}", k);
         }
 
         Ok(result)
@@ -513,7 +465,7 @@ impl<C: HashedStorageCursor<Value = U256> + Send + Sync> HashedCursor
                 .hashed_storage
                 .write()
                 .insert((self.hashed_address, k), value);
-            debug!(target: "trie_cache", "Cached hashed storage: seek for address {:?}, subkey {:?}", self.hashed_address, k);
+            trace!(target: "trie_cache", "Cached hashed storage: seek for address {:?}, subkey {:?}", self.hashed_address, k);
         }
 
         Ok(result)
@@ -530,7 +482,7 @@ impl<C: HashedStorageCursor<Value = U256> + Send + Sync> HashedCursor
                 .hashed_storage
                 .write()
                 .insert((self.hashed_address, k), value);
-            debug!(target: "trie_cache", "Cached hashed storage: next for address {:?}, subkey {:?}", self.hashed_address, k);
+            trace!(target: "trie_cache", "Cached hashed storage: next for address {:?}, subkey {:?}", self.hashed_address, k);
         }
 
         Ok(result)

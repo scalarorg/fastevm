@@ -28,10 +28,7 @@ use reth_trie_common::{
     added_removed_keys::MultiAddedRemovedKeys,
     prefix_set::{PrefixSet, PrefixSetMut},
 };
-use reth_trie_db::{
-    CachedHashedCursorFactory, CachedTrieCursorFactory, DatabaseHashedCursorFactory,
-    DatabaseTrieCursorFactory, TrieCache,
-};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, TrieCache};
 use reth_trie_sparse::provider::{RevealedNode, TrieNodeProvider, TrieNodeProviderFactory};
 use std::{
     collections::VecDeque,
@@ -139,7 +136,11 @@ where
             let provider_ro = self.view.provider_ro()?;
             let tx = provider_ro.into_tx();
             self.total_transactions += 1;
-            return Ok(Some(ProofTaskTx::new(tx, self.task_ctx.clone(), self.total_transactions)));
+            return Ok(Some(ProofTaskTx::new(
+                tx,
+                self.task_ctx.clone(),
+                self.total_transactions,
+            )));
         }
 
         Ok(None)
@@ -151,7 +152,9 @@ where
     /// This will return an error if a transaction must be created on-demand and the consistent view
     /// provider fails.
     pub fn try_spawn_next(&mut self) -> ProviderResult<()> {
-        let Some(task) = self.pending_tasks.pop_front() else { return Ok(()) };
+        let Some(task) = self.pending_tasks.pop_front() else {
+            return Ok(());
+        };
 
         let Some(proof_task_tx) = self.get_or_create_tx()? else {
             // if there are no txs available, requeue the proof task
@@ -246,16 +249,16 @@ where
     fn create_factories(
         &self,
     ) -> (
-        InMemoryTrieCursorFactory<'_, CachedTrieCursorFactory<'_, Tx>>,
-        HashedPostStateCursorFactory<'_, CachedHashedCursorFactory<'_, Tx>>,
+        InMemoryTrieCursorFactory<'_, DatabaseTrieCursorFactory<'_, Tx>>,
+        HashedPostStateCursorFactory<'_, DatabaseHashedCursorFactory<'_, Tx>>,
     ) {
         let trie_cursor_factory = InMemoryTrieCursorFactory::new(
-            CachedTrieCursorFactory::new(&self.tx, self.task_ctx.cache.clone()),
+            DatabaseTrieCursorFactory::new(&self.tx),
             &self.task_ctx.nodes_sorted,
         );
 
         let hashed_cursor_factory = HashedPostStateCursorFactory::new(
-            CachedHashedCursorFactory::new(&self.tx, self.task_ctx.cache.clone()),
+            DatabaseHashedCursorFactory::new(&self.tx),
             &self.task_ctx.state_sorted,
         );
 
@@ -362,7 +365,9 @@ where
         );
 
         let start = Instant::now();
-        let result = blinded_provider_factory.account_node_provider().trie_node(&path);
+        let result = blinded_provider_factory
+            .account_node_provider()
+            .trie_node(&path);
         debug!(
             target: "trie::proof_task",
             ?path,
@@ -407,7 +412,9 @@ where
         );
 
         let start = Instant::now();
-        let result = blinded_provider_factory.storage_node_provider(account).trie_node(&path);
+        let result = blinded_provider_factory
+            .storage_node_provider(account)
+            .trie_node(&path);
         debug!(
             target: "trie::proof_task",
             ?account,
@@ -489,7 +496,12 @@ impl ProofTaskCtx {
         state_sorted: Arc<HashedPostStateSorted>,
         prefix_sets: Arc<TriePrefixSetsMut>,
     ) -> Self {
-        Self { nodes_sorted, state_sorted, prefix_sets, cache: Arc::new(TrieCache::new()) }
+        Self {
+            nodes_sorted,
+            state_sorted,
+            prefix_sets,
+            cache: Arc::new(TrieCache::new()),
+        }
     }
 
     /// Creates a new [`ProofTaskCtx`] with a custom cache.
@@ -499,7 +511,12 @@ impl ProofTaskCtx {
         prefix_sets: Arc<TriePrefixSetsMut>,
         cache: Arc<TrieCache>,
     ) -> Self {
-        Self { nodes_sorted, state_sorted, prefix_sets, cache }
+        Self {
+            nodes_sorted,
+            state_sorted,
+            prefix_sets,
+            cache,
+        }
     }
 
     /// Creates a new [`ProofTaskCtx`] with a larger cache for large blocks.
@@ -513,7 +530,12 @@ impl ProofTaskCtx {
             100_000, // More accounts
             500_000, // More storage slots
         ));
-        Self { nodes_sorted, state_sorted, prefix_sets, cache }
+        Self {
+            nodes_sorted,
+            state_sorted,
+            prefix_sets,
+            cache,
+        }
     }
 }
 
@@ -556,7 +578,10 @@ impl<Tx> ProofTaskManagerHandle<Tx> {
     /// Creates a new [`ProofTaskManagerHandle`] with the given sender.
     pub fn new(sender: Sender<ProofTaskMessage<Tx>>, active_handles: Arc<AtomicUsize>) -> Self {
         active_handles.fetch_add(1, Ordering::SeqCst);
-        Self { sender, active_handles }
+        Self {
+            sender,
+            active_handles,
+        }
     }
 
     /// Queues a task to the proof task manager.
@@ -591,11 +616,16 @@ impl<Tx: DbTx> TrieNodeProviderFactory for ProofTaskManagerHandle<Tx> {
     type StorageNodeProvider = ProofTaskTrieNodeProvider<Tx>;
 
     fn account_node_provider(&self) -> Self::AccountNodeProvider {
-        ProofTaskTrieNodeProvider::AccountNode { sender: self.sender.clone() }
+        ProofTaskTrieNodeProvider::AccountNode {
+            sender: self.sender.clone(),
+        }
     }
 
     fn storage_node_provider(&self, account: B256) -> Self::StorageNodeProvider {
-        ProofTaskTrieNodeProvider::StorageNode { account, sender: self.sender.clone() }
+        ProofTaskTrieNodeProvider::StorageNode {
+            account,
+            sender: self.sender.clone(),
+        }
     }
 }
 

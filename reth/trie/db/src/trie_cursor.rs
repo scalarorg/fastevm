@@ -12,7 +12,7 @@ use reth_trie::{
 };
 use std::sync::Arc;
 
-use crate::cached_cursor::TrieCache;
+use crate::cached::TrieCache;
 
 /// Wrapper struct for database transaction implementing trie cursor factory trait.
 #[derive(Debug)]
@@ -33,38 +33,33 @@ impl<TX> Clone for DatabaseTrieCursorFactory<'_, TX> {
 
 impl<'a, TX> DatabaseTrieCursorFactory<'a, TX> {
     /// Create new [`DatabaseTrieCursorFactory`] without caching.
-    pub const fn new(tx: &'a TX) -> Self {
-        Self { tx, cache: None }
-    }
-
-    /// Create new [`DatabaseTrieCursorFactory`] with caching enabled.
-    pub fn with_cache(tx: &'a TX, cache: Arc<TrieCache>) -> Self {
+    pub fn new(tx: &'a TX) -> Self {
         Self {
             tx,
-            cache: Some(cache),
+            cache: Some(Arc::new(TrieCache::large_cache())),
         }
     }
 }
 
 /// Implementation of the trie cursor factory for a database transaction.
 impl<TX: DbTx> TrieCursorFactory for DatabaseTrieCursorFactory<'_, TX> {
-    type AccountTrieCursor = crate::cached_cursor::CachedAccountTrieCursor<
+    type AccountTrieCursor = crate::cached::CachedAccountTrieCursor<
         DatabaseAccountTrieCursor<<TX as DbTx>::Cursor<tables::AccountsTrie>>,
     >;
-    type StorageTrieCursor = crate::cached_cursor::CachedStorageTrieCursor<
+    type StorageTrieCursor = crate::cached::CachedStorageTrieCursor<
         DatabaseStorageTrieCursor<<TX as DbTx>::DupCursor<tables::StoragesTrie>>,
     >;
 
     fn account_trie_cursor(&self) -> Result<Self::AccountTrieCursor, DatabaseError> {
         let inner = DatabaseAccountTrieCursor::new(self.tx.cursor_read::<tables::AccountsTrie>()?);
         Ok(if let Some(cache) = &self.cache {
-            crate::cached_cursor::CachedAccountTrieCursor::new(inner, cache.clone())
+            crate::cached::CachedAccountTrieCursor::new(inner, cache.clone())
         } else {
             // Create a dummy cache that's never used - this is a workaround for type system
             // In practice, we should use a different type when cache is None
             // For now, we'll use a minimal cache that effectively disables caching
             let dummy_cache = Arc::new(TrieCache::with_sizes(0, 0, 0));
-            crate::cached_cursor::CachedAccountTrieCursor::new(inner, dummy_cache)
+            crate::cached::CachedAccountTrieCursor::new(inner, dummy_cache)
         })
     }
 
@@ -77,10 +72,10 @@ impl<TX: DbTx> TrieCursorFactory for DatabaseTrieCursorFactory<'_, TX> {
             hashed_address,
         );
         Ok(if let Some(cache) = &self.cache {
-            crate::cached_cursor::CachedStorageTrieCursor::new(inner, cache.clone())
+            crate::cached::CachedStorageTrieCursor::new(inner, cache.clone())
         } else {
             let dummy_cache = Arc::new(TrieCache::with_sizes(0, 0, 0));
-            crate::cached_cursor::CachedStorageTrieCursor::new(inner, dummy_cache)
+            crate::cached::CachedStorageTrieCursor::new(inner, dummy_cache)
         })
     }
 }

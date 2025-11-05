@@ -32,10 +32,7 @@ use reth_trie_common::{
     added_removed_keys::MultiAddedRemovedKeys,
     proof::{DecodedProofNodes, ProofRetainer},
 };
-use reth_trie_db::{
-    CachedHashedCursorFactory, CachedTrieCursorFactory, DatabaseHashedCursorFactory,
-    DatabaseTrieCursorFactory, TrieCache,
-};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, TrieCache};
 use std::sync::{mpsc::Receiver, Arc};
 use tracing::debug;
 
@@ -125,8 +122,9 @@ where
         );
 
         let (sender, receiver) = std::sync::mpsc::channel();
-        let _ =
-            self.storage_proof_task_handle.queue_task(ProofTaskKind::StorageProof(input, sender));
+        let _ = self
+            .storage_proof_task_handle
+            .queue_task(ProofTaskKind::StorageProof(input, sender));
         receiver
     }
 
@@ -189,7 +187,10 @@ where
                 .iter()
                 .filter(|&(_hashed_address, slots)| !slots.is_empty())
                 .map(|(hashed_address, slots)| {
-                    (*hashed_address, PrefixSetMut::from(slots.iter().map(Nibbles::unpack)))
+                    (
+                        *hashed_address,
+                        PrefixSetMut::from(slots.iter().map(Nibbles::unpack)),
+                    )
                 })
                 .collect(),
             destroyed_accounts: Default::default(),
@@ -197,7 +198,10 @@ where
         let prefix_sets = prefix_sets.freeze();
 
         let storage_root_targets = StorageRootTargets::new(
-            prefix_sets.account_prefix_set.iter().map(|nibbles| B256::from_slice(&nibbles.pack())),
+            prefix_sets
+                .account_prefix_set
+                .iter()
+                .map(|nibbles| B256::from_slice(&nibbles.pack())),
             prefix_sets.storage_prefix_sets.clone(),
         );
         let storage_root_targets_len = storage_root_targets.len();
@@ -216,8 +220,9 @@ where
         let mut storage_proof_receivers =
             B256Map::with_capacity_and_hasher(storage_root_targets.len(), Default::default());
 
-        for (hashed_address, prefix_set) in
-            storage_root_targets.into_iter().sorted_unstable_by_key(|(address, _)| *address)
+        for (hashed_address, prefix_set) in storage_root_targets
+            .into_iter()
+            .sorted_unstable_by_key(|(address, _)| *address)
         {
             let target_slots = targets.get(&hashed_address).cloned().unwrap_or_default();
             let receiver = self.spawn_storage_proof(hashed_address, prefix_set, target_slots);
@@ -228,27 +233,25 @@ where
         }
 
         let provider_ro = self.view.provider_ro()?;
-        // Use cached cursors to reduce disk I/O for large blocks
-        // The cache is shared with proof tasks through ProofTaskCtx
-        let cache = Arc::new(TrieCache::with_sizes(
-            500_000, // Large cache for large blocks
-            100_000, 500_000,
-        ));
         let trie_cursor_factory = InMemoryTrieCursorFactory::new(
-            CachedTrieCursorFactory::new(provider_ro.tx_ref(), cache.clone()),
+            DatabaseTrieCursorFactory::new(provider_ro.tx_ref()),
             &self.nodes_sorted,
         );
         let hashed_cursor_factory = HashedPostStateCursorFactory::new(
-            CachedHashedCursorFactory::new(provider_ro.tx_ref(), cache.clone()),
+            DatabaseHashedCursorFactory::new(provider_ro.tx_ref()),
             &self.state_sorted,
         );
 
-        let accounts_added_removed_keys =
-            self.multi_added_removed_keys.as_ref().map(|keys| keys.get_accounts());
+        let accounts_added_removed_keys = self
+            .multi_added_removed_keys
+            .as_ref()
+            .map(|keys| keys.get_accounts());
 
         // Create the walker.
         let walker = TrieWalker::<_>::state_trie(
-            trie_cursor_factory.account_trie_cursor().map_err(ProviderError::Database)?,
+            trie_cursor_factory
+                .account_trie_cursor()
+                .map_err(ProviderError::Database)?,
             prefix_sets.account_prefix_set,
         )
         .with_added_removed_keys(accounts_added_removed_keys)
@@ -266,15 +269,20 @@ where
 
         // Initialize all storage multiproofs as empty.
         // Storage multiproofs for non empty tries will be overwritten if necessary.
-        let mut collected_decoded_storages: B256Map<DecodedStorageMultiProof> =
-            targets.keys().map(|key| (*key, DecodedStorageMultiProof::empty())).collect();
+        let mut collected_decoded_storages: B256Map<DecodedStorageMultiProof> = targets
+            .keys()
+            .map(|key| (*key, DecodedStorageMultiProof::empty()))
+            .collect();
         let mut account_rlp = Vec::with_capacity(TRIE_ACCOUNT_RLP_MAX_SIZE);
         let mut account_node_iter = TrieNodeIter::state_trie(
             walker,
-            hashed_cursor_factory.hashed_account_cursor().map_err(ProviderError::Database)?,
+            hashed_cursor_factory
+                .hashed_account_cursor()
+                .map_err(ProviderError::Database)?,
         );
-        while let Some(account_node) =
-            account_node_iter.try_next().map_err(ProviderError::Database)?
+        while let Some(account_node) = account_node_iter
+            .try_next()
+            .map_err(ProviderError::Database)?
         {
             match account_node {
                 TrieElement::Branch(node) => {
@@ -341,7 +349,10 @@ where
         let (branch_node_hash_masks, branch_node_tree_masks) = if self.collect_branch_node_masks {
             let updated_branch_nodes = hash_builder.updated_branch_nodes.unwrap_or_default();
             (
-                updated_branch_nodes.iter().map(|(path, node)| (*path, node.hash_mask)).collect(),
+                updated_branch_nodes
+                    .iter()
+                    .map(|(path, node)| (*path, node.hash_mask))
+                    .collect(),
                 updated_branch_nodes
                     .into_iter()
                     .map(|(path, node)| (path, node.tree_mask))
@@ -395,8 +406,10 @@ mod tests {
         let state = (0..100)
             .map(|_| {
                 let address = Address::random();
-                let account =
-                    Account { balance: U256::from(rng.random::<u64>()), ..Default::default() };
+                let account = Account {
+                    balance: U256::from(rng.random::<u64>()),
+                    ..Default::default()
+                };
                 let mut storage = HashMap::<B256, U256, DefaultHashBuilder>::default();
                 let has_storage = rng.random_bool(0.7);
                 if has_storage {
@@ -415,16 +428,19 @@ mod tests {
             let provider_rw = factory.provider_rw().unwrap();
             provider_rw
                 .insert_account_for_hashing(
-                    state.iter().map(|(address, (account, _))| (*address, Some(*account))),
+                    state
+                        .iter()
+                        .map(|(address, (account, _))| (*address, Some(*account))),
                 )
                 .unwrap();
             provider_rw
                 .insert_storage_for_hashing(state.iter().map(|(address, (_, storage))| {
                     (
                         *address,
-                        storage
-                            .iter()
-                            .map(|(slot, value)| StorageEntry { key: *slot, value: *value }),
+                        storage.iter().map(|(slot, value)| StorageEntry {
+                            key: *slot,
+                            value: *value,
+                        }),
                     )
                 }))
                 .unwrap();
@@ -479,15 +495,23 @@ mod tests {
             .expect("Failed to decode sequential_result for test comparison");
 
         // to help narrow down what is wrong - first compare account subtries
-        assert_eq!(parallel_result.account_subtree, sequential_result_decoded.account_subtree);
+        assert_eq!(
+            parallel_result.account_subtree,
+            sequential_result_decoded.account_subtree
+        );
 
         // then compare length of all storage subtries
-        assert_eq!(parallel_result.storages.len(), sequential_result_decoded.storages.len());
+        assert_eq!(
+            parallel_result.storages.len(),
+            sequential_result_decoded.storages.len()
+        );
 
         // then compare each storage subtrie
         for (hashed_address, storage_proof) in &parallel_result.storages {
-            let sequential_storage_proof =
-                sequential_result_decoded.storages.get(hashed_address).unwrap();
+            let sequential_storage_proof = sequential_result_decoded
+                .storages
+                .get(hashed_address)
+                .unwrap();
             assert_eq!(storage_proof, sequential_storage_proof);
         }
 
@@ -497,6 +521,8 @@ mod tests {
         // drop the handle to terminate the task and then block on the proof task handle to make
         // sure it does not return any errors
         drop(proof_task_handle);
-        rt.block_on(join_handle).unwrap().expect("The proof task should not return an error");
+        rt.block_on(join_handle)
+            .unwrap()
+            .expect("The proof task should not return an error");
     }
 }

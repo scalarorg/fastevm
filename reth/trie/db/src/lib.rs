@@ -6,7 +6,7 @@
 #[macro_use]
 extern crate metrics;
 
-mod cached_cursor;
+mod cached;
 mod hashed_cursor;
 mod prefix_set;
 mod proof;
@@ -15,9 +15,9 @@ mod storage;
 mod trie_cursor;
 mod witness;
 
-pub use cached_cursor::{
+pub use cached::{
     CachedAccountTrieCursor, CachedHashedAccountCursor, CachedHashedCursorFactory,
-    CachedHashedStorageCursor, CachedStorageTrieCursor, CachedTrieCursorFactory, TrieCache,
+    CachedHashedStorageCursor, CachedStorageTrieCursor, TrieCache,
 };
 pub use hashed_cursor::{
     DatabaseHashedAccountCursor, DatabaseHashedCursorFactory, DatabaseHashedStorageCursor,

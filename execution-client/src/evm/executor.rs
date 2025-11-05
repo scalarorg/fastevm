@@ -138,21 +138,24 @@ where
     where
         Self: Sized,
     {
-        info!("[ScalarBlockExecutor] Executing block");
+        let block_execution_start = Instant::now();
         self.apply_pre_execution_changes()?;
-        let start = Instant::now();
+        let tx_execution_start = Instant::now();
         let mut count = 0;
         for tx in transactions {
             self.execute_transaction(tx)?;
             count += 1;
         }
-        info!(
-            "[ScalarBlockExecutor] Executed block with {} transactions in {:?}. Total gas used: {}.",
-            count,
-            start.elapsed(),
-            self.gas_used
-        );
+        let tx_execution_time = tx_execution_start.elapsed();
         let result = self.apply_post_execution_changes()?;
+        let total_execution_time = block_execution_start.elapsed();
+        info!(
+            target: "execution::block",
+            tx_count = count,
+            tx_execution_time_ms = tx_execution_time.as_millis(),
+            total_execution_time_ms = total_execution_time.as_millis(),
+            "Block execution completed"
+        );
         Ok(result)
     }
 
@@ -197,7 +200,6 @@ where
     }
 
     fn finish(self) -> Result<(Self::Evm, BlockExecutionResult<R::Receipt>), BlockExecutionError> {
-        info!(target: "ScalarBlockExecutor", "Finish");
         self.inner.finish()
     }
 
