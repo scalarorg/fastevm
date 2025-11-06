@@ -44,6 +44,10 @@ log() {
     echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1" | tee -a "$TEST_LOG"
 }
 
+log_info() {
+    log "$1"
+}
+
 log_success() {
     echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] ✅ $1${NC}" | tee -a "$TEST_LOG"
 }
@@ -88,7 +92,7 @@ check_prerequisites() {
     # Check GCP authentication
     if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q .; then
         log_error "No active GCP authentication found"
-        log "Please run: gcloud auth login && cloud auth application-default login \
+        log "Please run: gcloud auth login && gcloud auth application-default login \
             --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid""
         exit 1
     fi
@@ -178,7 +182,7 @@ verify_genesis_consistency() {
         # Use SSH to copy genesis.json from remote node
         if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
             -i "$TERRAFORM_DIR/fastevm-deploy-key" ubuntu@"$node_ip" \
-            "cat /data/genesis.json" > "$genesis_file" 2>/dev/null; then
+            "cat /data/config/genosis.json" > "$genesis_file" 2>/dev/null; then
             log_success "Downloaded genesis.json from $node_name"
             genesis_files+=("$genesis_file")
         else

@@ -7,11 +7,11 @@ set -e
 CLIENT_CONFIG_DIR="/home/ubuntu/client-config"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_NODE_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_ROOT="$(dirname "$(dirname "$CLIENT_NODE_DIR")")"
+PROJECT_ROOT="$(dirname "$CLIENT_NODE_DIR")"
 CONFIG_DIR="${CLIENT_NODE_DIR}/config"
 
 # Load configuration from environment file
-CONFIG_ENV_FILE="${SCRIPT_DIR}/../config.env"
+CONFIG_ENV_FILE="${PROJECT_ROOT}/fastevm.env"
 
 if [ -f "$CONFIG_ENV_FILE" ]; then
     echo "Loading configuration from $CONFIG_ENV_FILE"
@@ -20,7 +20,7 @@ else
     echo "Warning: Configuration file $CONFIG_ENV_FILE not found, using defaults"
 fi
 
-# Default values (fallback if not set in config.env)
+# Default values (fallback if not set in fastevm.env)
 GITHUB_REPO=${GITHUB_REPO:-"https://github.com/scalarorg/fastevm.git"}
 GITHUB_BRANCH=${GITHUB_BRANCH:-"terraform"}
 CHAIN_ID=${CHAIN_ID:-202501}
@@ -55,18 +55,19 @@ detect_rpc_urls() {
     
     if [ -f "${PROJECT_ROOT}/deployment-info.json" ]; then
         log_info "Using deployment-info.json for RPC URLs"
-        RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-        RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-        RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-        RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        # For client node, prioritize external IPs since it's on a separate instance
+        RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+        RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
         
-        # If internal IPs not available, try external IPs
+        # If external IPs not available, try internal IPs as fallback
         if [ -z "$RPC_URL1" ] || [ "$RPC_URL1" = "null" ]; then
-            log_warning "Internal IPs not found, trying external IPs..."
-            RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-            RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-            RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
-            RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].external_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            log_warning "External IPs not found, trying internal IPs as fallback..."
+            RPC_URL1=$(jq -r '.node_endpoints.value["node-1"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            RPC_URL2=$(jq -r '.node_endpoints.value["node-2"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            RPC_URL3=$(jq -r '.node_endpoints.value["node-3"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
+            RPC_URL4=$(jq -r '.node_endpoints.value["node-4"].internal_ip // empty' "${PROJECT_ROOT}/deployment-info.json")
         fi
     elif [ -f "${PROJECT_ROOT}/terraform.tfstate" ]; then
         log_info "Using terraform.tfstate for RPC URLs"
@@ -89,10 +90,20 @@ detect_rpc_urls() {
             exit 1
         fi
         
-        RPC_URL1=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-1"].internal_ip // empty' 2>/dev/null || echo "")
-        RPC_URL2=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-2"].internal_ip // empty' 2>/dev/null || echo "")
-        RPC_URL3=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-3"].internal_ip // empty' 2>/dev/null || echo "")
-        RPC_URL4=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-4"].internal_ip // empty' 2>/dev/null || echo "")
+        # For client node, prioritize external IPs since it's on a separate instance
+        RPC_URL1=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-1"].external_ip // empty' 2>/dev/null || echo "")
+        RPC_URL2=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-2"].external_ip // empty' 2>/dev/null || echo "")
+        RPC_URL3=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-3"].external_ip // empty' 2>/dev/null || echo "")
+        RPC_URL4=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-4"].external_ip // empty' 2>/dev/null || echo "")
+        
+        # If external IPs not available, try internal IPs as fallback
+        if [ -z "$RPC_URL1" ] || [ "$RPC_URL1" = "null" ]; then
+            log_warning "External IPs not found, trying internal IPs as fallback..."
+            RPC_URL1=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-1"].internal_ip // empty' 2>/dev/null || echo "")
+            RPC_URL2=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-2"].internal_ip // empty' 2>/dev/null || echo "")
+            RPC_URL3=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-3"].internal_ip // empty' 2>/dev/null || echo "")
+            RPC_URL4=$($TERRAFORM_CMD output -json node_endpoints 2>/dev/null | jq -r '.["node-4"].internal_ip // empty' 2>/dev/null || echo "")
+        fi
         cd "${CLIENT_NODE_DIR}"
     else
         log_error "No deployment information found!"
@@ -116,36 +127,38 @@ create_config_structure() {
     log_success "Configuration directories created"
 }
 
-# Function to generate test environment configuration
-generate_test_env() {
-    log_info "Generating test configuration..."
+# Function to update shared environment configuration
+update_shared_env() {
+    log_info "Updating shared fastevm.env with RPC URLs..."
     
-    cat > "${CONFIG_DIR}/test.env" << EOF
-# FastEVM Client Test Configuration
-# Generated on $(date)
-
-# RPC Endpoints
-RPC_URL1=http://${RPC_URL1}:8545
-RPC_URL2=http://${RPC_URL2}:8545
-RPC_URL3=http://${RPC_URL3}:8545
-RPC_URL4=http://${RPC_URL4}:8545
-
-# Network Configuration
-CHAIN_ID=${CHAIN_ID}
-
-# Test Parameters
-TEST_SENDER_COUNT=${TEST_SENDER_COUNT}
-TEST_TRANSACTION_COUNT=${TEST_TRANSACTION_COUNT}
-TEST_TRANSACTION_VALUE=${TEST_TRANSACTION_VALUE}
-TEST_MNEMONIC="${TEST_MNEMONIC}"
-TEST_FETCH_NONCE=${TEST_FETCH_NONCE}
-TEST_WAITING_TIME_SECONDS=${TEST_WAITING_TIME_SECONDS}
-TEST_RPC_TIMEOUT=${TEST_RPC_TIMEOUT}
-TEST_MAX_RETRIES=${TEST_MAX_RETRIES}
-TEST_LOG_LEVEL=${TEST_LOG_LEVEL}
-EOF
-
-    log_success "Test configuration generated: ${CONFIG_DIR}/test.env"
+    local shared_env_file="${PROJECT_ROOT}/fastevm.env"
+    
+    if [ ! -f "$shared_env_file" ]; then
+        log_error "Shared fastevm.env not found at: $shared_env_file"
+        log_error "Please ensure the main FastEVM deployment is completed first."
+        exit 1
+    fi
+    
+    # Create backup of original file
+    cp "$shared_env_file" "${shared_env_file}.backup"
+    log_info "Created backup: ${shared_env_file}.backup"
+    
+    # Update RPC URLs in the shared file
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS sed
+        sed -i "" "s|# RPC_URL1=.*|RPC_URL1=http://${RPC_URL1}:8545|g" "$shared_env_file"
+        sed -i "" "s|# RPC_URL2=.*|RPC_URL2=http://${RPC_URL2}:8545|g" "$shared_env_file"
+        sed -i "" "s|# RPC_URL3=.*|RPC_URL3=http://${RPC_URL3}:8545|g" "$shared_env_file"
+        sed -i "" "s|# RPC_URL4=.*|RPC_URL4=http://${RPC_URL4}:8545|g" "$shared_env_file"
+    else
+        # Linux sed
+        sed -i "s|# RPC_URL1=.*|RPC_URL1=http://${RPC_URL1}:8545|g" "$shared_env_file"
+        sed -i "s|# RPC_URL2=.*|RPC_URL2=http://${RPC_URL2}:8545|g" "$shared_env_file"
+        sed -i "s|# RPC_URL3=.*|RPC_URL3=http://${RPC_URL3}:8545|g" "$shared_env_file"
+        sed -i "s|# RPC_URL4=.*|RPC_URL4=http://${RPC_URL4}:8545|g" "$shared_env_file"
+    fi
+    
+    log_success "Shared fastevm.env updated with RPC URLs: $shared_env_file"
 }
 
 # Function to generate combined setup script
@@ -160,7 +173,7 @@ set -e
 
 PROJECT_DIR="/home/ubuntu/fastevm"
 CONFIG_DIR="/home/ubuntu/client-config"
-LOG_FILE="/var/log/client-setup.log"
+LOG_FILE="/home/ubuntu/client-setup.log"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -173,75 +186,62 @@ log "Starting FastEVM client node setup..."
 # =============================================================================
 log "=== BOOTSTRAP PHASE ==="
 
-# Install Rust
-log "Installing Rust system-wide..."
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.cargo/bin"
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:$PATH"
-source $HOME/.cargo/env
-rustup default stable
-
-# Make Rust available system-wide
-log "Making Rust available system-wide..."
-DEFAULT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-CARGO_PATH="/root/.cargo/bin"
-
-add_cargo_to_path() {
-    local file="$1"
-    local path_line="export PATH=\"$CARGO_PATH:$DEFAULT_PATH\""
-    if ! grep -q "$CARGO_PATH" "$file" 2>/dev/null; then
-        echo "$path_line" >> "$file"
-        log "Added Rust PATH to $file"
-    fi
-}
-
-add_cargo_to_path "/etc/environment"
-add_cargo_to_path "/etc/profile"
-add_cargo_to_path "/etc/bash.bashrc"
-add_cargo_to_path "/home/ubuntu/.bashrc"
-
-# Create symlinks
-ln -sf /root/.cargo/bin/rustc /usr/local/bin/rustc
-ln -sf /root/.cargo/bin/cargo /usr/local/bin/cargo
-ln -sf /root/.cargo/bin/rustup /usr/local/bin/rustup
-
-# Configure passwordless sudo
-log "Configuring passwordless sudo..."
-echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/ubuntu
-chmod 440 /etc/sudoers.d/ubuntu
-
-# Clone and build FastEVM
-log "Cloning FastEVM repository..."
-cd /home/ubuntu
-if [ -d "$PROJECT_DIR" ]; then
-    cd "$PROJECT_DIR"
-    git fetch origin
-    git checkout "GITHUB_BRANCH_PLACEHOLDER"
-    git pull origin "GITHUB_BRANCH_PLACEHOLDER"
+# Check if binaries are available locally, otherwise build
+log "Checking for pre-built binaries..."
+if [ -f "/opt/fastevm-binaries/fastevm-test" ]; then
+    log "Pre-built binary found, installing..."
+    sudo cp /opt/fastevm-binaries/fastevm-test /usr/local/bin/
+    sudo chmod +x /usr/local/bin/fastevm-test
+    log "Binary installed from pre-built source"
 else
-    git clone -b "GITHUB_BRANCH_PLACEHOLDER" "GITHUB_REPO_PLACEHOLDER" "$PROJECT_DIR"
+    log "No pre-built binary found, building from source..."
+    
+    # Install Rust
+    log "Installing Rust system-wide..."
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.cargo/bin"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    export PATH="$HOME/.cargo/bin:$PATH"
+    source $HOME/.cargo/env
+    rustup default stable
+
+    # Clone and build FastEVM
+    log "Cloning FastEVM repository..."
+    cd /home/ubuntu
+    if [ -d "$PROJECT_DIR" ]; then
+        cd "$PROJECT_DIR"
+        git fetch origin
+        git checkout "GITHUB_BRANCH_PLACEHOLDER"
+        git pull origin "GITHUB_BRANCH_PLACEHOLDER"
+    else
+        git clone -b "GITHUB_BRANCH_PLACEHOLDER" "GITHUB_REPO_PLACEHOLDER" "$PROJECT_DIR"
+    fi
+
+    # Build test binary
+    log "Building FastEVM test binary..."
+    cd "$PROJECT_DIR/testing/integration"
+    cargo build --release --bin fastevm-test
+
+    if [ ! -f "$PROJECT_DIR/target/release/fastevm-test" ]; then
+        log "ERROR: Build failed - binary not found"
+        exit 1
+    fi
+
+    # Install binary
+    log "Installing test binary..."
+    sudo cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
+    sudo chmod +x /usr/local/bin/fastevm-test
+    
+    # Backup the binary for future use
+    log "Backing up binary for future deployments..."
+    sudo mkdir -p /opt/fastevm-binaries
+    sudo cp "$PROJECT_DIR/target/release/fastevm-test" /opt/fastevm-binaries/
+    sudo chown ubuntu:ubuntu /opt/fastevm-binaries/fastevm-test
+    chmod +x /opt/fastevm-binaries/fastevm-test
 fi
-
-chown -R ubuntu:ubuntu "$PROJECT_DIR"
-
-# Build test binary
-log "Building FastEVM test binary..."
-cd "$PROJECT_DIR/testing/integration"
-cargo build --release --bin fastevm-test
-
-if [ ! -f "$PROJECT_DIR/target/release/fastevm-test" ]; then
-    log "ERROR: Build failed - binary not found"
-    exit 1
-fi
-
-# Install binary
-log "Installing test binary..."
-cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
-chmod +x /usr/local/bin/fastevm-test
 
 # Create completion markers
-touch /var/log/client-bootstrap-complete
-touch /var/log/client-config-complete
+touch /home/ubuntu/client-bootstrap-complete
+touch /home/ubuntu/client-config-complete
 
 log "FastEVM client node setup completed successfully!"
 log "Bootstrap and configuration phases completed"
@@ -268,7 +268,7 @@ main() {
     
     detect_rpc_urls
     create_config_structure
-    generate_test_env
+    update_shared_env
     generate_setup_script
     
     log_success "Client node configuration preparation completed!"

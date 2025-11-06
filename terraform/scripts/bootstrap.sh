@@ -57,10 +57,55 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docke
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-# Install Rust
-echo "Installing Rust..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:$PATH" && rustup default stable && rustup update
+# Only build on the first node (node 0)
+if [ "$NODE_INDEX" = "0" ]; then
+    echo "This is the build node (node 0). Building FastEVM..."
+    
+    # Install Rust
+    echo "Installing Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    export PATH="$HOME/.cargo/bin:$PATH" && rustup default stable && rustup update
+
+    # Create FastEVM directory
+    FASTEVM_DIR="/opt/fastevm"
+    mkdir -p $FASTEVM_DIR
+    cd $FASTEVM_DIR
+
+    # Clone the repository
+    echo "Cloning FastEVM repository..."
+    echo "GitHub Repo: $GITHUB_REPO"
+    echo "GitHub Branch: $GITHUB_BRANCH"
+    if [ -z "$GITHUB_REPO" ]; then
+        echo "ERROR: GITHUB_REPO is not set!"
+        exit 1
+    fi
+    git clone $GITHUB_REPO .
+    git checkout $GITHUB_BRANCH
+
+    # Build the project
+    echo "Building FastEVM..."
+    export PATH="$HOME/.cargo/bin:$PATH" && cargo build --release
+    
+    # Build the test binary explicitly
+    echo "Building fastevm-test binary..."
+    export PATH="$HOME/.cargo/bin:$PATH" && cargo build --release --bin fastevm-test
+    
+    # Create binaries directory for distribution
+    mkdir -p /opt/fastevm-binaries
+    cp target/release/fastevm-execution /opt/fastevm-binaries/
+    cp target/release/fastevm-consensus /opt/fastevm-binaries/
+    cp target/release/fastevm-test /opt/fastevm-binaries/ 2>/dev/null || echo "fastevm-test not found, skipping"
+    
+    echo "Build completed on node 0. Binaries ready for distribution."
+else
+    echo "This is node $NODE_INDEX. Skipping build process."
+    echo "Binaries will be distributed from node 0."
+    
+    # Create FastEVM directory structure
+    FASTEVM_DIR="/opt/fastevm"
+    mkdir -p $FASTEVM_DIR
+    mkdir -p /opt/fastevm-binaries
+fi
 
 # Add docker group and user
 usermod -aG docker ubuntu
@@ -69,26 +114,6 @@ usermod -aG docker ubuntu
 echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/ubuntu
 chmod 440 /etc/sudoers.d/ubuntu
 
-# Create FastEVM directory
-FASTEVM_DIR="/opt/fastevm"
-mkdir -p $FASTEVM_DIR
-cd $FASTEVM_DIR
-
-# Clone the repository
-echo "Cloning FastEVM repository..."
-echo "GitHub Repo: $GITHUB_REPO"
-echo "GitHub Branch: $GITHUB_BRANCH"
-if [ -z "$GITHUB_REPO" ]; then
-    echo "ERROR: GITHUB_REPO is not set!"
-    exit 1
-fi
-git clone $GITHUB_REPO .
-git checkout $GITHUB_BRANCH
-
-# Build the project
-echo "Building FastEVM..."
-export PATH="$HOME/.cargo/bin:$PATH" && cargo build --release
-
 # Create data directories
 echo "Creating data directories..."
 mkdir -p /data/execution
@@ -96,26 +121,40 @@ mkdir -p /data/consensus
 mkdir -p /data/logs
 mkdir -p /data/config
 
-# Mount the persistent disk
-echo "Mounting persistent disk..."
-DISK_DEVICE="/dev/sdb"
-if [ -b "$DISK_DEVICE" ]; then
-    # Check if disk is already formatted
-    if ! blkid $DISK_DEVICE; then
-        echo "Formatting persistent disk..."
-        mkfs.ext4 $DISK_DEVICE
-    fi
+# Use boot disk for /data directory (no separate persistent disk)
+echo "Using boot disk for /data directory..."
+echo "Available disk space:"
+df -h /
+
+# Ensure /data directory exists on root filesystem
+mkdir -p /data
+if [ -d "/data" ]; then
+    echo "Successfully created /data directory on boot disk"
+    df -h /data
     
-    # Mount the disk
-    echo "Mounting persistent disk to /data..."
-    mount $DISK_DEVICE /data
-    echo "$DISK_DEVICE /data ext4 defaults 0 0" >> /etc/fstab
+    # Optimize kernel parameters for database workloads
+    if ! grep -q "Database optimization settings" /etc/sysctl.conf; then
+        cat >> /etc/sysctl.conf << EOF
+# Database optimization settings
+vm.swappiness = 1
+vm.dirty_ratio = 15
+vm.dirty_background_ratio = 5
+vm.dirty_expire_centisecs = 3000
+vm.dirty_writeback_centisecs = 500
+kernel.sched_rt_runtime_us = -1
+EOF
+        echo "Added database optimization settings to /etc/sysctl.conf"
+    fi
+    echo "Filesystem setup completed"
+else
+    echo "ERROR: Failed to create /data directory"
+    exit 1
 fi
 
 # Copy configuration files
 echo "Copying configuration files..."
 if [ -d "/tmp/fastevm-config" ]; then
-    cp -r /tmp/fastevm-config/* /data/
+    cp -r /tmp/fastevm-config/* /data/config/
     echo "Configuration files copied successfully"
 else
     echo "No configuration files found in /tmp/fastevm-config"
@@ -139,7 +178,7 @@ else
     openssl rand -hex 32 > /data/p2p/secret.key
 
     # Create execution client configuration
-    cat > /data/execution.toml << EOF
+    cat > /data/config/execution.toml << EOF
 [network]
 port = $P2P_PORT
 discovery.port = $P2P_PORT
@@ -166,43 +205,35 @@ addr = "0.0.0.0"
 jwtsecret = "/data/jwt.hex"
 
 [chain]
-chain = "/data/genesis.json"
+chain = "/data/config/genesis.json"
 
 [datadir]
 path = "/data/execution"
 
 [txpool]
 enabled = true
-EOF
+max_new_txns = 102400
+max_account_slots = 102400
+max_pending_txns = 102400
+pending_max_count = 102400
+pending_max_size = 128
+max_new_pending_txs_notifications = 102400
+queued_max_count = 102400
+queued_max_size = 128
 
-    # Create genesis file
-    cat > /data/genesis.json << EOF
-{
-  "config": {
-    "chainId": 1337,
-    "homesteadBlock": 0,
-    "eip150Block": 0,
-    "eip155Block": 0,
-    "eip158Block": 0,
-    "byzantiumBlock": 0,
-    "constantinopleBlock": 0,
-    "petersburgBlock": 0,
-    "istanbulBlock": 0,
-    "berlinBlock": 0,
-    "londonBlock": 0,
-    "arrowGlacierBlock": 0,
-    "grayGlacierBlock": 0,
-    "shanghaiTime": 0,
-    "cancunTime": 0
-  },
-  "difficulty": "0x0",
-  "gasLimit": "0x1c9c380",
-  "alloc": {
-    "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6": {
-      "balance": "0x1000000000000000000000000000000000000000000000000000000000000000"
-    }
-  }
-}
+[engine]
+always_process_payload_attributes_on_canonical_head = true
+
+[consensus]
+enable_tx_subscription = true
+committed_subdags_per_block = 30
+block_build_interval_ms = 100
+
+[db]
+max_readers = 126
+max_tables = 256
+max_dbs = 256
+
 EOF
 
     # Generate peer addresses for consensus
@@ -217,13 +248,13 @@ EOF
     PEER_ADDRESSES=$(echo $PEER_ADDRESSES | sed 's/^,//')
 
     # Create consensus client configuration
-    cat > /data/node.yml << EOF
+    cat > /data/config/node.yml << EOF
 # Node $NODE_INDEX configuration for FastEVM Consensus Client
-chain: "/data/genesis.json"
+chain: "/data/config/genesis.json"
 
 # Committee configuration
-committee_path: "/data/committees.yml"
-parameters_path: "/data/parameters.yml"
+committee_path: "/data/config/committees.yml"
+parameters_path: "/data/config/parameters.yml"
 
 # Execution client configuration
 execution_http_url: "http://127.0.0.1:$HTTP_PORT"
@@ -247,38 +278,13 @@ log_level: "info"
 peer_addresses: [$PEER_ADDRESSES]
 EOF
 
-    # Create committees configuration
-    cat > /data/committees.yml << EOF
-epoch: 0
-authorities:
-EOF
-
-    for i in $(seq 0 $((NODE_COUNT - 1))); do
-        PEER_IP="10.0.0.$((10 + i))"
-        PEER_PORT=$((26657 + i))
-        cat >> /data/committees.yml << EOF
-- index: $i
-  stake: 1000
-  hostname: fastevm-consensus$i
-  address: /ip4/$PEER_IP/udp/$PEER_PORT
-  authority_key: AuthorityPublicKey(placeholder-$i)
-  protocol_key: ProtocolPublicKey(placeholder-$i)
-  network_key: NetworkPublicKey(placeholder-$i)
-EOF
-    done
-
-    cat >> /data/committees.yml << EOF
-docker_network:
-  base_ip: 10.0.0
-  start_ip: 10
-  end_ip: $((10 + NODE_COUNT - 1))
-  port: 26657
-quorum_threshold: $NODE_COUNT
-validity_threshold: $NODE_COUNT
-EOF
+    # Skip committees configuration generation
+    # The committees.yml file is now properly generated by prepare-configs.sh with correct external IP addresses
+    # and will be deployed via the deployment packages
+    echo "Skipping committees.yml generation - will be provided by deployment package with correct external IP addresses"
 
     # Create parameters configuration
-    cat > /data/parameters.yml << EOF
+    cat > /data/config/parameters.yml << EOF
 leader_timeout: {
   secs: 0,
   nanos: 200000000
@@ -307,19 +313,38 @@ commit_sync_batches_ahead: 32
 EOF
 fi
 
+# Create systemd service for ensuring /data directory exists
+cat > /etc/systemd/system/fastevm-data-mount.service << EOF
+[Unit]
+Description=Ensure FastEVM Data Directory Exists
+Before=fastevm-execution.service
+Before=fastevm-consensus.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'mkdir -p /data/execution /data/consensus /data/logs /data/config && chown -R ubuntu:ubuntu /data'
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # Create systemd service for execution client
 cat > /etc/systemd/system/fastevm-execution.service << EOF
 [Unit]
 Description=FastEVM Execution Client
-After=network.target
+After=network.target fastevm-data-mount.service
+Requires=fastevm-data-mount.service
 
 [Service]
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=$FASTEVM_DIR
-ExecStart=$FASTEVM_DIR/target/release/fastevm-execution \\
-    --config /data/execution.toml \\
+WorkingDirectory=/opt/fastevm
+ExecStart=/opt/fastevm-binaries/fastevm-execution \\
+    --config /data/config/execution.toml \\
     --datadir /data/execution \\
     --log-level info
 Restart=always
@@ -335,16 +360,17 @@ EOF
 cat > /etc/systemd/system/fastevm-consensus.service << EOF
 [Unit]
 Description=FastEVM Consensus Client
-After=network.target fastevm-execution.service
+After=network.target fastevm-execution.service fastevm-data-mount.service
+Requires=fastevm-execution.service fastevm-data-mount.service
 
 [Service]
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=$FASTEVM_DIR
-ExecStart=$FASTEVM_DIR/target/release/fastevm-consensus \\
+WorkingDirectory=/opt/fastevm
+ExecStart=/opt/fastevm-binaries/fastevm-consensus \\
     start \\
-    --config /data/node.yml
+    --config /data/config/node.yml
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -434,21 +460,15 @@ EOF
 # Set up cron job for monitoring
 echo "*/5 * * * * ubuntu /usr/local/bin/fastevm-monitor.sh $NODE_INDEX" >> /etc/crontab
 
-# Enable and start services
-echo "Enabling and starting services..."
+# Enable services (but don't start them yet)
+echo "Enabling services..."
 systemctl daemon-reload
+systemctl enable fastevm-data-mount
 systemctl enable fastevm-execution
 systemctl enable fastevm-consensus
 
-# Start execution client first
-systemctl start fastevm-execution
-
-# Wait for execution client to be ready
-echo "Waiting for execution client to be ready..."
-sleep 30
-
-# Start consensus client
-systemctl start fastevm-consensus
+echo "Services enabled but not started. They will be started during deployment."
+echo "Data directory service will ensure /data exists before other services start."
 
 # Create status script
 cat > /usr/local/bin/fastevm-status.sh << 'EOF'
@@ -504,12 +524,19 @@ chmod +x /usr/local/bin/fastevm-cleanup.sh
 chown -R ubuntu:ubuntu /data
 chown -R ubuntu:ubuntu $FASTEVM_DIR
 
+# No separate startup script needed - using boot disk directly
+
 # Create completion marker
 echo "FastEVM bootstrap completed successfully at $(date)" > /var/log/fastevm-bootstrap-complete
 
 echo "=== FastEVM Bootstrap Completed Successfully at $(date) ==="
 echo "Node $NODE_INDEX is ready!"
-echo "Services started: fastevm-execution, fastevm-consensus"
+if [ "$NODE_INDEX" = "0" ]; then
+    echo "Build node: Binaries ready for distribution"
+else
+    echo "Worker node: Waiting for binaries from node 0"
+fi
+echo "Services enabled: fastevm-data-mount, fastevm-execution, fastevm-consensus"
 echo "Use 'fastevm-status' to check status"
 echo "Use 'fastevm-health-check' to verify health"
 echo "Logs available in /var/log/fastevm-* and journalctl"

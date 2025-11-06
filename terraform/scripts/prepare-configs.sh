@@ -7,17 +7,25 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+FASTEVM_DIR="$(dirname "$PROJECT_ROOT")"
 CONFIG_DIR="${PROJECT_ROOT}/config"
 DEPLOY_DIR="${PROJECT_ROOT}/deploy"
+
+# Load configuration from fastevm.env file if it exists
+FASTEVM_ENV_FILE="${PROJECT_ROOT}/fastevm.env"
+if [ -f "$FASTEVM_ENV_FILE" ]; then
+    echo "Loading configuration from $FASTEVM_ENV_FILE"
+    source "$FASTEVM_ENV_FILE"
+fi
+
+LOG_LEVEL=${LOG_LEVEL:-vvv}
 NODE_COUNT=${NODE_COUNT:-4}
-BASE_IP=${BASE_IP:-"10.0.0"}
-START_IP=${START_IP:-10}
 PROJECT_NAME=${PROJECT_NAME:-"fastevm"}
 GITHUB_REPO=${GITHUB_REPO:-"https://github.com/scalarorg/fastevm.git"}
 GITHUB_BRANCH=${GITHUB_BRANCH:-"main"}
 
 # Prefunded accounts configuration
-PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-10000}
+PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-100000}
 PREFUND_BALANCE=${PREFUND_BALANCE:-"1000000000000000000000"}
 TEST_MNEMONIC=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
 
@@ -98,42 +106,40 @@ detect_terraform_info() {
                 return 0
             fi
         fi
+    fi
+    
+    # Fallback: try to get from terraform.tfvars
+    if [ -f "terraform.tfvars" ]; then
+        log_info "Reading configuration from terraform.tfvars..."
+        NODE_COUNT_TF=$(grep -E '^\s*node_count\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
+        PROJECT_NAME_TF=$(grep -E '^\s*project_name\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
         
-        # Fallback: try to get from terraform.tfvars
-        if [ -f "terraform.tfvars" ]; then
-            log_info "Reading configuration from terraform.tfvars..."
-            NODE_COUNT_TF=$(grep -E '^\s*node_count\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
-            PROJECT_NAME_TF=$(grep -E '^\s*project_name\s*=' terraform.tfvars | cut -d'=' -f2 | tr -d ' "')
-            
-            if [ -n "$NODE_COUNT_TF" ]; then
-                NODE_COUNT="$NODE_COUNT_TF"
-                log_info "Detected node count from terraform.tfvars: $NODE_COUNT"
-            fi
-            
-            if [ -n "$PROJECT_NAME_TF" ]; then
-                PROJECT_NAME="$PROJECT_NAME_TF"
-                log_info "Detected project name from terraform.tfvars: $PROJECT_NAME"
-            fi
+        if [ -n "$NODE_COUNT_TF" ]; then
+            NODE_COUNT="$NODE_COUNT_TF"
+            log_info "Detected node count from terraform.tfvars: $NODE_COUNT"
         fi
         
-        # Fallback: try to get from variables.tf
-        if [ -f "variables.tf" ]; then
-            log_info "Reading default values from variables.tf..."
-            NODE_COUNT_DEFAULT=$(grep -A 5 'variable "node_count"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
-            PROJECT_NAME_DEFAULT=$(grep -A 5 'variable "project_name"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
-            
-            if [ -n "$NODE_COUNT_DEFAULT" ]; then
-                NODE_COUNT="$NODE_COUNT_DEFAULT"
-                log_info "Using default node count from variables.tf: $NODE_COUNT"
-            fi
-            
-            if [ -n "$PROJECT_NAME_DEFAULT" ]; then
-                PROJECT_NAME="$PROJECT_NAME_DEFAULT"
-                log_info "Using default project name from variables.tf: $PROJECT_NAME"
-            fi
+        if [ -n "$PROJECT_NAME_TF" ]; then
+            PROJECT_NAME="$PROJECT_NAME_TF"
+            log_info "Detected project name from terraform.tfvars: $PROJECT_NAME"
         fi
-    else
-        log_warning "Terraform command not found. Using default values."
+    fi
+    
+    # Fallback: try to get from variables.tf
+    if [ -f "variables.tf" ]; then
+        log_info "Reading default values from variables.tf..."
+        NODE_COUNT_DEFAULT=$(grep -A 5 'variable "node_count"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
+        PROJECT_NAME_DEFAULT=$(grep -A 5 'variable "project_name"' variables.tf | grep 'default' | cut -d'=' -f2 | tr -d ' "')
+        
+        if [ -n "$NODE_COUNT_DEFAULT" ]; then
+            NODE_COUNT="$NODE_COUNT_DEFAULT"
+            log_info "Using default node count from variables.tf: $NODE_COUNT"
+        fi
+        
+        if [ -n "$PROJECT_NAME_DEFAULT" ]; then
+            PROJECT_NAME="$PROJECT_NAME_DEFAULT"
+            log_info "Using default project name from variables.tf: $PROJECT_NAME"
+        fi
     fi
 }
 
@@ -148,7 +154,7 @@ get_node_ips() {
         log_info "Generating IPs based on detected configuration..."
         NODE_IPS=()
         for i in $(seq 0 $((NODE_COUNT - 1))); do
-            NODE_IPS+=("$BASE_IP.$((START_IP + i))")
+            NODE_IPS+=("10.0.0.$((10 + i))")
         done
         log_info "Generated IPs: ${NODE_IPS[*]}"
     fi
@@ -173,20 +179,17 @@ AUTO-DETECTION:
 
 OPTIONS:
     -n, --nodes COUNT        Number of nodes (overrides auto-detection)
-    -b, --base-ip IP        Base IP address (only used when --no-auto-detect)
-    -s, --start-ip IP        Starting IP offset (only used when --no-auto-detect)
     -p, --project NAME      Project name (overrides auto-detection)
     -r, --repo URL          GitHub repository URL
     -br, --branch BRANCH    GitHub branch (default: main)
     -o, --output DIR        Output directory (default: ../config)
     -d, --deploy DIR        Deploy directory (default: ../deploy)
-    --no-auto-detect        Disable auto-detection, use defaults only
     -h, --help              Show this help message
 
 EXAMPLES:
     $0                                    # Auto-detect everything
     $0 -n 6                              # Override node count only
-    $0 --no-auto-detect -n 4 -b 192.168.1 # Disable auto-detection
+    $0 -n 4 -p myproject                 # Override with custom values
     $0 --output /custom/path              # Custom output directory
 
 EOF
@@ -197,14 +200,6 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -n|--nodes)
             NODE_COUNT="$2"
-            shift 2
-            ;;
-        -b|--base-ip)
-            BASE_IP="$2"
-            shift 2
-            ;;
-        -s|--start-ip)
-            START_IP="$2"
             shift 2
             ;;
         -p|--project)
@@ -227,10 +222,6 @@ while [[ $# -gt 0 ]]; do
             DEPLOY_DIR="$2"
             shift 2
             ;;
-        --no-auto-detect)
-            NO_AUTO_DETECT=true
-            shift
-            ;;
         -h|--help)
             show_help
             exit 0
@@ -243,10 +234,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Auto-detect Terraform information unless disabled
-if [ "$NO_AUTO_DETECT" != "true" ]; then
-    detect_terraform_info
-fi
+# Auto-detect Terraform information
+detect_terraform_info
 
 # Get node IPs
 get_node_ips
@@ -257,15 +246,9 @@ if ! [[ "$NODE_COUNT" =~ ^[0-9]+$ ]] || [ "$NODE_COUNT" -lt 1 ]; then
     exit 1
 fi
 
-if ! [[ "$START_IP" =~ ^[0-9]+$ ]] || [ "$START_IP" -lt 1 ]; then
-    log_error "Start IP must be a positive integer"
-    exit 1
-fi
-
 log_info "Preparing FastEVM configurations for $NODE_COUNT nodes"
-if [ "$NO_AUTO_DETECT" = "true" ] || [ ${#NODE_IPS_ARRAY[@]} -eq 0 ]; then
-    log_info "Base IP: $BASE_IP"
-    log_info "Start IP: $START_IP"
+if [ ${#NODE_IPS_ARRAY[@]} -eq 0 ]; then
+    log_info "Using default IP range: 10.0.0.10 - 10.0.0.$((10 + NODE_COUNT - 1))"
 fi
 log_info "Project Name: $PROJECT_NAME"
 log_info "GitHub Repo: $GITHUB_REPO"
@@ -277,6 +260,17 @@ log_info "Node IPs: ${NODE_IPS[*]}"
 # Create directories
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$DEPLOY_DIR"
+
+# Copy genesis.json from execution-client/shared directory
+log_info "Copying genesis.json from execution-client/shared..."
+if [ -f "$FASTEVM_DIR/execution-client/shared/genesis.json" ]; then
+    cp "$FASTEVM_DIR/execution-client/shared/genesis.json" "$CONFIG_DIR/"
+    log_success "Genesis file copied successfully"
+else
+    log_error "Genesis file not found at $FASTEVM_DIR/execution-client/shared/genesis.json"
+    log_error "Please ensure the execution-client/shared/genesis.json file exists"
+    exit 1
+fi
 
 # Generate node IPs and ports
 log_info "Generating node network configuration..."
@@ -294,47 +288,120 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     P2P_PORTS[$i]=30303
 done
 
+# Generate configuration variables (no files created yet)
+log_info "Generating configuration variables..."
+
 # Generate JWT secrets
-log_info "Generating JWT secrets..."
+declare -a JWT_SECRETS
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-    JWT_SECRET=$(openssl rand -hex 32 2>/dev/null || echo "placeholder-jwt-secret-$i")
-    echo "0x$JWT_SECRET" > "$CONFIG_DIR/jwt$i.hex"
+    JWT_SECRETS[$i]=$(openssl rand -hex 32 2>/dev/null || echo "placeholder-jwt-secret-$i")
 done
 
-# Generate committees configuration
-log_info "Generating committees configuration..."
-cat > "$CONFIG_DIR/committees.yml" << EOF
-epoch: 0
-authorities:
-EOF
+# Generate P2P secret keys (peer IDs will be generated later when CLI is available)
+declare -a P2P_SECRET_KEYS
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+    # Generate deterministic secret key (same method as init.sh)
+    NODE_SEED="fastevm-node-$((i+1))-p2p-secret-2025"
+    P2P_SECRET_KEYS[$i]=$(echo "$NODE_SEED" | openssl dgst -sha256 -binary | openssl dgst -sha256 -hex | cut -d' ' -f2 | tr -d '\n')
+done
+
+log_success "Generated P2P secret keys for all nodes (peer IDs will be generated during setup-node)"
+
+# Generate environment files for each node
+log_info "Generating environment files for each node..."
 
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     NODE_IP="${NODE_IPS[$i]}"
+    HTTP_PORT="${HTTP_PORTS[$i]}"
+    WS_PORT="${WS_PORTS[$i]}"
+    ENGINE_PORT="${ENGINE_PORTS[$i]}"
     CONSENSUS_PORT="${CONSENSUS_PORTS[$i]}"
+    P2P_PORT="${P2P_PORTS[$i]}"
     
-    cat >> "$CONFIG_DIR/committees.yml" << EOF
-- index: $i
+    # Generate peer addresses for consensus
+    PEER_ADDRESSES=""
+    for j in $(seq 0 $((NODE_COUNT - 1))); do
+        if [ $j -ne $i ]; then
+            PEER_IP="${NODE_IPS[$j]}"
+            PEER_PORT="${CONSENSUS_PORTS[$j]}"
+            PEER_ADDRESSES="$PEER_ADDRESSES,/ip4/$PEER_IP/udp/$PEER_PORT"
+        fi
+    done
+    PEER_ADDRESSES=$(echo $PEER_ADDRESSES | sed 's/^,//')
+    
+    # Generate authorities list for committees.yml
+    AUTHORITIES_LIST=""
+    for j in $(seq 0 $((NODE_COUNT - 1))); do
+        AUTHORITY_IP="${NODE_IPS[$j]}"
+        AUTHORITY_PORT="${CONSENSUS_PORTS[$j]}"
+        AUTHORITIES_LIST="$AUTHORITIES_LIST
+- index: $j
   stake: 1000
-  hostname: ${PROJECT_NAME}-consensus$i
-  address: /ip4/$NODE_IP/udp/$CONSENSUS_PORT
-  authority_key: AuthorityPublicKey(placeholder-authority-$i)
-  protocol_key: ProtocolPublicKey(placeholder-protocol-$i)
-  network_key: NetworkPublicKey(placeholder-network-$i)
+  hostname: ${PROJECT_NAME}-consensus$j
+  address: /ip4/$AUTHORITY_IP/udp/$AUTHORITY_PORT
+  authority_key: AuthorityPublicKey(placeholder-authority-$j)
+  protocol_key: ProtocolPublicKey(placeholder-protocol-$j)
+  network_key: NetworkPublicKey(placeholder-network-$j)"
+    done
+    
+    # Create node-specific .env file
+    cat > "$CONFIG_DIR/node$i.env" << EOF
+# FastEVM Node $i Environment Configuration
+NODE_INDEX=$i
+NODE_COUNT=$NODE_COUNT
+PROJECT_NAME="$PROJECT_NAME"
+GITHUB_REPO="$GITHUB_REPO"
+GITHUB_BRANCH="$GITHUB_BRANCH"
+
+# Network configuration
+NODE_IP="$NODE_IP"
+HTTP_PORT=$HTTP_PORT
+WS_PORT=$WS_PORT
+ENGINE_PORT=$ENGINE_PORT
+CONSENSUS_PORT=$CONSENSUS_PORT
+P2P_PORT=$P2P_PORT
+
+# All node IPs for bootnodes generation
+ALL_NODE_IPS="${NODE_IPS[*]}"
+
+# Generated secrets
+JWT_SECRET="${JWT_SECRETS[$i]}"
+P2P_SECRET_KEY="${P2P_SECRET_KEYS[$i]}"
+P2P_PEER_ID="{{PEER_ID_$i}}"
+
+PEER_ADDRESSES="$PEER_ADDRESSES"
+
+# Blockchain configuration
+GAS_LIMIT="${BLOCK_GAS_LIMIT}"
+SUBDAGS_PER_BLOCK="${SUBDAGS_PER_BLOCK}"
+
+# Logging configuration
+LOG_LEVEL="${LOG_LEVEL}"
 EOF
+    
+    log_success "Generated .env file for node $i"
 done
 
-cat >> "$CONFIG_DIR/committees.yml" << EOF
+# Generate committees.yml file (only once, not per node)
+log_info "Generating committees.yml file..."
+cat > "$CONFIG_DIR/committees.yml" << EOF
+epoch: 0
+authorities:
+$AUTHORITIES_LIST
+
 docker_network:
-  base_ip: $BASE_IP
-  start_ip: $START_IP
-  end_ip: $((START_IP + NODE_COUNT - 1))
+  base_ip: 10.0.0
+  start_ip: 10
+  end_ip: $((10 + NODE_COUNT - 1))
   port: 26657
 quorum_threshold: $NODE_COUNT
 validity_threshold: $NODE_COUNT
 EOF
 
-# Generate parameters configuration
-log_info "Generating parameters configuration..."
+log_success "Generated committees.yml with correct IP addresses"
+
+# Generate parameters.yml file
+log_info "Generating parameters.yml file..."
 cat > "$CONFIG_DIR/parameters.yml" << EOF
 leader_timeout: {
   secs: 0,
@@ -363,111 +430,7 @@ commit_sync_batch_size: 100
 commit_sync_batches_ahead: 32
 EOF
 
-# Generate individual node configurations
-log_info "Generating individual node configurations..."
-for i in $(seq 0 $((NODE_COUNT - 1))); do
-    NODE_IP="${NODE_IPS[$i]}"
-    HTTP_PORT="${HTTP_PORTS[$i]}"
-    WS_PORT="${WS_PORTS[$i]}"
-    ENGINE_PORT="${ENGINE_PORTS[$i]}"
-    CONSENSUS_PORT="${CONSENSUS_PORTS[$i]}"
-    P2P_PORT="${P2P_PORTS[$i]}"
-    
-    # Generate peer addresses (exclude current node)
-    PEER_ADDRESSES=""
-    for j in $(seq 0 $((NODE_COUNT - 1))); do
-        if [ $j -ne $i ]; then
-            PEER_IP="${NODE_IPS[$j]}"
-            PEER_PORT="${CONSENSUS_PORTS[$j]}"
-            PEER_ADDRESSES="$PEER_ADDRESSES,/ip4/$PEER_IP/udp/$PEER_PORT"
-        fi
-    done
-    PEER_ADDRESSES=$(echo $PEER_ADDRESSES | sed 's/^,//')
-    
-    # Read JWT secret
-    JWT_SECRET=$(cat "$CONFIG_DIR/jwt$i.hex")
-    
-    # Create consensus client configuration
-    cat > "$CONFIG_DIR/node$i.yml" << EOF
-# Node $i configuration for FastEVM Consensus Client
-chain: "./genesis.json"
-
-# Committee configuration
-committee_path: "./committees.yml"
-parameters_path: "./parameters.yml"
-
-# Execution client configuration
-execution_http_url: "http://127.0.0.1:$HTTP_PORT"
-execution_ws_url: "ws://127.0.0.1:$WS_PORT"
-jwt_secret: "$JWT_SECRET"
-genesis_block_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
-genesis_time: 1755000000
-fee_recipient: "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6"
-
-# Network configuration
-poll_interval: 30000
-max_retries: 3
-timeout: 30
-
-# Node configuration
-working_directory: "."
-node_index: $i
-log_level: "info"
-
-# Peer addresses
-peer_addresses: [$PEER_ADDRESSES]
-EOF
-    
-    # Create execution client configuration
-    BOOTNODES=""
-    for j in $(seq 0 $((NODE_COUNT - 1))); do
-        if [ $j -ne $i ]; then
-            BOOTNODE_IP="${NODE_IPS[$j]}"
-            BOOTNODE_PORT="${P2P_PORTS[$j]}"
-            BOOTNODES="$BOOTNODES,enode://$BOOTNODE_IP:$BOOTNODE_PORT"
-        fi
-    done
-    BOOTNODES=$(echo $BOOTNODES | sed 's/^,//')
-    
-    cat > "$CONFIG_DIR/execution$i.toml" << EOF
-[network]
-port = $P2P_PORT
-discovery.port = $P2P_PORT
-discovery.addr = "0.0.0.0"
-bootnodes = [$BOOTNODES]
-
-[http]
-enabled = true
-port = $HTTP_PORT
-addr = "0.0.0.0"
-api = ["eth", "net", "web3", "admin", "debug"]
-corsdomain = "*"
-
-[ws]
-enabled = true
-port = $WS_PORT
-addr = "0.0.0.0"
-api = ["eth", "net", "web3", "admin", "debug"]
-origins = "*"
-
-[authrpc]
-enabled = true
-port = $ENGINE_PORT
-addr = "0.0.0.0"
-jwtsecret = "./jwt.hex"
-
-[chain]
-chain = "./genesis.json"
-
-[datadir]
-path = "./data"
-
-[txpool]
-enabled = true
-EOF
-    
-    log_success "Generated configuration for node $i"
-done
+log_success "Generated parameters.yml file"
 
 # Generate deployment packages
 log_info "Generating deployment packages..."
@@ -475,400 +438,62 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     NODE_DIR="$DEPLOY_DIR/node$i"
     mkdir -p "$NODE_DIR"
     
-    # Copy node-specific files
-    cp "$CONFIG_DIR/node$i.yml" "$NODE_DIR/node.yml"
-    cp "$CONFIG_DIR/execution$i.toml" "$NODE_DIR/execution.toml"
-    cp "$CONFIG_DIR/jwt$i.hex" "$NODE_DIR/jwt.hex"
+    # Copy node.env file to deployment directory
+    cp "$CONFIG_DIR/node$i.env" "$NODE_DIR/node.env"
     
     # Copy shared files
     cp "$CONFIG_DIR/genesis.json" "$NODE_DIR/"
     cp "$CONFIG_DIR/committees.yml" "$NODE_DIR/"
     cp "$CONFIG_DIR/parameters.yml" "$NODE_DIR/"
     
-    # Copy service.sh to each node directory
-    cp "$SCRIPT_DIR/service.sh" "$NODE_DIR/"
-    
-    # Create deploy.sh script that uses service.sh
-cat > "$NODE_DIR/deploy.sh" << 'EOF'
-#!/bin/bash
-# FastEVM Node Deployment Script
-
-set -e
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Get node index from environment or default to 0
-NODE_INDEX=${NODE_INDEX:-0}
-
-# Set environment variables
-NODE_COUNT=$NODE_COUNT
-PROJECT_NAME="$PROJECT_NAME"
-GITHUB_REPO="${GITHUB_REPO:-https://github.com/scalarorg/fastevm.git}"
-GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
-
-# Debug information
-log_info "Environment variables:"
-log_info "  NODE_INDEX: $NODE_INDEX"
-log_info "  NODE_COUNT: $NODE_COUNT"
-log_info "  PROJECT_NAME: $PROJECT_NAME"
-log_info "  GITHUB_REPO: $GITHUB_REPO"
-log_info "  GITHUB_BRANCH: $GITHUB_BRANCH"
-
-log_info "Starting FastEVM node $NODE_INDEX deployment..."
-
-# Update system packages
-log_info "Updating system packages..."
-sudo apt-get update -y
-sudo apt-get upgrade -y
-
-# Install required packages
-log_info "Installing required packages..."
-sudo apt-get install -y \
-    curl \
-    wget \
-    git \
-    build-essential \
-    pkg-config \
-    libssl-dev \
-    libclang-dev \
-    cmake \
-    jq \
-    htop \
-    vim \
-    unzip \
-    software-properties-common \
-    apt-transport-https \
-    ca-certificates \
-    gnupg \
-    lsb-release
-
-# Install Docker
-log_info "Installing Docker..."
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update -y
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-
-# Install Rust
-log_info "Installing Rust..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
-source $HOME/.cargo/env
-rustup default stable
-rustup update
-
-# Add docker group and user
-sudo usermod -aG docker ubuntu
-
-# Create FastEVM directory
-FASTEVM_DIR="/opt/fastevm"
-sudo mkdir -p $FASTEVM_DIR
-sudo chown -R ubuntu:ubuntu $FASTEVM_DIR
-cd $FASTEVM_DIR
-
-# Clone or update the repository
-if [ -d ".git" ]; then
-    log_info "Repository already exists, pulling latest changes..."
-    git fetch origin
-    git checkout $GITHUB_BRANCH
-    git pull origin $GITHUB_BRANCH
-else
-    log_info "Cloning FastEVM repository..."
-    log_info "GitHub Repo: $GITHUB_REPO"
-    log_info "GitHub Branch: $GITHUB_BRANCH"
-    if [ -z "$GITHUB_REPO" ]; then
-        log_error "GITHUB_REPO is not set!"
-        exit 1
-    fi
-    git clone $GITHUB_REPO .
-    git checkout $GITHUB_BRANCH
-fi
-
-# Build the project
-log_info "Building FastEVM..."
-export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
-cargo build --release
-
-# Stop services before updating binaries
-log_info "Stopping services before updating binaries..."
-if systemctl is-active --quiet fastevm-execution; then
-    log_info "Stopping execution client..."
-    sudo systemctl stop fastevm-execution
-fi
-
-if systemctl is-active --quiet fastevm-consensus; then
-    log_info "Stopping consensus client..."
-    sudo systemctl stop fastevm-consensus
-fi
-
-# Wait a moment for services to stop
-sleep 5
-
-# Install binaries to system location
-log_info "Installing FastEVM binaries..."
-sudo cp $FASTEVM_DIR/target/release/fastevm-execution /usr/local/bin/
-sudo cp $FASTEVM_DIR/target/release/fastevm-consensus /usr/local/bin/
-sudo cp $FASTEVM_DIR/target/release/cli /usr/local/bin/
-sudo chmod +x /usr/local/bin/fastevm-execution
-sudo chmod +x /usr/local/bin/fastevm-consensus
-sudo chmod +x /usr/local/bin/cli
-
-# Create data directories
-log_info "Creating data directories..."
-sudo mkdir -p /data/execution
-sudo mkdir -p /data/execution/p2p
-sudo mkdir -p /data/execution/db
-sudo mkdir -p /data/logs
-sudo mkdir -p /data/config
-
-# Set proper ownership for database directory
-sudo chown -R ubuntu:ubuntu /data/execution
-
-# Generate JWT secret
-log_info "Generating JWT secret..."
-openssl rand -hex 32 | tr -d '\n' | sudo tee /data/execution/jwt.hex > /dev/null
-
-# Generate P2P secret key
-log_info "Generating P2P secret key..."
-NODE_SEED="fastevm-node-${NODE_INDEX}-p2p-secret-2025"
-echo "$NODE_SEED" | openssl dgst -sha256 -hex | cut -d' ' -f2 | tr -d '\n' | sudo tee /data/execution/p2p/secret.key > /dev/null
-
-# Generate peer ID from secret key
-log_info "Generating peer ID..."
-if [ -f "/usr/local/bin/cli" ]; then
-    # Set proper permissions for CLI to write
-    sudo chown -R ubuntu:ubuntu /data/execution/p2p
-    sudo -u ubuntu /usr/local/bin/cli show-peer-id --file /data/execution/p2p/secret.key --output /data/execution/p2p/secret.hex
-    # Remove 0x prefix if present
-    sudo sed -i 's/^0x//' /data/execution/p2p/secret.hex
-else
-    # Fallback: use the secret key directly as peer ID
-    sudo cp /data/execution/p2p/secret.key /data/execution/p2p/secret.hex
-fi
-
-# Copy configuration files
-log_info "Copying configuration files..."
-sudo cp /tmp/fastevm-config/* /data/
-
-# Function to add prefunded accounts to genesis.json (Step 2)
-prefund_account() {
-    log_info "Adding prefunded accounts to genesis.json..."
-    
-    # Configuration for prefunded accounts (must be consistent across all nodes)
-    local PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-10000}
-    local PREFUND_BALANCE=${PREFUND_BALANCE:-"1000000000000000000000"}
-    local TEST_MNEMONIC=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
-    
-    log_info "Prefund configuration:"
-    log_info "  Account count: $PREFUND_ACCOUNT_COUNT"
-    log_info "  Balance per account: $PREFUND_BALANCE wei"
-    log_info "  Mnemonic: $TEST_MNEMONIC"
-    
-    # Check if CLI is available
-    if ! command -v cli >/dev/null 2>&1; then
-        log_error "CLI not found in system PATH"
-        return 1
-    fi
-    
-    # Check if genesis.json exists
-    if [ ! -f "/data/genesis.json" ]; then
-        log_error "Genesis file not found at /data/genesis.json"
-        return 1
-    fi
-    
-    # Create backup of original genesis
-    sudo cp /data/genesis.json /data/genesis.json.backup
-    
-    # Generate prefunded accounts using CLI
-    log_info "Generating prefunded accounts using CLI..."
-    
-    # Set default values if not provided
-    local count=${PREFUND_ACCOUNT_COUNT:-1000}
-    local mnemonic=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
-    local balance=${PREFUND_BALANCE:-"1000000000000000000000"}
-    
-    # Ensure proper permissions before running CLI
-    sudo chown -R ubuntu:ubuntu /data
-    sudo chmod -R 755 /data
-    
-    if sudo -u ubuntu cli allocate-funds \
-        --input /data/genesis.json \
-        --count "$count" \
-        --mnemonic "$mnemonic" \
-        --amount "$balance" \
-        --output /data; then
-        
-        log_success "Successfully added $PREFUND_ACCOUNT_COUNT prefunded accounts to genesis.json"
-        
-        # Verify the updated genesis file
-        local total_accounts=$(jq '.alloc | length' /data/genesis.json)
-        log_info "Total accounts in genesis.json: $total_accounts"
-        
-        # Show sample accounts
-        log_info "Sample prefunded accounts:"
-        jq -r '.alloc | keys[0:3] | .[]' /data/genesis.json | while read -r addr; do
-            local balance=$(jq -r ".alloc[\"$addr\"].balance" /data/genesis.json)
-            log_info "  $addr: $balance wei"
-        done
-        
-        return 0
+    # Copy configuration templates
+    TEMPLATES_DIR="${PROJECT_ROOT}/templates"
+    if [ -f "$TEMPLATES_DIR/execution.toml.template" ]; then
+        cp "$TEMPLATES_DIR/execution.toml.template" "$NODE_DIR/execution.toml"
+        log_info "Copied execution.toml template for node $i"
     else
-        log_error "Failed to add prefunded accounts to genesis.json"
-        # Restore backup
-        sudo cp /data/genesis.json.backup /data/genesis.json
-        return 1
+        log_warning "execution.toml.template not found, skipping for node $i"
     fi
-}
-
-# Add prefunded accounts to genesis.json before initialization
-log_info "Adding prefunded accounts to genesis.json..."
-if prefund_account; then
-    log_success "Prefunded accounts added successfully"
-else
-    log_error "Failed to add prefunded accounts, using original genesis.json"
-fi
-
-# Initialize execution node with genesis
-log_info "Initializing execution node with genesis..."
-if [ -f "/data/genesis.json" ]; then
-    sudo /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/genesis.json || true
-fi
-
-# Install systemd services
-log_info "Installing systemd services..."
-sudo bash /tmp/fastevm-config/service.sh install
-
-# No need to set NODE_INDEX since we're using fixed ports
-
-# Set proper permissions
-log_info "Setting permissions..."
-sudo chown -R ubuntu:ubuntu /data
-
-# Ensure database directory has proper permissions
-log_info "Setting database permissions..."
-sudo chmod -R 755 /data/execution/db
-
-# Restart services if they exist, otherwise start them
-log_info "Restarting/Starting services..."
-if systemctl is-active --quiet fastevm-execution; then
-    log_info "Restarting services..."
-    sudo bash /tmp/fastevm-config/service.sh restart
-else
-    log_info "Starting services..."
-    sudo bash /tmp/fastevm-config/service.sh start
-fi
-
-# Create completion marker
-echo "FastEVM node $NODE_INDEX deployment completed successfully at $(date)" | sudo tee /var/log/fastevm-deployment-complete
-
-log_success "=== FastEVM Node $NODE_INDEX Deployment Completed Successfully ==="
-log_info "Services started: fastevm-execution, fastevm-consensus"
-log_info "Use 'fastevm-status' to check status"
-log_info "Use 'fastevm-health-check' to verify health"
-EOF
+    
+    if [ -f "$TEMPLATES_DIR/node.yml.template" ]; then
+        cp "$TEMPLATES_DIR/node.yml.template" "$NODE_DIR/node.yml"
+        log_info "Copied node.yml template for node $i"
+    else
+        log_warning "node.yml.template not found, skipping for node $i"
+    fi
+    
+    # Copy scripts
+    cp "$SCRIPT_DIR/deploy.sh" "$NODE_DIR/"
+    cp "$SCRIPT_DIR/service.sh" "$NODE_DIR/"
+    cp "$SCRIPT_DIR/setup-node.sh" "$NODE_DIR/"
     
     # Make scripts executable
     chmod +x "$NODE_DIR/deploy.sh"
     chmod +x "$NODE_DIR/service.sh"
+    chmod +x "$NODE_DIR/setup-node.sh"
     
     log_success "Generated deployment package for node $i"
 done
 
-# Generate Docker Compose configuration
-log_info "Generating Docker Compose configuration..."
-cat > "$CONFIG_DIR/docker-compose.yml" << EOF
-version: '3.8'
+# Copy Docker Compose template
+log_info "Copying Docker Compose template..."
+TEMPLATES_DIR="${PROJECT_ROOT}/templates"
+if [ -f "$TEMPLATES_DIR/docker-compose.yml" ]; then
+    cp "$TEMPLATES_DIR/docker-compose.yml" "$CONFIG_DIR/docker-compose.yml"
+    log_success "Docker Compose template copied"
+else
+    log_error "Docker Compose template not found at $TEMPLATES_DIR/docker-compose.yml"
+    exit 1
+fi
 
-services:
+# Generate network summary
+log_info "Generating network summary..."
+cat > "$CONFIG_DIR/network-summary.txt" << EOF
+FastEVM Network Configuration Summary
+=====================================
+
+Node Configuration:
 EOF
-
-for i in $(seq 0 $((NODE_COUNT - 1))); do
-    NODE_IP="${NODE_IPS[$i]}"
-    HTTP_PORT="${HTTP_PORTS[$i]}"
-    WS_PORT="${WS_PORTS[$i]}"
-    ENGINE_PORT="${ENGINE_PORTS[$i]}"
-    CONSENSUS_PORT="${CONSENSUS_PORTS[$i]}"
-    P2P_PORT="${P2P_PORTS[$i]}"
-    
-    cat >> "$CONFIG_DIR/docker-compose.yml" << EOF
-  execution-node$i:
-    image: scalarorg/fastevm-execution:latest
-    container_name: ${PROJECT_NAME}-execution$i
-    hostname: execution$i
-    ports:
-      - "$ENGINE_PORT:8551"
-      - "$HTTP_PORT:8545"
-      - "$WS_PORT:8546"
-      - "$P2P_PORT:30303/tcp"
-      - "$P2P_PORT:30303/udp"
-    volumes:
-      - execution-data$i:/data
-      - ./execution$i.toml:/data/execution.toml
-      - ./genesis.json:/data/genesis.json
-      - ./jwt$i.hex:/data/jwt.hex
-    networks:
-      fastevm-network:
-        ipv4_address: $NODE_IP
-    restart: unless-stopped
-
-  consensus-node$i:
-    image: scalarorg/fastevm-consensus:latest
-    container_name: ${PROJECT_NAME}-consensus$i
-    hostname: consensus$i
-    ports:
-      - "26657:26657"
-    volumes:
-      - consensus-data$i:/app/data
-      - ./node$i.yml:/app/data/node.yml
-      - ./committees.yml:/app/data/committees.yml
-      - ./parameters.yml:/app/data/parameters.yml
-      - ./genesis.json:/app/data/genesis.json
-    networks:
-      fastevm-network:
-        ipv4_address: $NODE_IP
-    depends_on:
-      - execution-node$i
-    restart: unless-stopped
-EOF
-done
-
-cat >> "$CONFIG_DIR/docker-compose.yml" << EOF
-
-networks:
-  fastevm-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: $BASE_IP.0/24
-
-volumes:
-EOF
-
-for i in $(seq 0 $((NODE_COUNT - 1))); do
-    cat >> "$CONFIG_DIR/docker-compose.yml" << EOF
-  execution-data$i:
-  consensus-data$i:
-EOF
-done
-
-log_success "Generated docker-compose.yml"
 
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     NODE_IP="${NODE_IPS[$i]}"
@@ -907,106 +532,8 @@ Node $i:
   Consensus API: http://$NODE_IP:$CONSENSUS_PORT
 EOF
 done
+log_success "Generated network summary"
 
-# Generate deployment script
-log_info "Generating deployment script..."
-cat > "$DEPLOY_DIR/deploy-all.sh" << EOF
-#!/bin/bash
-# FastEVM Multi-Node Deployment Script
-
-set -e
-
-NODE_COUNT=$NODE_COUNT
-PROJECT_NAME="$PROJECT_NAME"
-
-# Node IPs array
-NODE_IPS=($(printf '"%s" ' "${NODE_IPS[@]}"))
-
-# SSH key configuration
-SSH_KEY_PATH="../fastevm-deploy-key"
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-log_info() {
-    echo -e "\${BLUE}[INFO]\${NC} \$1"
-}
-
-log_success() {
-    echo -e "\${GREEN}[SUCCESS]\${NC} \$1"
-}
-
-log_error() {
-    echo -e "\${RED}[ERROR]\${NC} \$1"
-}
-
-# Check if SSH key exists
-check_ssh_key() {
-    if [ ! -f "\$SSH_KEY_PATH" ]; then
-        log_error "SSH key not found at \$SSH_KEY_PATH"
-        log_error "Please run 'terraform apply' first to generate SSH keys"
-        exit 1
-    fi
-    
-    # Set proper permissions
-    chmod 600 "\$SSH_KEY_PATH"
-    log_info "Using SSH key: \$SSH_KEY_PATH"
-}
-
-# Function to deploy a single node
-deploy_node() {
-    local node_index=\$1
-    local node_ip="\${NODE_IPS[\$node_index]}"
-    
-    log_info "Deploying node \$node_index (\$node_ip)..."
-    
-    # Copy configuration files to node
-    scp \$SSH_OPTS -i "\$SSH_KEY_PATH" -r node\$node_index/* ubuntu@\$node_ip:/tmp/fastevm-config/
-    
-    # Run deployment script on node with prefund environment variables
-    ssh \$SSH_OPTS -i "\$SSH_KEY_PATH" ubuntu@\$node_ip "PREFUND_ACCOUNT_COUNT='$PREFUND_ACCOUNT_COUNT' PREFUND_BALANCE='$PREFUND_BALANCE' TEST_MNEMONIC='$TEST_MNEMONIC' bash /tmp/fastevm-config/deploy.sh"
-    
-    log_success "Node \$node_index deployment completed"
-}
-
-# Check SSH key first
-check_ssh_key
-
-# Deploy all nodes
-log_info "Starting deployment of \$NODE_COUNT nodes..."
-
-for i in \$(seq 0 \$((NODE_COUNT - 1))); do
-    deploy_node \$i &
-done
-
-# Wait for all deployments to complete
-wait
-
-log_success "All nodes deployed successfully!"
-
-# Test connectivity
-log_info "Testing node connectivity..."
-for i in \$(seq 0 \$((NODE_COUNT - 1))); do
-    node_ip="\${NODE_IPS[\$i]}"
-    http_port=8545
-    
-    log_info "Testing node \$i (\$node_ip:$http_port)..."
-    if curl -s -f "http://\$node_ip:\$http_port" > /dev/null; then
-        log_success "Node \$i is responding"
-    else
-        log_error "Node \$i is not responding"
-    fi
-done
-
-log_success "Deployment completed!"
-EOF
-
-chmod +x "$DEPLOY_DIR/deploy-all.sh"
 
 # Generate README
 log_info "Generating README..."
@@ -1021,23 +548,18 @@ This directory contains the prepared configuration files for a FastEVM network w
 - \`genesis.json\` - Genesis block configuration
 - \`committees.yml\` - Consensus committee configuration
 - \`parameters.yml\` - Consensus parameters
-- \`docker-compose.yml\` - Docker Compose configuration
+- \`docker-compose.yml.template\` - Docker Compose template (use replace-templates.sh to generate docker-compose.yml)
 - \`network-summary.txt\` - Network configuration summary
 
 ### Node-Specific Configuration
-- \`node0.yml\` to \`node$((NODE_COUNT-1)).yml\` - Individual consensus node configurations
-- \`execution0.toml\` to \`execution$((NODE_COUNT-1)).toml\` - Individual execution node configurations
-- \`jwt0.hex\` to \`jwt$((NODE_COUNT-1)).hex\` - JWT secrets for each node
+- \`node0.env\` to \`node$((NODE_COUNT-1)).env\` - Environment files with all node-specific variables
 
 ### Deployment Packages
 - \`../deploy/node0/\` to \`../deploy/node$((NODE_COUNT-1))/\` - Individual node deployment packages
-- \`../deploy/deploy-all.sh\` - Script to deploy all nodes
 
 ## Network Configuration
 
 - **Node Count**: $NODE_COUNT
-- **Base IP**: $BASE_IP
-- **IP Range**: $BASE_IP.$START_IP - $BASE_IP.$((START_IP + NODE_COUNT - 1))
 - **Project Name**: $PROJECT_NAME
 - **GitHub Repo**: $GITHUB_REPO
 - **GitHub Branch**: $GITHUB_BRANCH
@@ -1047,20 +569,25 @@ This directory contains the prepared configuration files for a FastEVM network w
 ### 1. Prepare Configurations (This Step)
 \`\`\`bash
 # Generate all configurations
-./scripts/prepare-configs.sh -n $NODE_COUNT -b $BASE_IP -s $START_IP
+./scripts/prepare-configs.sh -n $NODE_COUNT
 \`\`\`
 
 ### 2. Deploy to Remote Nodes
 \`\`\`bash
-# Deploy all nodes
+# Deploy individual nodes
 cd ../deploy
-./deploy-all.sh
+for i in \$(seq 0 $((NODE_COUNT-1))); do
+    scp -r node\$i/* ubuntu@\${NODE_IPS[\$i]}:/tmp/fastevm-config/
+    ssh ubuntu@\${NODE_IPS[\$i]} 'bash /tmp/fastevm-config/deploy.sh'
+done
 \`\`\`
 
 ### 3. Deploy with Docker Compose (Alternative)
 \`\`\`bash
-# Deploy using Docker Compose
+# Generate docker-compose.yml from template
 cd config
+../scripts/replace-templates.sh
+# Deploy using Docker Compose
 docker-compose up -d
 \`\`\`
 
@@ -1068,7 +595,7 @@ docker-compose up -d
 \`\`\`bash
 # Test RPC endpoints
 for i in \$(seq 0 $((NODE_COUNT-1))); do
-    node_ip="$BASE_IP.$((START_IP + i))"
+    node_ip="\${NODE_IPS[\$i]}"
     http_port=8545
     echo "Testing node \$i: http://\$node_ip:\$http_port"
     curl -X POST http://\$node_ip:\$http_port \\
@@ -1083,8 +610,8 @@ If you prefer to deploy nodes individually:
 
 \`\`\`bash
 # Deploy specific node
-scp -r deploy/node0/* ubuntu@$BASE_IP.$START_IP:/tmp/fastevm-config/
-ssh ubuntu@$BASE_IP.$START_IP 'bash /tmp/fastevm-config/deploy.sh'
+scp -r deploy/node0/* ubuntu@\${NODE_IPS[0]}:/tmp/fastevm-config/
+ssh ubuntu@\${NODE_IPS[0]} 'bash /tmp/fastevm-config/deploy.sh'
 \`\`\`
 
 ## RPC Endpoints
@@ -1109,29 +636,30 @@ done
 cat >> "$CONFIG_DIR/README.md" << EOF
 ## Security Notes
 
-- JWT secrets are generated for each node
+- JWT secrets and P2P keys are generated for each node and stored in .env files
 - Each node has isolated data volumes
 - Network is isolated to the specified subnet
-- Change default JWT secrets in production environments
+- Change default secrets in production environments
 
 ## Troubleshooting
 
 ### Check Node Status
 \`\`\`bash
-ssh ubuntu@$BASE_IP.$START_IP 'fastevm-status'
+ssh ubuntu@\${NODE_IPS[0]} 'fastevm-status'
 \`\`\`
 
 ### Check Health
 \`\`\`bash
-ssh ubuntu@$BASE_IP.$START_IP 'fastevm-health-check'
+ssh ubuntu@\${NODE_IPS[0]} 'fastevm-health-check'
 \`\`\`
 
 ### View Logs
 \`\`\`bash
-ssh ubuntu@$BASE_IP.$START_IP 'journalctl -u fastevm-execution -f'
-ssh ubuntu@$BASE_IP.$START_IP 'journalctl -u fastevm-consensus -f'
+ssh ubuntu@\${NODE_IPS[0]} 'journalctl -u fastevm-execution -f'
+ssh ubuntu@\${NODE_IPS[0]} 'journalctl -u fastevm-consensus -f'
 \`\`\`
 EOF
+log_success "Generated README documentation"
 
 log_success "Configuration preparation completed!"
 echo ""
@@ -1140,13 +668,13 @@ log_info "Deployment packages in: $DEPLOY_DIR"
 echo ""
 log_info "Summary:"
 echo "  - $NODE_COUNT nodes configured"
-echo "  - IP range: $BASE_IP.$START_IP - $BASE_IP.$((START_IP + NODE_COUNT - 1))"
+echo "  - IPs: ${NODE_IPS[*]}"
 echo "  - All configurations prepared locally"
 echo "  - Deployment packages ready"
 echo ""
 log_info "Next steps:"
 echo "  1. Review the generated configuration files"
-echo "  2. Deploy using: cd $DEPLOY_DIR && ./deploy-all.sh"
+echo "  2. Deploy individual nodes using the deployment packages"
 echo "  3. Test the RPC endpoints"
 echo "  4. Monitor the network status"
 echo ""

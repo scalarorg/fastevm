@@ -40,7 +40,7 @@ variable "machine_type" {
 variable "disk_type" {
   description = "Type of persistent disk"
   type        = string
-  default     = "pd-ssd"
+  default     = "pd-standard"
 }
 
 variable "disk_size" {

@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  execution-node:
+    image: scalarorg/fastevm-execution:latest
+    container_name: ${PROJECT_NAME}-execution
+    hostname: execution
+    ports:
+      - "8551:8551"
+      - "8545:8545"
+      - "8546:8546"
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
+    volumes:
+      - execution-data:/data
+      - ./execution.toml:/data/execution.toml
+      - ./genesis.json:/data/config/genosis.json
+      - ./jwt.hex:/data/jwt.hex
+    networks:
+      fastevm-network:
+        ipv4_address: ${NODE_IP}
+    restart: unless-stopped
+
+  consensus-node:
+    image: scalarorg/fastevm-consensus:latest
+    container_name: ${PROJECT_NAME}-consensus
+    hostname: consensus
+    ports:
+      - "26657:26657"
+    volumes:
+      - consensus-data:/app/data
+      - ./node.yml:/app/data/node.yml
+      - ./committees.yml:/app/data/committees.yml
+      - ./parameters.yml:/app/data/parameters.yml
+      - ./genesis.json:/app/data/config/genosis.json
+    networks:
+      fastevm-network:
+        ipv4_address: ${NODE_IP}
+    depends_on:
+      - execution-node
+    restart: unless-stopped
+
+networks:
+  fastevm-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BASE_IP}.0/24
+
+volumes:
+  execution-data:
+  consensus-data:
