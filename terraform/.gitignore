@@ -1,3 +1,6 @@
+# Binary backups
+binaries/
+
 # Terraform files
 *.tfstate
 *.tfstate.*
@@ -36,6 +39,7 @@ terraform.rc
 # Generated configuration files
 config/
 deploy/
+binaries/
 deployment-info.json
 peer-config.json
 
