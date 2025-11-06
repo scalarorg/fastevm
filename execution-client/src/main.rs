@@ -11,38 +11,46 @@
 // alloy_consensus is used in transaction_listener.rs
 use alloy_consensus as _;
 mod consensus;
+mod db;
+mod evm;
 mod payload;
 mod pool;
 mod rpc;
 
+mod types;
 use clap::Parser;
+use evm::*;
+use reth_ethereum_engine_primitives::EthPayloadTypes;
+use reth_transaction_pool::blobstore::DiskFileBlobStore;
+use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::oneshot;
 // Suppress warnings for dependencies used by CLI binary
 use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
     pool::MysticetiPoolBuilder,
-    rpc::{ConsensusTransactionsHandler, TxpoolListener},
+    rpc::{MysticetiConsensusHandler, TransactionHandler},
+    types::TxValidatorConfig,
 };
-
 use reth_ethereum::{
     chainspec::ChainSpecProvider,
-    cli::{chainspec::EthereumChainSpecParser, interface::Cli},
     node::{
-        builder::{components::BasicPayloadServiceBuilder, NodeHandle},
+        builder::{components::BasicPayloadServiceBuilder, NodeBuilder, NodeHandle},
         node::EthereumAddOns,
         EthereumNode,
     },
 };
-use reth_extension::{ConsensusTransactionApiServer, TxpoolListenerApiServer};
+use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
+use reth_extension::{MysticetiConsensusApiServer, MysticetiTransactionApiServer};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info};
 // Use in cli
 use bip39 as _;
 use hdwallet as _;
 use hex as _;
 use reth_network_peers as _;
 use reth_rpc_layer as _;
-use secp256k1 as _;
+use secp256k1::{self as _};
 use serde_json as _;
 use sha2 as _;
 
@@ -51,7 +59,7 @@ use sha2 as _;
 pub(crate) struct CliMysticetiArgs {
     /// CLI flag to enable the txpool extension namespace
     #[arg(long)]
-    pub enable_txpool_listener: bool,
+    pub enable_tx_subscription: bool,
     /// Number of transactions to send in a batch
     #[arg(long)]
     pub committed_subdags_per_block: usize,
@@ -69,14 +77,39 @@ pub(crate) struct CliMysticetiArgs {
 /// extend_rpc_modules
 /// on_rpc_started
 /// on_node_started:
-fn main() {
+fn main() -> eyre::Result<()> {
     Cli::<EthereumChainSpecParser, CliMysticetiArgs>::parse()
         .run(|builder, args| async move {
-            //Create a channel for sending subdag received from rpc server to BeaconConsensusEngineHandle
-            // let (subdag_tx, subdag_rx) = unbounded_channel();
+            // Extract config and create custom database
+            // let config = builder.config();
+            // let datadir = config.datadir();
+            // let db_path = datadir.db();
+            // info!(path = ?db_path, "Creating custom database");
+            // let db_args = DatabaseArguments::from(&config.db);
+            // let custom_database = Arc::new(init_db(db_path, db_args)?);
+
+            // // Create task executor and rebuild builder with custom database
+            // let task_executor = builder.task_executor().clone();
+            // let config = config.clone();
+
+            // // Build node from scratch with custom database (cleaner approach)
+            // let builder = NodeBuilder::new(config)
+            //     .with_database(custom_database)
+            //     .with_launch_context(task_executor);
+
+            // Create a channel for sending built payload to mysticeti consensus
+            let (tx_built_payload, rx_built_payload) = unbounded_channel();
+
+            // Create oneshot channel for validator configuration
+            let (config_sender, config_receiver) =
+                oneshot::channel::<TxValidatorConfig<_, DiskFileBlobStore>>();
+
             let consensus_pool = Arc::new(ConsensusPool::new(args.committed_subdags_per_block));
             let mysticeti_payload_builder = BasicPayloadServiceBuilder::new(
-                MysticetiPayloadBuilderFactory::new(consensus_pool.clone()),
+                MysticetiPayloadBuilderFactory::<_, EthPayloadTypes>::new(
+                    consensus_pool.clone(),
+                    tx_built_payload,
+                ),
             );
 
             let handle = builder
@@ -85,22 +118,32 @@ fn main() {
                 // use default ethereum components but use our custom payload builder
                 .with_components(
                     EthereumNode::components()
+                        .executor(ScalarExecutorBuilder::default())
                         .payload(mysticeti_payload_builder)
-                        .pool(MysticetiPoolBuilder::default()),
+                        .pool(
+                            MysticetiPoolBuilder::<_, DiskFileBlobStore>::default()
+                                .with_config_sender(config_sender),
+                        ),
                 )
                 .with_add_ons(EthereumAddOns::default())
                 .extend_rpc_modules({
                     let consensus_pool = consensus_pool.clone();
                     move |ctx| {
-                        if !args.enable_txpool_listener {
+                        if !args.enable_tx_subscription {
                             return Ok(());
                         }
-
-                        // here we get the configured pool.
-                        let pool = ctx.pool().clone();
-                        let listener = TxpoolListener::new(pool.clone());
                         let chain_spec = ctx.provider().chain_spec();
-                        let consensus_handler = ConsensusTransactionsHandler::new(
+                        // Access the EthApi instance from the registry
+                        let eth_api = ctx.registry.eth_api().clone();
+
+                        let pool = ctx.pool();
+                        let mut listener = TransactionHandler::new(pool.clone(), eth_api)
+                            .with_config_receiver(config_receiver);
+
+                        // Start validator reconstruction thread
+                        listener.start_txvalidator_config_listener();
+
+                        let consensus_handler = MysticetiConsensusHandler::new(
                             consensus_pool.clone(),
                             pool.clone(),
                             chain_spec,
@@ -113,20 +156,23 @@ fn main() {
                     }
                 })
                 .on_node_started(move |node| {
-                    let payload_builder_handle: reth_payload_builder::PayloadBuilderHandle<
-                        reth_ethereum::node::EthEngineTypes,
-                    > = node.payload_builder_handle.clone();
+                    // let payload_builder_handle: reth_payload_builder::PayloadBuilderHandle<
+                    //     reth_ethereum::node::EthEngineTypes,
+                    // > = node.payload_builder_handle.clone();
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
-
+                    // Get the canonical state stream
                     let mut mysticeti_consensus = MysticetiConsensus::new(
                         consensus_pool,
                         node.provider,
-                        payload_builder_handle,
+                        //payload_builder_handle,
+                        rx_built_payload,
                         engine_handle,
                         args.block_build_interval_ms,
                     );
                     node.task_executor.spawn(async move {
-                        mysticeti_consensus.start().await;
+                        if let Err(e) = mysticeti_consensus.start().await {
+                            error!("Failed to start mysticeti consensus: {:?}", e);
+                        }
                     });
 
                     Ok(())
@@ -149,4 +195,6 @@ fn main() {
             // handle.wait_for_node_exit().await
         })
         .unwrap();
+
+    Ok(())
 }

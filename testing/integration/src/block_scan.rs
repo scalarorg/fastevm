@@ -301,15 +301,6 @@ pub async fn scan_blocks_with_url(rpc_url: &str) -> Result<BlockScanStats> {
     scan_blocks(config).await
 }
 
-/// Convenience function to scan a specific number of blocks
-pub async fn scan_blocks_count(count: u64) -> Result<BlockScanStats> {
-    let config = BlockScanConfig {
-        block_count: count,
-        ..Default::default()
-    };
-    scan_blocks(config).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

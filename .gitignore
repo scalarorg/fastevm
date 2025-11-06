@@ -172,7 +172,6 @@ production/
 
 # Staging files
 staging/
-stage/
 
 # Monitoring and metrics
 monitoring/

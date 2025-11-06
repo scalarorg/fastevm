@@ -4,8 +4,8 @@
 //! for transferring ETH between addresses. It handles transaction building,
 //! signing with private keys, and preparing transactions for network broadcast.
 
-use alloy_network::{Ethereum, EthereumWallet, Network, TransactionBuilder};
-use alloy_primitives::{Address, ChainId, U256};
+use alloy_network::{eip2718::Encodable2718, EthereumWallet, TransactionBuilder};
+use alloy_primitives::{Address, Bytes, ChainId, U256};
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
@@ -27,7 +27,7 @@ use std::str::FromStr;
 ///
 /// # Arguments
 ///
-/// * `signer_privkey` - The private key of the sender (hex string)
+/// * `signer_privkey` - The private key of the sender (byte slice)
 /// * `recipient` - The recipient's Ethereum address (hex string)
 /// * `chain_id` - The chain ID of the target network
 /// * `gwei_amount` - The amount to transfer in wei
@@ -35,7 +35,7 @@ use std::str::FromStr;
 ///
 /// # Returns
 ///
-/// Returns a `Result` containing the signed transaction envelope if successful,
+/// Returns a `Result` containing the raw transaction bytes if successful,
 /// or an error if the transaction creation fails.
 ///
 /// # Errors
@@ -48,19 +48,20 @@ use std::str::FromStr;
 /// # Example
 ///
 /// ```rust
-/// use ef_tests::create_transfer_transaction;
+/// use testing::transactions::create_transfer_transaction;
 ///
 /// #[tokio::main]
 /// async fn main() -> eyre::Result<()> {
-///     let tx = create_transfer_transaction(
-///         "0x123...", // private key
+///     let private_key = [0u8; 32]; // Your private key bytes
+///     let raw_tx = create_transfer_transaction(
+///         &private_key,
 ///         "0x456...", // recipient address
 ///         1,          // chain ID (mainnet)
 ///         1_000_000_000_000_000_000, // 1 ETH in wei
 ///         0           // nonce
 ///     ).await?;
 ///     
-///     // tx can now be broadcast to the network
+///     // raw_tx can now be sent via RPC client
 ///     Ok(())
 /// }
 /// ```
@@ -70,37 +71,36 @@ pub async fn create_transfer_transaction(
     chain_id: ChainId,
     gwei_amount: u64,
     nonce: u64,
-) -> Result<<Ethereum as Network>::TxEnvelope> {
+) -> Result<Bytes> {
     // Parse the recipient address from string to Address type
     let recipient_addr = Address::from_str(recipient)
         .map_err(|e| eyre::eyre!("Invalid recipient address: {}", e))?;
 
     // Create a wallet signer from the provided private key
-    // let wallet = PrivateKeySigner::from_str(signer_privkey)
-    //     .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
     let wallet = PrivateKeySigner::from_slice(signer_privkey)
         .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
+
     // Get the sender's address from the wallet
     let sender_addr = wallet.address();
 
     // Build a transaction request with standard ETH transfer parameters
-    let mut tx = TransactionRequest::default()
-        .with_from(sender_addr)
+    let tx_request = TransactionRequest::default()
         .with_to(recipient_addr)
-        .with_chain_id(chain_id)
         .with_value(U256::from(gwei_amount))
-        .with_gas_limit(21_000) // Standard gas limit for ETH transfers
+        .with_gas_limit(21_000) // Standard ETH transfer gas limit
         .with_max_priority_fee_per_gas(1_000_000_000) // 1 Gwei
-        .with_max_fee_per_gas(20_000_000_000); // 20 Gwei
-    tx = tx.with_nonce(nonce);
+        .with_max_fee_per_gas(20_000_000_000) // 20 Gwei
+        .with_nonce(nonce)
+        .with_chain_id(chain_id);
+
     // Convert the LocalSigner to an EthereumWallet to satisfy the NetworkWallet trait bound
     let ethereum_wallet = EthereumWallet::from(wallet);
 
-    // Build and sign the transaction using the ethereum wallet
-    let tx_envelope = tx
-        .build(&ethereum_wallet)
-        .await
-        .map_err(|e| eyre::eyre!("Failed to build transaction: {}", e))?;
+    // Build and sign the transaction
+    let tx_envelope = tx_request.build(&ethereum_wallet).await?;
 
-    Ok(tx_envelope)
+    // Encode to raw bytes
+    let raw_tx = tx_envelope.encoded_2718();
+
+    Ok(Bytes::from(raw_tx))
 }
