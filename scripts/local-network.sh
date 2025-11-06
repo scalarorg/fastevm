@@ -466,7 +466,10 @@ start_execution_node() {
         "--txpool.queued-max-count" "102400"
         "--txpool.queued-max-size" "128"
     )
-
+    # Builder
+    cmd_args+=(
+        "--builder.gaslimit" "240000000"
+    )
     # Add remaining arguments
     cmd_args+=(
         "--authrpc.addr" "0.0.0.0"

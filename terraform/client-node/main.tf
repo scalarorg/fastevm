@@ -57,14 +57,6 @@ data "google_compute_subnetwork" "fastevm_subnet" {
   region = var.region
 }
 
-# Create persistent disk for client node (same pattern as main nodes)
-resource "google_compute_disk" "client_disk" {
-  name = "${var.project_name}-disk"
-  type = var.disk_type
-  zone = var.zone
-  size = var.client_disk_size
-}
-
 # Service account for client node
 resource "google_service_account" "client_service_account" {
   account_id   = "${var.project_name}-sa"
@@ -96,14 +88,9 @@ resource "google_compute_instance" "client_node" {
   boot_disk {
     initialize_params {
       image = var.image
-      size  = 20
+      size  = 40
       type  = "pd-standard"
     }
-  }
-
-  attached_disk {
-    source      = google_compute_disk.client_disk.id
-    device_name = "fastevm-data"
   }
 
   network_interface {
@@ -210,8 +197,6 @@ resource "google_compute_instance" "client_node" {
     email  = google_service_account.client_service_account.email
     scopes = ["cloud-platform"]
   }
-
-  depends_on = [google_compute_disk.client_disk]
 
   labels = {
     environment = "testing"

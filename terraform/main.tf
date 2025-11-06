@@ -107,15 +107,6 @@ resource "google_compute_firewall" "fastevm_external" {
   target_tags   = ["fastevm-node"]
 }
 
-# Create persistent disks for each node
-resource "google_compute_disk" "fastevm_disks" {
-  count = var.node_count
-  name  = "${var.project_name}-disk-${count.index + 1}"
-  type  = var.disk_type
-  zone  = var.zone
-  size  = var.disk_size
-}
-
 # Create startup script
 locals {
   startup_script = templatefile("${path.module}/scripts/bootstrap.sh", {
@@ -142,15 +133,9 @@ resource "google_compute_instance" "fastevm_nodes" {
   boot_disk {
     initialize_params {
       image = var.image
-      size  = 20
+      size  = 40
       type  = "pd-standard"
     }
-  }
-
-  attached_disk {
-    source      = google_compute_disk.fastevm_disks[count.index].id
-    device_name = "fastevm-data"
-    mode        = "READ_WRITE"
   }
 
   network_interface {
@@ -175,8 +160,6 @@ resource "google_compute_instance" "fastevm_nodes" {
     email  = google_service_account.fastevm_sa.email
     scopes = ["cloud-platform"]
   }
-
-  depends_on = [google_compute_disk.fastevm_disks]
 }
 
 # Create service account

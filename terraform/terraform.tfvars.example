@@ -18,7 +18,7 @@ node_count = 4
 machine_type = "e2-standard-4"
 
 # Optional: Disk configuration
-disk_type = "pd-ssd"
+disk_type = "pd-standard"
 disk_size = 100
 
 # Optional: Boot disk image

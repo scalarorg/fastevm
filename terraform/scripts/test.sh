@@ -44,6 +44,10 @@ log() {
     echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1" | tee -a "$TEST_LOG"
 }
 
+log_info() {
+    log "$1"
+}
+
 log_success() {
     echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] ✅ $1${NC}" | tee -a "$TEST_LOG"
 }

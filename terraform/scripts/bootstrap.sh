@@ -121,84 +121,19 @@ mkdir -p /data/consensus
 mkdir -p /data/logs
 mkdir -p /data/config
 
-# Mount the persistent disk
-echo "Mounting persistent disk..."
-echo "Available block devices:"
-lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
+# Use boot disk for /data directory (no separate persistent disk)
+echo "Using boot disk for /data directory..."
+echo "Available disk space:"
+df -h /
 
-# Find the attached disk (should be the second disk after boot disk)
-DISK_DEVICE=""
-for device in /dev/sdb /dev/nvme1n1 /dev/nvme0n2; do
-    if [ -b "$device" ]; then
-        DISK_DEVICE="$device"
-        echo "Found disk device: $DISK_DEVICE"
-        break
-    fi
-done
-
-# If no device found, try to find any unpartitioned disk
-if [ -z "$DISK_DEVICE" ]; then
-    echo "No standard device found, searching for unpartitioned disks..."
-    for device in $(lsblk -d -n -o NAME | grep -v loop | tail -n +2); do
-        if [ -b "/dev/$device" ] && ! lsblk -n -o MOUNTPOINT "/dev/$device" | grep -q "/"; then
-            DISK_DEVICE="/dev/$device"
-            echo "Found unpartitioned disk: $DISK_DEVICE"
-            break
-        fi
-    done
-fi
-
-if [ -n "$DISK_DEVICE" ]; then
-    # Check if disk is already formatted
-    if ! blkid $DISK_DEVICE >/dev/null 2>&1; then
-        echo "Formatting persistent disk $DISK_DEVICE with optimized settings..."
-        # Format with optimized settings for database workloads
-        mkfs.ext4 -F -O ^has_journal -E lazy_itable_init=0,lazy_journal_init=0 $DISK_DEVICE
-    else
-        echo "Disk $DISK_DEVICE is already formatted"
-    fi
+# Ensure /data directory exists on root filesystem
+mkdir -p /data
+if [ -d "/data" ]; then
+    echo "Successfully created /data directory on boot disk"
+    df -h /data
     
-    # Ensure /data directory exists
-    mkdir -p /data
-    
-    # Mount the disk
-    echo "Mounting persistent disk $DISK_DEVICE to /data..."
-    if mount $DISK_DEVICE /data; then
-        echo "Successfully mounted $DISK_DEVICE to /data"
-    else
-        echo "ERROR: Failed to mount $DISK_DEVICE to /data"
-        echo "Trying to unmount and remount..."
-        umount /data 2>/dev/null || true
-        if mount $DISK_DEVICE /data; then
-            echo "Successfully mounted $DISK_DEVICE to /data on retry"
-        else
-            echo "ERROR: Still failed to mount $DISK_DEVICE to /data"
-            exit 1
-        fi
-    fi
-    
-    # Add to fstab for persistent mounting with optimized options
-    if ! grep -q "$DISK_DEVICE.*/data" /etc/fstab; then
-        echo "$DISK_DEVICE /data ext4 defaults,nofail,noatime,nodiratime,data=writeback 0 2" >> /etc/fstab
-        echo "Added $DISK_DEVICE to /etc/fstab with optimized mount options"
-    else
-        echo "Mount entry already exists in /etc/fstab"
-    fi
-    
-    # Verify mount
-    if mountpoint -q /data; then
-        echo "Successfully mounted $DISK_DEVICE to /data"
-        df -h /data
-        
-        # Optimize filesystem for database workloads
-        echo "Optimizing filesystem for database workloads..."
-        # Increase inode count for large number of small files
-        tune2fs -i 0 -c 0 $DISK_DEVICE
-        
-        # Set optimal I/O scheduler for SSD
-        echo mq-deadline > /sys/block/$(basename $DISK_DEVICE)/queue/scheduler 2>/dev/null || true
-        
-        # Optimize kernel parameters for database workloads
+    # Optimize kernel parameters for database workloads
+    if ! grep -q "Database optimization settings" /etc/sysctl.conf; then
         cat >> /etc/sysctl.conf << EOF
 # Database optimization settings
 vm.swappiness = 1
@@ -208,16 +143,11 @@ vm.dirty_expire_centisecs = 3000
 vm.dirty_writeback_centisecs = 500
 kernel.sched_rt_runtime_us = -1
 EOF
-        
-        echo "Filesystem optimization completed"
-    else
-        echo "ERROR: Failed to mount $DISK_DEVICE to /data"
-        exit 1
+        echo "Added database optimization settings to /etc/sysctl.conf"
     fi
+    echo "Filesystem setup completed"
 else
-    echo "ERROR: No persistent disk found!"
-    echo "Available block devices:"
-    lsblk
+    echo "ERROR: Failed to create /data directory"
     exit 1
 fi
 
@@ -383,19 +313,17 @@ commit_sync_batches_ahead: 32
 EOF
 fi
 
-# Create systemd service for data disk mounting
+# Create systemd service for ensuring /data directory exists
 cat > /etc/systemd/system/fastevm-data-mount.service << EOF
 [Unit]
-Description=Mount FastEVM Data Disk
+Description=Ensure FastEVM Data Directory Exists
 Before=fastevm-execution.service
 Before=fastevm-consensus.service
-RequiresMountsFor=/data
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -c 'if [ ! -d /data ]; then mkdir -p /data; fi && if ! mountpoint -q /data; then for device in /dev/sdb /dev/nvme1n1 /dev/nvme0n2; do if [ -b "\$device" ] && ! blkid "\$device" >/dev/null 2>&1; then mkfs.ext4 -F -O ^has_journal -E lazy_itable_init=0,lazy_journal_init=0 "\$device"; fi; done && mount -a; fi'
-ExecStop=/bin/umount /data
+ExecStart=/bin/bash -c 'mkdir -p /data/execution /data/consensus /data/logs /data/config && chown -R ubuntu:ubuntu /data'
 StandardOutput=journal
 StandardError=journal
 
@@ -540,7 +468,7 @@ systemctl enable fastevm-execution
 systemctl enable fastevm-consensus
 
 echo "Services enabled but not started. They will be started during deployment."
-echo "Data mount service will ensure /data is mounted before other services start."
+echo "Data directory service will ensure /data exists before other services start."
 
 # Create status script
 cat > /usr/local/bin/fastevm-status.sh << 'EOF'
@@ -596,85 +524,7 @@ chmod +x /usr/local/bin/fastevm-cleanup.sh
 chown -R ubuntu:ubuntu /data
 chown -R ubuntu:ubuntu $FASTEVM_DIR
 
-# Create startup script to ensure disk is mounted at boot
-cat > /usr/local/bin/fastevm-startup.sh << 'EOF'
-#!/bin/bash
-# FastEVM startup script to ensure data disk is mounted
-
-LOG_FILE="/var/log/fastevm-startup.log"
-exec > >(tee -a $LOG_FILE)
-exec 2>&1
-
-echo "=== FastEVM Startup Script - $(date) ==="
-
-# Check if /data is already mounted
-if mountpoint -q /data; then
-    echo "/data is already mounted"
-    df -h /data
-    exit 0
-fi
-
-echo "/data is not mounted, attempting to mount..."
-
-# Find and mount the data disk
-for device in /dev/sdb /dev/nvme1n1 /dev/nvme0n2; do
-    if [ -b "$device" ]; then
-        echo "Found disk device: $device"
-        
-        # Check if disk is formatted
-        if ! blkid $device >/dev/null 2>&1; then
-            echo "Formatting disk $device..."
-            mkfs.ext4 -F -O ^has_journal -E lazy_itable_init=0,lazy_journal_init=0 $device
-        fi
-        
-        # Ensure /data directory exists
-        mkdir -p /data
-        
-        # Mount the disk
-        if mount $device /data; then
-            echo "Successfully mounted $device to /data"
-            df -h /data
-            
-            # Add to fstab if not already there
-            if ! grep -q "$device.*/data" /etc/fstab; then
-                echo "$device /data ext4 defaults,nofail,noatime,nodiratime,data=writeback 0 2" >> /etc/fstab
-                echo "Added $device to /etc/fstab"
-            fi
-            
-            # Set proper ownership
-            chown -R ubuntu:ubuntu /data
-            
-            echo "Data disk mounted successfully"
-            exit 0
-        else
-            echo "Failed to mount $device to /data"
-        fi
-    fi
-done
-
-echo "ERROR: Could not mount data disk"
-exit 1
-EOF
-
-chmod +x /usr/local/bin/fastevm-startup.sh
-
-# Add startup script to run at boot
-cat > /etc/systemd/system/fastevm-startup.service << EOF
-[Unit]
-Description=FastEVM Startup Script
-After=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/fastevm-startup.sh
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable fastevm-startup.service
+# No separate startup script needed - using boot disk directly
 
 # Create completion marker
 echo "FastEVM bootstrap completed successfully at $(date)" > /var/log/fastevm-bootstrap-complete
@@ -687,7 +537,6 @@ else
     echo "Worker node: Waiting for binaries from node 0"
 fi
 echo "Services enabled: fastevm-data-mount, fastevm-execution, fastevm-consensus"
-echo "Startup script: fastevm-startup (runs at boot to ensure disk mounting)"
 echo "Use 'fastevm-status' to check status"
 echo "Use 'fastevm-health-check' to verify health"
 echo "Logs available in /var/log/fastevm-* and journalctl"

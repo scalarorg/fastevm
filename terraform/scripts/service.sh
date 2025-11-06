@@ -85,6 +85,7 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --ws.addr 0.0.0.0 \
     --ws.port ${WS_PORT} \
     --ws.origins "*" \
+    --builder.gaslimit ${GAS_LIMIT} \
     --txpool.max-new-txns 102400 \
     --txpool.max-account-slots 102400 \
     --txpool.max-pending-txns 102400 \
@@ -104,7 +105,7 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --bootnodes ${BOOTNODES} \
     --enable-tx-subscription \
     --committed-subdags-per-block ${SUBDAGS_PER_BLOCK:-30} \
-    --block-build-interval-ms 100 \
+    --block-build-interval-ms ${BLOCK_BUILD_INTERVAL:-1000} \
     -$LOG_LEVEL
 Restart=always
 RestartSec=10

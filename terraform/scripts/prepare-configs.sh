@@ -372,6 +372,7 @@ P2P_PEER_ID="{{PEER_ID_$i}}"
 PEER_ADDRESSES="$PEER_ADDRESSES"
 
 # Blockchain configuration
+GAS_LIMIT="${BLOCK_GAS_LIMIT}"
 SUBDAGS_PER_BLOCK="${SUBDAGS_PER_BLOCK}"
 
 # Logging configuration

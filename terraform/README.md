@@ -208,14 +208,14 @@ deploy/
 - `zone`: GCP zone (default: "us-central1-a")
 - `node_count`: Number of nodes (default: 4)
 - `machine_type`: Instance type (default: "e2-standard-4")
-- `disk_type`: Disk type (default: "pd-ssd")
+- `disk_type`: Disk type (default: "pd-standard")
 - `disk_size`: Disk size in GB (default: 100)
 
 ## 🏗️ Infrastructure Components
 
 ### Compute Resources
 - **4 VM Instances**: e2-standard-4 machines
-- **Persistent Disks**: 100GB SSD per node
+- **Persistent Disks**: 100GB standard per node
 - **Service Account**: For node operations
 
 ### Networking
