@@ -17,24 +17,24 @@ asm-keccak = ["alloy-primitives/asm-keccak", "revm/asm-keccak"]
 
 [dependencies]
 
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-chainspec" }
+reth-chainspec = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-chainspec" }
 
-reth-ethereum-primitives = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-primitives" }
-reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-primitives-traits" }
-reth-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-consensus" }
+reth-ethereum-primitives = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-ethereum-primitives" }
+reth-primitives-traits = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-primitives-traits" }
+reth-consensus = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-consensus" }
 
-reth-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db", features = ["mdbx", "test-utils", "disable-lock"] }
-reth-db-api= { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db-api" }
-reth-db-common = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-db-common" }
-reth-provider = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-provider", features = ["test-utils"] }
-reth-evm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm" }
-reth-evm-ethereum = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-evm-ethereum" }
-reth-ethereum-consensus = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-ethereum-consensus" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-revm", features = ["std", "witness"] }
-reth-stateless = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-stateless" }
-reth-tracing = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-tracing" }
-reth-trie = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie" }
-reth-trie-db = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.6.0", package = "reth-trie-db" }
+reth-db = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-db", features = ["mdbx", "test-utils", "disable-lock"] }
+reth-db-api= { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-db-api" }
+reth-db-common = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-db-common" }
+reth-provider = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-provider", features = ["test-utils"] }
+reth-evm = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-evm" }
+reth-evm-ethereum = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-evm-ethereum" }
+reth-ethereum-consensus = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-ethereum-consensus" }
+reth-revm = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-revm", features = ["std", "witness"] }
+reth-stateless = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-stateless" }
+reth-tracing = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-tracing" }
+reth-trie = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-trie" }
+reth-trie-db = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-trie-db" }
 revm = { version = "28.0.1", default-features = false }
 
 alloy = { workspace = true }
