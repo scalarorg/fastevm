@@ -5,6 +5,7 @@
 //!
 pub mod address;
 pub mod rpc;
+pub mod rpc_client;
 pub mod transactions;
 
 // Re-export block scanning functionality

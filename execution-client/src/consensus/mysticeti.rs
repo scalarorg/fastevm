@@ -1,27 +1,32 @@
+use crate::consensus::ConsensusPool;
+use alloy_consensus::transaction::TxHashRef;
 use alloy_consensus::BlockHeader;
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, TxHash, B256};
 use alloy_rpc_types_engine::PayloadAttributes;
 use anyhow::Result;
+use futures_util::StreamExt;
 use reth_ethereum::{
     chainspec::{ChainSpecProvider, EthChainSpec},
     node::api::{
         BeaconConsensusEngineHandle, BuiltPayload, EngineApiMessageVersion, ExecutionPayload,
         PayloadTypes,
     },
+    node::engine::EthPayloadAttributes,
+    primitives::SignedTransaction,
     rpc::types::engine::{ForkchoiceState, ForkchoiceUpdated},
     storage::StateProviderFactory,
 };
-use reth_ethereum_engine_primitives::EthEngineTypes;
-use reth_payload_builder::{PayloadBuilderHandle, PayloadId};
+use reth_node_api::BlockBody;
+use reth_payload_builder::PayloadId;
+use reth_provider::CanonStateSubscriptions;
 use reth_transaction_pool::TransactionPool;
-use std::sync::Arc;
-use tracing::{debug, error, info, trace};
-
-use crate::consensus::{ConsensusPool, ProposalBlock};
-
+use std::{collections::VecDeque, sync::Arc};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::{debug, error, info};
 // const WAITING_PENDING_TXS_TIMEOUT: u64 = 3000; // 10 second timeout
 // const WAITING_PENDING_TXS_INTERVAL: u64 = 100; // 1 second interval
-
+use std::collections::HashSet;
 //const PAYLOAD_EXECUTION_TIMEOUT: u64 = 30; // 30 second timeout
 //const PAYLOAD_EXECUTION_INTERVAL: u64 = 500; // 10 millisecond interval
 pub struct MysticetiConsensus<Provider, Payload, Pool>
@@ -31,13 +36,22 @@ where
     Pool: TransactionPool,
 {
     consensus_pool: Arc<ConsensusPool<Pool>>,
-    payload_builder_handle: PayloadBuilderHandle<Payload>,
+    //payload_builder_handle: PayloadBuilderHandle<Payload>,
+    rx_built_payload: Option<UnboundedReceiver<Payload::BuiltPayload>>,
     engine_handle: BeaconConsensusEngineHandle<Payload>,
     provider: Provider,
-    //Keep track of the last payload
-    //This payload is used to build new forkchoice state and next payloadAttribute
-    proposal_block: Option<ProposalBlock<Payload>>,
+    // Keep track of the canonical state number
     block_build_interval: u64,
+    // canonical_block_number
+    // Updated when receive canonical state updated
+    canonical_block_number: u64,
+    // Keep track of the last sent to evm executor payload
+    last_processing_payload: Option<Payload::BuiltPayload>,
+    // Keep track of the last built payload
+    // This payload is used to build new forkchoice state and next payloadAttribute
+    last_built_payload: Option<Payload::BuiltPayload>,
+    // Keep pyload buffer and send to evm executor if last payload is executed
+    payload_buffer: VecDeque<Payload::BuiltPayload>,
 }
 
 impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
@@ -49,17 +63,22 @@ where
     pub fn new(
         consensus_pool: Arc<ConsensusPool<Pool>>,
         provider: Provider,
-        payload_builder_handle: PayloadBuilderHandle<Payload>,
+        //payload_builder_handle: PayloadBuilderHandle<Payload>,
+        rx_built_payload: UnboundedReceiver<Payload::BuiltPayload>,
         engine_handle: BeaconConsensusEngineHandle<Payload>,
         block_build_interval: u64,
     ) -> Self {
         Self {
             consensus_pool,
-            payload_builder_handle,
+            //payload_builder_handle,
+            rx_built_payload: Some(rx_built_payload),
             engine_handle,
             provider,
-            proposal_block: None,
             block_build_interval,
+            canonical_block_number: 0,
+            last_processing_payload: None,
+            last_built_payload: None,
+            payload_buffer: VecDeque::new(),
         }
     }
 }
@@ -70,14 +89,14 @@ where
     Payload: PayloadTypes,
     Pool: TransactionPool,
 {
-    fn has_proposal_block(&self) -> bool {
-        self.proposal_block.is_some()
-    }
-    fn proposal_block_executed(&self) -> Option<bool> {
-        self.proposal_block
-            .as_ref()
-            .map(|proposal_block| proposal_block.is_executed())
-    }
+    // fn has_proposal_block(&self) -> bool {
+    //     self.proposal_block.is_some()
+    // }
+    // fn proposal_block_executed(&self) -> Option<bool> {
+    //     self.proposal_block
+    //         .as_ref()
+    //         .map(|proposal_block| proposal_block.is_executed())
+    // }
     /// Get current forkchoice state
     async fn create_forkchoice_state(&self, last_block_hash: Option<B256>) -> ForkchoiceState {
         //Todo: Implement this
@@ -101,16 +120,16 @@ where
         }
     }
 
-    async fn retrieve_payload(
-        &self,
-        payload_id: PayloadId,
-    ) -> Result<Option<Payload::BuiltPayload>> {
-        self.payload_builder_handle
-            .best_payload(payload_id)
-            .await
-            .transpose()
-            .map_err(anyhow::Error::msg)
-    }
+    // async fn retrieve_payload(
+    //     &self,
+    //     payload_id: PayloadId,
+    // ) -> Result<Option<Payload::BuiltPayload>> {
+    //     self.payload_builder_handle
+    //         .best_payload(payload_id)
+    //         .await
+    //         .transpose()
+    //         .map_err(anyhow::Error::msg)
+    // }
 
     /// Try to execute the pending payload
     async fn execute_pending_payload(
@@ -130,7 +149,6 @@ where
         {
             Ok(payload_status) => {
                 if payload_status.is_valid() {
-                    info!("New payload sent successfully");
                     let block_hash = execution_payload.block_hash();
                     let forkchoice_state = self.create_forkchoice_state(Some(block_hash)).await;
                     //Call fork_choice_updated to make last executed block canonical
@@ -170,84 +188,162 @@ where
     }
 }
 
-impl<Provider, Pool> MysticetiConsensus<Provider, EthEngineTypes, Pool>
+impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
 where
-    Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
+    Provider: ChainSpecProvider + StateProviderFactory + CanonStateSubscriptions + Unpin + 'static,
+    Payload: PayloadTypes<PayloadAttributes = EthPayloadAttributes>,
     Pool: TransactionPool,
 {
-    pub async fn start(&mut self) {
+    pub async fn start(&mut self) -> Result<()> {
         //TODO: Add configurable interval
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(
             self.block_build_interval,
         ));
+        let mut notifications = self.provider.canonical_state_stream();
+        // let mut payload_events = self
+        //     .payload_builder_handle
+        //     .subscribe()
+        //     .await
+        //     .map(|events| events.into_built_payload_stream())
+        //     .map_err(|e| anyhow::anyhow!("Failed to subscribe to payload events: {:?}", e))?;
+        let mut built_payload_stream =
+            UnboundedReceiverStream::new(self.rx_built_payload.take().unwrap());
         loop {
-            //Try process proposal block
-            let has_proposal_block = self.has_proposal_block();
-            if has_proposal_block {
-                match self.process_proposal_block().await {
-                    Ok(Some(execution_payload)) => {
-                        debug!(
-                            "Process proposal block successfully. Execution payload number: {:?}, hash: {:?}",
-                            execution_payload.block_number(),
-                            execution_payload.block_hash()
-                        );
-                        {
-                            self.consensus_pool
-                                .remove_mined_transactions(&execution_payload.payload);
+            tokio::select! {
+                // new_event = payload_events.next() => {
+                //     debug!("Received payload events updated");
+                //     match new_event {
+                //         Some(new_payload) => {
+                //             debug!("New payload built, put it to the buffer. New payload number {}. Payload buffer size: {:?}",
+                //                 new_payload.block().header().number(),
+                //                 self.payload_buffer.len());
+                //             self.last_built_payload.replace(new_payload.clone());
+                //             self.payload_buffer.push_back(new_payload);
+                //         },
+                //         None => {
+                //             debug!("Payload events updated: None");
+                //         }
+                //     }
+                // }
+                //Receive built payload from channel send from custom payload builder
+                new_built_payload = built_payload_stream.next() => {
+                    match new_built_payload {
+                        Some(new_payload) => {
+                            info!("New built payload with number {} and {} txs, put it to the buffer. Current payload buffer size: {:?}",
+                                new_payload.block().header().number(),
+                                new_payload.block().body().transactions().len(),
+                                self.payload_buffer.len() + 1);
+                            self.last_built_payload.replace(new_payload.clone());
+                            self.payload_buffer.push_back(new_payload);
+                            if self.last_processing_payload.is_none() {
+                                if let Some(payload) = self.payload_buffer.pop_front() {
+                                    info!("Last processing payload is None. Execute next proposal block.");
+                                    self.last_processing_payload.replace(payload);
+                                    let payload = self.last_processing_payload.as_ref().unwrap();
+                                    if let Err(e) = self.execute_pending_payload(payload).await {
+                                        error!("Execute pending payload failed: {:?}", e);
+                                    }
+                                }
+                            }
+                            // self.payload_builder_handle
+                            //     .best_payload(payload_id)
+                            //     .await
+                            //     .transpose()
+                            //     .map_err(anyhow::Error::msg)
+
+                        }
+                        None => {
+                            debug!("Built payload stream closed");
                         }
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        error!("Process proposal block failed: {:?}", e);
+                }
+
+                canonical_state = notifications.next() => {
+                    match canonical_state {
+                        Some(canonical_state) => {
+                            // Pop payload from buffer
+                            self.canonical_block_number = canonical_state.tip().number();
+                            info!("Canonical state updated with block number: {:?}", canonical_state.tip().number());
+                            let pending_block_number = self.last_processing_payload.as_ref().map(|payload| payload.block().header().number()).unwrap_or_default();
+                            if pending_block_number == self.canonical_block_number  {
+                                info!("Pending block number {:?} is executed. Remove mined transactions from consensus pool.", pending_block_number);
+                                let payload = self.last_processing_payload.take().unwrap();
+                                let tx_hashes = payload.block().body().transactions().iter().map(|tx|  tx.tx_hash().clone()).collect::<HashSet<TxHash>>();
+                                // let tx_hashes = execution_payload
+                                //     .transactions()
+                                //     .iter()
+                                //     .map(|tx| calculate_tx_hash(tx))
+                                //     .collect::<HashSet<TxHash>>();
+                                 //Remove pending buffer
+                                self.consensus_pool.remove_mined_transactions(pending_block_number, &tx_hashes);
+                                // Try to execute next built payload
+                                if let Some(next_payload) = self.payload_buffer.pop_front() {
+                                    info!("Execute next payload from buffer {:?}.", next_payload.block().header().number());
+                                    self.last_processing_payload.replace(next_payload);
+                                    if let Err(e) = self.execute_pending_payload(self.last_processing_payload.as_ref().unwrap()).await {
+                                        error!("Execute pending payload failed: {:?}", e);
+                                    }
+                                }
+                            } else {
+                                info!("last executed block number is {:?}. Current canonical state number is {:?}. Skip removing mined transactions.",
+                                pending_block_number, self.canonical_block_number );
+                            }
+                        }
+                        None => {
+                            debug!("Canonical state updated: None");
+                        }
                     }
                 }
-            } else {
-                match self.build_next_proposal_block(None).await {
-                    Ok(Some(payload_id)) => {
-                        debug!(
-                            "Build next proposal block successfully. Pending payload id: {:?}",
-                            payload_id
-                        );
+                _ = interval.tick() => {
+                    //Try to build next proposal block
+                    let last_built_block_number = self.last_built_payload.as_ref().map(|payload| payload.block().header().number()).unwrap_or_default();
+                    if last_built_block_number == self.canonical_block_number || self.last_built_payload.is_none() {
+                        match self.build_next_proposal_block(self.last_built_payload.clone()).await {
+                            Ok(Some(payload_id)) => {
+                                debug!("Build next proposal block successfully. Pending payload id: {:?}", payload_id);
+                            }
+                            Ok(None) => {},
+                            Err(e) => {
+                                error!("Build next proposal block failed: {:?}", e);
+                            }
+                        }
+                    } else {
+                        debug!("Last built payload block number {:?} is not executed. Canonical block number is {:?}. Skip building next proposal block.", last_built_block_number, self.canonical_block_number);
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        error!("Build next proposal block failed: {:?}", e);
-                    }
+                    interval.reset();
                 }
             }
-            interval.tick().await;
         }
     }
 
     pub async fn build_next_proposal_block(
         &mut self,
-        last_built_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
+        //last_built_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
+        last_built_payload: Option<Payload::BuiltPayload>,
     ) -> Result<Option<PayloadId>> {
-        let next_committed_subdag_batch = self.consensus_pool.next_committed_subdag_batch();
-        // let committed_transactions = self.consensus_pool.last_committed_transaction_in_batch();
-        if let Some(committed_batch) = next_committed_subdag_batch {
-            debug!(
+        if let Some((first_committed_subdag, last_committed_subdag)) =
+            self.consensus_pool.next_committed_subdag_batch()
+        {
+            info!(
                 "Create proposal block with committed batch size: {:?}:
-                FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
+                 FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
                  LastCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}
                  Queue size: {:?}",
-                committed_batch.last_committed_subdag.commit_ref.index
-                    - committed_batch.first_committed_subdag.commit_ref.index
+                last_committed_subdag.commit_ref.index - first_committed_subdag.commit_ref.index
                     + 1,
-                committed_batch.first_committed_subdag.commit_ref.index,
-                committed_batch.first_committed_subdag.timestamp_ms,
-                committed_batch.first_committed_subdag.leader.round,
-                committed_batch.last_committed_subdag.commit_ref.index,
-                committed_batch.last_committed_subdag.timestamp_ms,
-                committed_batch.last_committed_subdag.leader.round,
+                first_committed_subdag.commit_ref.index,
+                first_committed_subdag.timestamp_ms,
+                first_committed_subdag.leader.round,
+                last_committed_subdag.commit_ref.index,
+                last_committed_subdag.timestamp_ms,
+                last_committed_subdag.leader.round,
                 self.consensus_pool.queue_size(),
             );
             let last_block_hash = last_built_payload
                 .as_ref()
                 .map(|payload| payload.block().hash());
             let forkchoice_state = self.create_forkchoice_state(last_block_hash).await;
-            let leader_digest: [u8; 32] = committed_batch
-                .last_committed_subdag
+            let leader_digest: [u8; 32] = last_committed_subdag
                 .leader
                 .digest
                 .as_ref()
@@ -255,7 +351,7 @@ where
                 .expect("Leader digest must be exactly 32 bytes");
             //Create payload attributes with timestamp in seconds
             let payload_attributes = self.create_payload_attributes(
-                committed_batch.last_committed_subdag.timestamp_ms / 1000,
+                last_committed_subdag.timestamp_ms / 1000,
                 leader_digest,
                 last_built_payload,
             );
@@ -263,10 +359,7 @@ where
                 "Forkchoice state: {:?}, Payload attributes: {:?}",
                 forkchoice_state, payload_attributes
             );
-            let ForkchoiceUpdated {
-                payload_status,
-                payload_id,
-            } = self
+            let _ = self
                 .engine_handle
                 .fork_choice_updated(
                     forkchoice_state,
@@ -275,22 +368,6 @@ where
                 )
                 .await
                 .map_err(anyhow::Error::msg)?;
-
-            if payload_status.is_valid() {
-                if let Some(payload_id) = payload_id {
-                    info!(
-                        "Forkchoice updated successfully. Create proposal block with payload id: {:?}.",
-                        payload_id
-                    );
-                    self.proposal_block =
-                        Some(ProposalBlock::new(payload_id.clone(), payload_attributes));
-                    return Ok(Some(payload_id));
-                } else {
-                    info!("Forkchoice updated successfully without payload id");
-                }
-            } else {
-                info!("Forkchoice update failed: {:?}", payload_status);
-            }
         }
         Ok(None)
     }
@@ -300,8 +377,9 @@ where
         &self,
         timestamp: u64,
         leader_digest: [u8; 32],
-        last_build_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
-    ) -> <EthEngineTypes as PayloadTypes>::PayloadAttributes {
+        //last_build_payload: Option<<EthEngineTypes as PayloadTypes>::BuiltPayload>,
+        last_build_payload: Option<Payload::BuiltPayload>,
+    ) -> <Payload as PayloadTypes>::PayloadAttributes {
         //TODO:
         //1. Get actual prev_randao from the previous block's header
         //2. Check and create withdrawals vector
@@ -343,75 +421,75 @@ where
             }
         }
     }
-    async fn process_proposal_block(
-        &mut self,
-    ) -> Result<Option<<EthEngineTypes as PayloadTypes>::ExecutionData>> {
-        assert!(self.has_proposal_block());
-        let proposal_block_executed = self.proposal_block_executed();
-        if proposal_block_executed == Some(true) {
-            let proposal_block = self.proposal_block.as_ref().unwrap();
-            trace!(
-                "Current proposal block with payload id {:?} is executed. Try to build next one.",
-                proposal_block.payload_id
-            );
-            match self
-                .build_next_proposal_block(proposal_block.built_payload.clone())
-                .await
-            {
-                Ok(Some(payload_id)) => {
-                    debug!(
-                        "Build next proposal block successfully. Pending payload id: {:?}",
-                        payload_id
-                    );
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    error!("Build next proposal block failed: {:?}", e);
-                }
-            }
-            return Ok(None);
-        }
-        // Proposal block is processing
-        let (payload_id, mut built_payload) = {
-            let proposal_block = self.proposal_block.as_ref().unwrap();
-            (
-                proposal_block.payload_id.clone(),
-                proposal_block.built_payload.clone(),
-            )
-        };
-        if built_payload.is_none() {
-            debug!(
-                "Payload {:?} is not built. Try to get it from payload builder.",
-                payload_id
-            );
-            if let Ok(Some(payload)) = self.retrieve_payload(payload_id).await {
-                built_payload.replace(payload.clone());
-                self.proposal_block.as_mut().unwrap().set_payload(payload);
-            }
-        }
-        if let Some(built_payload) = built_payload {
-            debug!("Payload {:?} is built. Try to execute it.", payload_id);
-            match self.execute_pending_payload(&built_payload).await {
-                Ok(Some(execution_payload)) => {
-                    //Set proposal block as executed
-                    self.proposal_block.as_mut().unwrap().set_executed();
-                    return Ok(Some(execution_payload));
-                }
-                Ok(None) => {
-                    debug!(
-                        "Payload {:?} is not executed. Try to execute it later",
-                        payload_id
-                    );
-                    return Ok(None);
-                }
-                Err(e) => {
-                    error!("Execute pending payload failed: {:?}", e);
-                    return Err(anyhow::anyhow!("Execute pending payload failed: {:?}", e));
-                }
-            }
-        }
-        Ok(None)
-    }
+    // async fn process_proposal_block(
+    //     &mut self,
+    // ) -> Result<Option<<EthEngineTypes as PayloadTypes>::ExecutionData>> {
+    //     assert!(self.has_proposal_block());
+    //     let proposal_block_executed = self.proposal_block_executed();
+    //     if proposal_block_executed == Some(true) {
+    //         let proposal_block = self.proposal_block.as_ref().unwrap();
+    //         trace!(
+    //             "Current proposal block with payload id {:?} is executed. Try to build next one.",
+    //             proposal_block.payload_id
+    //         );
+    //         match self
+    //             .build_next_proposal_block(proposal_block.built_payload.clone())
+    //             .await
+    //         {
+    //             Ok(Some(payload_id)) => {
+    //                 debug!(
+    //                     "Build next proposal block successfully. Pending payload id: {:?}",
+    //                     payload_id
+    //                 );
+    //             }
+    //             Ok(None) => {}
+    //             Err(e) => {
+    //                 error!("Build next proposal block failed: {:?}", e);
+    //             }
+    //         }
+    //         return Ok(None);
+    //     }
+    //     // Proposal block is processing
+    //     let (payload_id, mut built_payload) = {
+    //         let proposal_block = self.proposal_block.as_ref().unwrap();
+    //         (
+    //             proposal_block.payload_id.clone(),
+    //             proposal_block.built_payload.clone(),
+    //         )
+    //     };
+    //     if built_payload.is_none() {
+    //         debug!(
+    //             "Payload {:?} is not built. Try to get it from payload builder.",
+    //             payload_id
+    //         );
+    //         if let Ok(Some(payload)) = self.retrieve_payload(payload_id).await {
+    //             built_payload.replace(payload.clone());
+    //             self.proposal_block.as_mut().unwrap().set_payload(payload);
+    //         }
+    //     }
+    //     if let Some(built_payload) = built_payload {
+    //         debug!("Payload {:?} is built. Try to execute it.", payload_id);
+    //         match self.execute_pending_payload(&built_payload).await {
+    //             Ok(Some(execution_payload)) => {
+    //                 //Set proposal block as executed
+    //                 self.proposal_block.as_mut().unwrap().set_executed();
+    //                 return Ok(Some(execution_payload));
+    //             }
+    //             Ok(None) => {
+    //                 debug!(
+    //                     "Payload {:?} is not executed. Try to execute it later",
+    //                     payload_id
+    //                 );
+    //                 return Ok(None);
+    //             }
+    //             Err(e) => {
+    //                 error!("Execute pending payload failed: {:?}", e);
+    //                 return Err(anyhow::anyhow!("Execute pending payload failed: {:?}", e));
+    //             }
+    //         }
+    //     }
+    //     Ok(None)
+    // }
 }
 
 #[cfg(test)]

@@ -1,28 +1,31 @@
 // use crate::beacon_chain::BeaconState;
 use crate::NodeConfig;
 use alloy_primitives::Bytes;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use consensus_core::{CertifiedBlocksOutput, CommittedSubDag};
 use jsonrpsee::core::client::SubscriptionClientT;
 use mysten_metrics::monitored_mpsc::UnboundedReceiver;
 use reth_extension::{
-    CommittedSubDag as RethCommittedSubDag, ConsensusTransactionApiClient, TxpoolListenerApiClient,
+    CommittedSubDag as RethCommittedSubDag, MysticetiConsensusApiClient,
+    MysticetiTransactionApiClient,
 };
 use reth_rpc_layer::{secret_to_bearer_header, AuthClientLayer, JwtSecret};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-const BATCH_SIZE: usize = 10;
-const SEND_INTERVAL: u64 = 500; //In milliseconds
+const BATCH_SIZE: usize = 5;
 
-pub type PayloadItem = Vec<Bytes>;
+pub type Transactions = Vec<Bytes>;
 pub struct ExecutionClient {
     config: NodeConfig,
-    payload_tx: mpsc::UnboundedSender<PayloadItem>,
+    payload_tx: mpsc::UnboundedSender<Transactions>,
 }
 
 impl ExecutionClient {
-    pub fn new(config: NodeConfig, payload_tx: mpsc::UnboundedSender<PayloadItem>) -> Result<Self> {
+    pub fn new(
+        config: NodeConfig,
+        payload_tx: mpsc::UnboundedSender<Transactions>,
+    ) -> Result<Self> {
         Ok(Self { config, payload_tx })
     }
 
@@ -107,17 +110,17 @@ impl ExecutionClient {
     //     }
     //     Ok(())
     // }
-    async fn send_transaction(&self, txs: Vec<Bytes>) -> Result<()> {
-        let res = self
-            .payload_tx
-            .send(txs)
-            .map_err(|e| anyhow!("Error sending transaction: {:?}", e));
-        if res.is_err() {
-            error!("Error sending transaction: {:?}", res);
-            return Err(anyhow!("Error sending transaction: {:?}", res));
-        }
-        Ok(())
-    }
+    // async fn send_transaction(&self, txs: Vec<Bytes>) -> Result<()> {
+    //     let res = self
+    //         .payload_tx
+    //         .send(txs)
+    //         .map_err(|e| anyhow!("Error sending transaction: {:?}", e));
+    //     if res.is_err() {
+    //         error!("Error sending transaction: {:?}", res);
+    //         return Err(anyhow!("Error sending transaction: {:?}", res));
+    //     }
+    //     Ok(())
+    // }
     pub async fn start(
         &mut self,
         mut commit_receiver: UnboundedReceiver<CommittedSubDag>,
@@ -128,9 +131,10 @@ impl ExecutionClient {
         // Try to connect to the execution client
         let ws_client = self.ws_client().await;
         let http_client = self.http_client();
-        let mut txpool_subscriber = TxpoolListenerApiClient::subscribe_transactions(&ws_client)
-            .await
-            .expect("failed to subscribe");
+        let mut tx_subscriber =
+            MysticetiTransactionApiClient::subscribe_raw_transactions(&ws_client)
+                .await
+                .expect("failed to subscribe");
 
         info!(
             "Engine API client started successfully. Polling every {}ms",
@@ -140,7 +144,7 @@ impl ExecutionClient {
         let transaction_handler = tokio::spawn(async move {
             let mut total_received_txs = 0;
             loop {
-                if let Some(may_txs) = txpool_subscriber.next().await {
+                if let Some(may_txs) = tx_subscriber.next().await {
                     match may_txs {
                         Ok(txs) => {
                             total_received_txs += txs.len();
@@ -162,35 +166,62 @@ impl ExecutionClient {
         });
         let subdag_handler = tokio::spawn(async move {
             let mut total_committed_txs = 0;
-            let mut buffer = Vec::new();
-            let mut last_sent = std::time::Instant::now();
+            let mut total_sent_txs = 0;
+            // let mut buffer = Vec::new();
+            // let mut last_sent = std::time::Instant::now();
             loop {
                 if let Some(subdag) = commit_receiver.recv().await {
                     //TODO: findout why timestamp_ms is 0
-                    info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Commit Digest {:?}, Leader round {:?}, Leader Digest {:?}",
-                                        subdag.timestamp_ms,
-                                        subdag.commit_ref.index,
-                                        format!("{:?}", subdag.commit_ref.digest),
-                                        subdag.leader.round,
-                                        hex::encode(subdag.leader.digest.as_ref()));
+                    let timestamp_ms = subdag.timestamp_ms;
+                    let commit_index = subdag.commit_ref.index;
+                    let leader_round = subdag.leader.round;
                     let reth_subdag = RethCommittedSubDag::from(subdag);
-                    total_committed_txs += reth_subdag.len();
-                    info!("Total committed transactions: {:?}", total_committed_txs);
-                    buffer.push(reth_subdag);
-                }
-                if buffer.len() >= BATCH_SIZE
-                    || buffer.len() > 0
-                        && last_sent.elapsed() >= std::time::Duration::from_millis(SEND_INTERVAL)
-                {
-                    let batch = std::mem::take(&mut buffer);
-                    if let Err(e) =
-                        ConsensusTransactionApiClient::submit_committed_subdags(&http_client, batch)
-                            .await
+                    let current_len = reth_subdag.len();
+                    total_committed_txs += current_len;
+                    if let Err(e) = MysticetiConsensusApiClient::submit_committed_subdag(
+                        &http_client,
+                        reth_subdag,
+                    )
+                    .await
                     {
                         error!("submit_committed_subdags failed: {:?}", e);
                     }
-                    last_sent = std::time::Instant::now();
+                    // Log every 100 commits or when the first non-empty subdag is committed
+                    if total_committed_txs > 0
+                        && (commit_index % 100 == 0 || total_committed_txs == current_len)
+                    {
+                        info!("Received committed subdag with timestamp: {:?}, Commit Index {:?}, Leader round {:?}, Tx count {:?}, Total txs {:?}",
+                            timestamp_ms,
+                            commit_index,
+                            leader_round,
+                            current_len,
+                            total_committed_txs);
+                    }
+                    // buffer.push(reth_subdag);
                 }
+                // Don't use buffer for now, the commit rate is 1/100ms is not too fast
+
+                // if buffer.len() >= BATCH_SIZE {
+                //     let batch = std::mem::take(&mut buffer);
+                //     let current_batch_size = batch.iter().map(|tx| tx.len()).sum::<usize>();
+                //     let first_index = batch.first().map(|tx| tx.commit_ref.index);
+                //     let last_index = batch.last().map(|tx| tx.commit_ref.index);
+                //     if let Err(e) =
+                //         MysticetiConsensusApiClient::submit_committed_subdags(&http_client, batch)
+                //             .await
+                //     {
+                //         error!("submit_committed_subdags failed: {:?}", e);
+                //     } else {
+                //         total_sent_txs += current_batch_size;
+                //         info!("Sent batch of {} transactions from commit index {:?} to {:?}. Total sent transactions: {:?}",
+                //             current_batch_size,
+                //             first_index,
+                //             last_index,
+                //             total_sent_txs
+                //         );
+                //     }
+                //     last_sent = std::time::Instant::now();
+                // }
             }
         });
         let _ = tokio::join!(transaction_handler, subdag_handler);
@@ -252,7 +283,6 @@ impl ExecutionClient {
 #[cfg(test)]
 mod tests {
     const GENESIS_TIME: u64 = 1755000000;
-    use std::str::FromStr;
     use tokio::time::Duration;
 
     // use crate::beacon_chain::{beacon_block::ChainSpec, GENESIS_TIME};
@@ -343,8 +373,6 @@ mod tests {
         let config = create_test_config();
         let (payload_tx, _payload_rx) = mpsc::unbounded_channel();
         let client = ExecutionClient::new(config, payload_tx).unwrap();
-
-        let http_client = client.http_client();
         // Test that we can create the client without panicking
         assert!(true);
     }

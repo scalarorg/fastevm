@@ -20,23 +20,23 @@ alloy-primitives = { workspace = true }
 reth-rpc-layer = { workspace = true }
 
 anyhow = { workspace = true }
-clap = { version = "4.0", features = ["derive"] }
+clap = "4"
 
 jsonrpsee = { workspace = true }
 http = { workspace = true }
 prometheus = "0.13.3"
 
 hex = { workspace = true }
-rand.workspace = true
+rand = "0.8"
 serde = { workspace = true }
 serde_yaml = "0.9"
 
 tokio = { workspace = true }
-tower = { version = "0.5", features = ["full"] }
+tower = "0.5"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-futures-util = { workspace = true }
+#futures-util = { workspace = true }
 
 [dev-dependencies]
 tokio-test = { workspace = true }
-tempfile = "3.8"
+tempfile = "3.20"

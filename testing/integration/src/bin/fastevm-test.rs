@@ -13,10 +13,141 @@ use std::{
     time::Duration,
 };
 use testing::address::{generate_account_from_seed, Account};
-use testing::block_scan::{scan_blocks, scan_blocks_count, BlockScanConfig};
+use testing::block_scan::{scan_blocks, BlockScanConfig};
 use testing::rpc::get_nonces;
+use testing::rpc_client::{DirectRpcClient, RpcClient};
 use testing::transactions::create_transfer_transaction;
 use tokio::time::sleep;
+
+/// Batch size for transaction processing
+/// This determines how many transactions are grouped together before sending to RPC servers
+/// Larger batches reduce network overhead but may increase memory usage
+const BATCH_SIZE: usize = 50;
+
+/// Configuration loaded from environment variables
+#[derive(Debug, Clone)]
+struct TestConfig {
+    // RPC URLs
+    rpc_url1: String,
+    rpc_url2: String,
+    rpc_url3: String,
+    rpc_url4: String,
+
+    // Network configuration
+    chain_id: u64,
+
+    // Block scanning configuration
+    block_number: u64,
+    block_count: u64,
+
+    // Batch transaction configuration
+    test_sender_count: usize,
+    test_transaction_count: usize,
+    test_transaction_value: u64,
+    test_mnemonic: String,
+    test_fetch_nonce: String,
+
+    // Additional test parameters
+    test_waiting_time_seconds: u64,
+    test_rpc_timeout: u64,
+    test_max_retries: u64,
+    test_log_level: String,
+    test_batch_size: usize,
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            rpc_url1: "http://localhost:8545".to_string(),
+            rpc_url2: "http://localhost:8545".to_string(),
+            rpc_url3: "http://localhost:8545".to_string(),
+            rpc_url4: "http://localhost:8545".to_string(),
+            chain_id: 202501,
+            block_number: 0,
+            block_count: 10,
+            test_sender_count: 1000,
+            test_transaction_count: 1,
+            test_transaction_value: 1_000_000_000_000_000,
+            test_mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            test_fetch_nonce: "false".to_string(),
+            test_waiting_time_seconds: 30,
+            test_rpc_timeout: 30,
+            test_max_retries: 3,
+            test_log_level: "info".to_string(),
+            test_batch_size: BATCH_SIZE,
+        }
+    }
+}
+
+impl TestConfig {
+    /// Load configuration from environment variables
+    fn load() -> Result<Self> {
+        let mut config = Self::default();
+
+        // Load environment variables with fallbacks to defaults
+        config.rpc_url1 = env::var("RPC_URL1").unwrap_or(config.rpc_url1);
+        config.rpc_url2 = env::var("RPC_URL2").unwrap_or(config.rpc_url2);
+        config.rpc_url3 = env::var("RPC_URL3").unwrap_or(config.rpc_url3);
+        config.rpc_url4 = env::var("RPC_URL4").unwrap_or(config.rpc_url4);
+
+        if let Ok(chain_id_str) = env::var("CHAIN_ID") {
+            config.chain_id = chain_id_str.parse()?;
+        }
+
+        if let Ok(block_number_str) = env::var("BLOCK_NUMBER") {
+            config.block_number = block_number_str.parse()?;
+        }
+
+        if let Ok(block_count_str) = env::var("BLOCK_COUNT") {
+            config.block_count = block_count_str.parse()?;
+        }
+
+        if let Ok(sender_count_str) = env::var("TEST_SENDER_COUNT") {
+            config.test_sender_count = sender_count_str.parse()?;
+        }
+
+        if let Ok(transaction_count_str) = env::var("TEST_TRANSACTION_COUNT") {
+            config.test_transaction_count = transaction_count_str.parse()?;
+        }
+
+        if let Ok(transaction_value_str) = env::var("TEST_TRANSACTION_VALUE") {
+            config.test_transaction_value = transaction_value_str.parse()?;
+        }
+
+        config.test_mnemonic = env::var("TEST_MNEMONIC").unwrap_or(config.test_mnemonic);
+        config.test_fetch_nonce = env::var("TEST_FETCH_NONCE").unwrap_or(config.test_fetch_nonce);
+        println!("TEST_FETCH_NONCE: {}", config.test_fetch_nonce);
+        if let Ok(waiting_time_str) = env::var("TEST_WAITING_TIME_SECONDS") {
+            config.test_waiting_time_seconds = waiting_time_str.parse()?;
+        }
+
+        if let Ok(rpc_timeout_str) = env::var("TEST_RPC_TIMEOUT") {
+            config.test_rpc_timeout = rpc_timeout_str.parse()?;
+        }
+
+        if let Ok(max_retries_str) = env::var("TEST_MAX_RETRIES") {
+            config.test_max_retries = max_retries_str.parse()?;
+        }
+
+        config.test_log_level = env::var("TEST_LOG_LEVEL").unwrap_or(config.test_log_level);
+
+        if let Ok(batch_size_str) = env::var("TEST_BATCH_SIZE") {
+            config.test_batch_size = batch_size_str.parse()?;
+        }
+
+        Ok(config)
+    }
+
+    /// Get all RPC URLs as a vector
+    fn get_rpc_urls(&self) -> Vec<String> {
+        vec![
+            self.rpc_url1.clone(),
+            self.rpc_url2.clone(),
+            self.rpc_url3.clone(),
+            self.rpc_url4.clone(),
+        ]
+    }
+}
 
 /// CLI arguments for FastEVM testing utilities
 #[derive(Parser, Debug)]
@@ -25,6 +156,7 @@ use tokio::time::sleep;
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
+    /// Command to run
     pub command: Commands,
 }
 
@@ -112,6 +244,7 @@ pub enum Commands {
 /// Main entry point for the CLI
 async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
+    let test_config = TestConfig::load()?;
 
     match cli.command {
         Commands::Scan {
@@ -121,21 +254,14 @@ async fn run_cli() -> Result<()> {
             include_empty,
             delay,
         } => {
-            // Get values from environment variables if parameters are at default values
+            // Use command line arguments if provided, otherwise use environment config
             let start_block = if start == 0 {
-                env::var("BLOCK_NUMBER")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(start)
+                test_config.block_number
             } else {
                 start
             };
-
             let block_count = if count == 10 {
-                env::var("BLOCK_COUNT")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(count)
+                test_config.block_count
             } else {
                 count
             };
@@ -154,9 +280,7 @@ async fn run_cli() -> Result<()> {
             );
 
             let config = BlockScanConfig {
-                rpc_url: url.unwrap_or_else(|| {
-                    env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
-                }),
+                rpc_url: url.unwrap_or(test_config.rpc_url1),
                 start_block,
                 block_count,
                 include_empty_blocks: include_empty,
@@ -179,13 +303,8 @@ async fn run_cli() -> Result<()> {
             println!("⚠️  Warning: This may take a long time for networks with many blocks!");
 
             let config = BlockScanConfig {
-                rpc_url: url.unwrap_or_else(|| {
-                    env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
-                }),
-                start_block: env::var("BLOCK_NUMBER")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
+                rpc_url: url.unwrap_or(test_config.rpc_url1),
+                start_block: test_config.block_number,
                 block_count: 0, // 0 means scan all
                 include_empty_blocks: include_empty,
                 request_delay_ms: delay,
@@ -208,9 +327,7 @@ async fn run_cli() -> Result<()> {
             println!("🔍 Scanning blocks from {} to {}...", start, end);
 
             let config = BlockScanConfig {
-                rpc_url: url.unwrap_or_else(|| {
-                    env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string())
-                }),
+                rpc_url: url.unwrap_or(test_config.rpc_url1),
                 start_block: start,
                 block_count: end - start + 1,
                 include_empty_blocks: include_empty,
@@ -227,39 +344,32 @@ async fn run_cli() -> Result<()> {
             transaction_count,
             mnemonic,
         } => {
-            println!("🚀 Starting batch transaction test...");
-            // Extract network configuration from environment variables
-            let chain_id = env::var("CHAIN_ID")
-                .unwrap_or("202501".to_string())
-                .parse::<u64>()?;
-            // Override with environment variables if set
-            let sender_count = env::var("TEST_SENDER_COUNT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(sender_count);
+            println!(
+                "🚀 Starting batch transaction test with configuration {:?}",
+                test_config
+            );
 
-            let transaction_count = env::var("TEST_TRANSACTION_COUNT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(transaction_count);
-            let transaction_value = env::var("TEST_TRANSACTION_VALUE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(1_000_000_000_000_000_u64);
-            let mnemonic = env::var("TEST_MNEMONIC").unwrap_or(mnemonic);
-
-            let rpc_urls = vec![
-                env::var("RPC_URL1").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-                env::var("RPC_URL2").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-                env::var("RPC_URL3").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-                env::var("RPC_URL4").unwrap_or_else(|_| "http://localhost:8545".to_string()),
-            ];
-
-            let fetch_nonce = env::var("TEST_FETCH_NONCE").unwrap_or("false".to_string());
+            // Use command line arguments if provided, otherwise use environment config
+            let sender_count = if sender_count == 1000 {
+                test_config.test_sender_count
+            } else {
+                sender_count
+            };
+            let transaction_count = if transaction_count == 1 {
+                test_config.test_transaction_count
+            } else {
+                transaction_count
+            };
+            let mnemonic = if mnemonic == "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" {
+                test_config.test_mnemonic.clone()
+            } else {
+                mnemonic
+            };
 
             println!("  Sender count: {}", sender_count);
             println!("  Transaction count per sender: {}", transaction_count);
             println!("  Mnemonic: {}...", &mnemonic[..20]);
+
             let accounts = generate_accounts(sender_count, &mnemonic)
                 .map_err(|e| eyre::eyre!("Failed to generate accounts: {}", e))?;
 
@@ -268,29 +378,19 @@ async fn run_cli() -> Result<()> {
                 .map(|account| account.address)
                 .collect::<Vec<_>>();
             let _ = send_batch_transfer_transactions(
-                chain_id,
+                test_config.chain_id,
                 accounts,
                 transaction_count as usize,
-                transaction_value,
-                rpc_urls.clone(),
-                fetch_nonce,
+                test_config.test_transaction_value,
+                test_config.get_rpc_urls(),
+                test_config.test_fetch_nonce.clone(),
+                test_config.clone(),
             )
             .await
             .map_err(|e| eyre::eyre!("Failed to send batch transactions: {}", e))?;
         }
     }
 
-    Ok(())
-}
-
-/// Convenience function to run block scanning with default settings
-async fn run_default_scan() -> Result<()> {
-    println!("🚀 Running default block scan (first 10 blocks)...");
-    let stats = scan_blocks_count(10).await?;
-    println!(
-        "✅ Default scan completed! Found {} blocks with transactions.",
-        stats.blocks_with_transactions
-    );
     Ok(())
 }
 
@@ -318,6 +418,7 @@ async fn send_transaction_with_check_nonce(
         transaction_value,
         rpc_urls.clone(),
         fetch_nonce,
+        TestConfig::default(), // Use default config for unused function
     )
     .await
     .map_err(|e| eyre::eyre!("Failed to send batch transactions: {}", e))?;
@@ -384,9 +485,10 @@ async fn send_batch_transfer_transactions(
     chain_id: u64,
     accounts: Vec<Account>,
     transactions_per_sender: usize,
-    _transaction_value: u64,
+    send_amount: u64,
     rpc_urls: Vec<String>,
     fetch_nonce: String,
+    test_config: TestConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Load environment variables from .env file if present
     dotenv::dotenv().ok();
@@ -398,7 +500,10 @@ async fn send_batch_transfer_transactions(
     let number_of_senders = accounts.len();
 
     // Transaction amount in wei (0.001 ETH)
-    let transaction_amount = 1_000_000_000_000_000_u64;
+    let mut transaction_amount = send_amount;
+    if transaction_amount == 0 {
+        transaction_amount = 1_000_000_000_000_000_u64;
+    }
     let total_transactions = number_of_senders * transactions_per_sender;
     println!("Configuration:");
     println!("  Chain ID: {}", chain_id);
@@ -411,18 +516,15 @@ async fn send_batch_transfer_transactions(
     );
     println!("  RPC URLs: {:?}", rpc_urls);
 
-    // Connect to all RPC endpoints
-    let mut providers = Vec::new();
     let mut available_urls = Vec::new();
+    // Connect to all RPC endpoints
+    let mut rpc_clients = Vec::new();
 
     for (idx, rpc_url) in rpc_urls.iter().enumerate() {
         println!("Connecting to RPC endpoint {}: {}", idx + 1, rpc_url);
-        match alloy_provider::ProviderBuilder::new()
-            .connect(rpc_url)
-            .await
-        {
-            Ok(provider) => {
-                providers.push(provider);
+        match DirectRpcClient::new(rpc_url).await {
+            Ok(client) => {
+                rpc_clients.push(client);
                 available_urls.push(rpc_url.clone());
                 println!("  ✅ Connected to RPC endpoint {}", idx + 1);
             }
@@ -434,17 +536,48 @@ async fn send_batch_transfer_transactions(
                 );
             }
         }
+        // match ProviderRpcClient::new(rpc_url).await {
+        //     Ok(client) => {
+        //         rpc_clients.push(client);
+        //         available_urls.push(rpc_url.clone());
+        //         println!("  ✅ Connected to RPC endpoint {}", idx + 1);
+        //     }
+        //     Err(e) => {
+        //         println!(
+        //             "  ❌ Failed to connect to RPC endpoint {}: {:?}",
+        //             idx + 1,
+        //             e
+        //         );
+        //     }
+        // }
+        // match alloy_provider::ProviderBuilder::new()
+        //     .connect(rpc_url)
+        //     .await
+        // {
+        //     Ok(provider) => {
+        //         providers.push(provider);
+        //         available_urls.push(rpc_url.clone());
+        //         println!("  ✅ Connected to RPC endpoint {}", idx + 1);
+        //     }
+        //     Err(e) => {
+        //         println!(
+        //             "  ❌ Failed to connect to RPC endpoint {}: {:?}",
+        //             idx + 1,
+        //             e
+        //         );
+        //     }
+        // }
     }
 
-    if providers.is_empty() {
+    if rpc_clients.is_empty() {
         println!("⚠️  Warning: No RPC endpoints available. Skipping test...");
         return Ok(());
     }
 
-    println!("Connected to {} RPC endpoints", providers.len());
+    println!("Connected to {} RPC endpoints", rpc_clients.len());
 
     // Determine optimal number of parallel workers (chunks)
-    let num_workers = std::cmp::min(8, number_of_senders); // Cap at 8 workers
+    let num_workers = std::cmp::min(32, number_of_senders); // Cap at 8 workers
     let chunk_size = (number_of_senders + num_workers - 1) / num_workers; // Ceiling division
 
     println!(
@@ -454,7 +587,7 @@ async fn send_batch_transfer_transactions(
 
     // Create shared data for parallel processing
     let accounts_arc = std::sync::Arc::new(accounts);
-    let providers_arc = std::sync::Arc::new(providers);
+    let rpc_clients = std::sync::Arc::new(rpc_clients);
     let available_urls_arc = std::sync::Arc::new(available_urls);
 
     // Spawn parallel workers
@@ -469,21 +602,23 @@ async fn send_batch_transfer_transactions(
         }
 
         let accounts_clone = accounts_arc.clone();
-        let providers_clone = providers_arc.clone();
+        let rpc_clients_clone = rpc_clients.clone();
         let urls_clone = available_urls_arc.clone();
         let fetch_nonce_clone = fetch_nonce.clone();
+        let test_config_clone = test_config.clone();
         let handle = tokio::spawn(async move {
             process_account_chunk(
                 worker_id,
                 start_idx,
                 end_idx,
                 accounts_clone,
-                providers_clone,
+                rpc_clients_clone,
                 urls_clone,
                 chain_id,
                 transaction_amount,
                 transactions_per_sender,
                 fetch_nonce_clone,
+                test_config_clone,
             )
             .await
         });
@@ -566,25 +701,29 @@ async fn send_batch_transfer_transactions(
 }
 
 /// Process a chunk of accounts in parallel
-async fn process_account_chunk<P>(
+async fn process_account_chunk<C>(
     worker_id: usize,
     start_idx: usize,
     end_idx: usize,
     accounts: std::sync::Arc<Vec<Account>>,
-    providers: std::sync::Arc<Vec<P>>,
+    rpc_clients: std::sync::Arc<Vec<C>>,
     available_urls: std::sync::Arc<Vec<String>>,
     chain_id: u64,
     transaction_amount: u64,
     transactions_per_sender: usize,
     fetch_nonce: String,
+    test_config: TestConfig,
 ) -> Result<(usize, usize, HashMap<String, usize>), Box<dyn std::error::Error + Send + Sync>>
 where
-    P: alloy_provider::Provider + Send + Sync,
+    C: RpcClient + Sync + Send,
 {
     let mut successful_transactions = 0;
     let mut failed_transactions = 0;
     let mut rpc_usage_stats = HashMap::new();
     let start_time = std::time::Instant::now();
+
+    // Round-robin RPC provider selection
+    let mut overall_tx_index = 0;
 
     let accounts_in_chunk = end_idx - start_idx;
     let total_transactions_in_chunk = accounts_in_chunk * transactions_per_sender;
@@ -597,11 +736,16 @@ where
         end_idx - 1,
         transactions_per_sender
     );
+    println!(
+        "🔄 Worker {}: Using round-robin RPC provider selection across {} endpoints",
+        worker_id,
+        rpc_clients.len()
+    );
 
     // Get initial nonces for all sender addresses
     println!("📡 Worker {}: Fetching initial nonces...", worker_id);
     let nonce_start_time = std::time::Instant::now();
-    let url_idx = rand::thread_rng().gen_range(0..available_urls.len());
+    let url_idx = rand::rng().random_range(0..available_urls.len());
     let mut address_nonces = if fetch_nonce == "true" {
         get_nonces(
             &accounts
@@ -627,24 +771,35 @@ where
 
     let mut processed_transactions = 0;
     let mut last_progress_time = std::time::Instant::now();
-    let progress_interval = std::time::Duration::from_secs(5); // Print progress every 5 seconds
+    let progress_interval = std::time::Duration::from_secs(10); // Print progress every 5 seconds
 
-    for tx_round in 0..transactions_per_sender {
+    // Batch processing configuration
+    let batch_size = std::cmp::min(test_config.test_batch_size, total_transactions_in_chunk); // Use configurable batch size
+    let mut transaction_batches: Vec<Vec<(alloy_primitives::Bytes, usize, String)>> = Vec::new();
+    let mut current_batch = Vec::new();
+
+    // Pre-create all transactions and organize them into batches
+    println!(
+        "📦 Worker {}: Pre-creating {} transactions in batches of {}",
+        worker_id, total_transactions_in_chunk, batch_size
+    );
+
+    for _tx_round in 0..transactions_per_sender {
         for sender_idx in start_idx..end_idx {
             let account = &accounts[sender_idx];
             let number_of_senders = accounts.len();
 
             // Randomly select a recipient from the sender addresses (excluding self)
-            let mut recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+            let mut recipient_idx = rand::rng().random_range(0..number_of_senders);
             while recipient_idx == sender_idx {
-                recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+                recipient_idx = rand::rng().random_range(0..number_of_senders);
             }
             let recipient_account = &accounts[recipient_idx];
 
-            // Randomly select an RPC provider
-            let provider_idx = rand::thread_rng().gen_range(0..providers.len());
-            let provider = &providers[provider_idx];
+            // Round-robin RPC provider selection
+            let provider_idx = overall_tx_index % rpc_clients.len();
             let rpc_url = &available_urls[provider_idx];
+            overall_tx_index += 1;
 
             // Track RPC usage
             *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += 1;
@@ -653,7 +808,7 @@ where
             let current_nonce = address_nonces.get(&account.address).copied().unwrap_or(0);
 
             // Create and sign the transfer transaction
-            let tx_envelope = match create_transfer_transaction(
+            let raw_tx = match create_transfer_transaction(
                 &account.private_key,
                 &recipient_account.address.to_string(),
                 chain_id,
@@ -662,7 +817,7 @@ where
             )
             .await
             {
-                Ok(envelope) => envelope,
+                Ok(raw_tx) => raw_tx,
                 Err(e) => {
                     println!(
                         "❌ Worker {}: Failed to create transaction for account {}: {:?}",
@@ -674,41 +829,18 @@ where
                 }
             };
 
-            // Broadcast the transaction to the network
-            match provider.send_tx_envelope(tx_envelope).await {
-                Ok(_) => {
-                    successful_transactions += 1;
-                    // Update nonce for next transaction from this sender
-                    address_nonces.insert(account.address, current_nonce + 1);
-                }
-                Err(e) => {
-                    let error_msg = format!("{e:?}");
-                    if error_msg.contains("already known") {
-                        // Transaction already known - count as success since it was processed
-                        successful_transactions += 1;
-                    } else if error_msg.contains("insufficient funds") {
-                        println!(
-                            "⚠️  Worker {}: Insufficient funds for account {}",
-                            worker_id, sender_idx
-                        );
-                        failed_transactions += 1;
-                    } else if error_msg.contains("gas") {
-                        println!(
-                            "⚠️  Worker {}: Gas error for account {}: {:?}",
-                            worker_id, sender_idx, e
-                        );
-                        failed_transactions += 1;
-                    } else {
-                        println!(
-                            "❌ Worker {}: Failed to send transaction for account {}: {:?}",
-                            worker_id, sender_idx, e
-                        );
-                        failed_transactions += 1;
-                    }
-                }
-            }
+            // Add transaction to current batch (raw_tx, provider_idx, rpc_url)
+            current_batch.push((raw_tx, provider_idx, rpc_url.clone()));
 
+            // Update nonce for next transaction from this sender
+            address_nonces.insert(account.address, current_nonce + 1);
             processed_transactions += 1;
+
+            // If batch is full, add it to batches and start a new one
+            if current_batch.len() >= batch_size {
+                transaction_batches.push(current_batch);
+                current_batch = Vec::new();
+            }
 
             // Print progress periodically
             if last_progress_time.elapsed() >= progress_interval {
@@ -739,6 +871,72 @@ where
         }
     }
 
+    // Add any remaining transactions to the last batch
+    if !current_batch.is_empty() {
+        transaction_batches.push(current_batch);
+    }
+
+    // Send all batches using batch API
+    println!(
+        "🚀 Worker {}: Sending {} batches of transactions...",
+        worker_id,
+        transaction_batches.len()
+    );
+    let batch_send_start = std::time::Instant::now();
+
+    for (batch_idx, batch) in transaction_batches.iter().enumerate() {
+        // Group transactions by RPC provider for efficient batch sending
+        let mut provider_batches: HashMap<usize, Vec<alloy_primitives::Bytes>> = HashMap::new();
+
+        for (raw_tx, provider_idx, _rpc_url) in batch {
+            provider_batches
+                .entry(*provider_idx)
+                .or_insert_with(Vec::new)
+                .push(raw_tx.clone());
+        }
+
+        // Send batches for each provider
+        for (provider_idx, tx_batch) in provider_batches {
+            let rpc_client: &C = &rpc_clients[provider_idx];
+            let rpc_url: &String = &available_urls[provider_idx];
+
+            let batch_len = tx_batch.len();
+            match rpc_client.batch_send_raw_transaction(tx_batch).await {
+                Ok(_) => {
+                    successful_transactions += batch_len;
+                    *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += batch_len;
+                }
+                Err(e) => {
+                    let error_msg = format!("{e:?}");
+                    println!(
+                        "❌ Worker {}: Batch {} failed for provider {}: {:?}",
+                        worker_id, batch_idx, provider_idx, error_msg
+                    );
+                    failed_transactions += batch_len;
+                }
+            }
+        }
+
+        // Print batch progress
+        if batch_idx % 10 == 0 || batch_idx == transaction_batches.len() - 1 {
+            println!(
+                "📦 Worker {}: Sent batch {}/{} | ✅{} ❌{}",
+                worker_id,
+                batch_idx + 1,
+                transaction_batches.len(),
+                successful_transactions,
+                failed_transactions
+            );
+        }
+    }
+
+    let batch_send_duration = batch_send_start.elapsed();
+    println!(
+        "⚡ Worker {}: Batch sending completed in {:.2}s",
+        worker_id,
+        batch_send_duration.as_secs_f64()
+    );
+
     let total_duration = start_time.elapsed();
     let tx_per_second = total_transactions_in_chunk as f64 / total_duration.as_secs_f64();
 
@@ -760,8 +958,10 @@ where
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load environment variables from the specified file
     let env_file = env::var("ENV_FILE").unwrap_or(".env".to_string());
     dotenvy::from_filename(env_file).ok();
+
     run_cli().await?;
     Ok(())
 }
