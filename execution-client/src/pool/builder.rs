@@ -1,3 +1,4 @@
+use crate::types::TxValidatorConfig;
 use alloy_eips::{eip7840::BlobParams, merge::EPOCH_SLOTS};
 use reth_ethereum::{
     chainspec::{EthChainSpec, EthereumHardforks},
@@ -10,9 +11,10 @@ use reth_ethereum::{
     TransactionSigned,
 };
 use reth_node_api::TxTy;
+use reth_provider::{ChainSpecProvider, StateProviderFactory};
 use reth_tracing::tracing::{debug, info};
 use reth_transaction_pool::{
-    blobstore::DiskFileBlobStore, CoinbaseTipOrdering, EthTransactionPool, PoolConfig,
+    blobstore::DiskFileBlobStore, BlobStore, CoinbaseTipOrdering, EthTransactionPool, PoolConfig,
     PoolTransaction, TransactionPool, TransactionValidationTaskExecutor,
 };
 use std::time::SystemTime;
@@ -21,14 +23,43 @@ use std::time::SystemTime;
 ///
 /// This contains various settings that can be configured and take precedence over the node's
 /// config.
-#[derive(Debug, Default, Clone)]
+
 #[non_exhaustive]
-pub struct MysticetiPoolBuilder {
+pub struct MysticetiPoolBuilder<
+    C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
+    S: BlobStore,
+> {
     // TODO add options for txpool args
-    pool_config: PoolConfig,
+    config_sender: Option<tokio::sync::oneshot::Sender<TxValidatorConfig<C, S>>>,
 }
 
-impl<Types, Node> PoolBuilder<Node> for MysticetiPoolBuilder
+impl<
+        C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
+        S: BlobStore,
+    > Default for MysticetiPoolBuilder<C, S>
+{
+    fn default() -> Self {
+        Self {
+            config_sender: None,
+        }
+    }
+}
+
+impl<
+        C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
+        S: BlobStore,
+    > MysticetiPoolBuilder<C, S>
+{
+    pub fn with_config_sender(
+        mut self,
+        sender: tokio::sync::oneshot::Sender<TxValidatorConfig<C, S>>,
+    ) -> Self {
+        self.config_sender = Some(sender);
+        self
+    }
+}
+
+impl<Types, Node> PoolBuilder<Node> for MysticetiPoolBuilder<Node::Provider, DiskFileBlobStore>
 where
     Types: NodeTypes<
         ChainSpec: EthereumHardforks,
@@ -72,6 +103,27 @@ where
             .with_minimum_priority_fee(ctx.config().txpool.minimum_priority_fee)
             .with_additional_tasks(ctx.config().txpool.additional_validation_tasks)
             .build_with_tasks(ctx.task_executor().clone(), blob_store.clone());
+
+        // Send validator configuration to tx_listener if sender is available
+        if let Some(sender) = self.config_sender {
+            let validator_config = TxValidatorConfig::<Node::Provider, DiskFileBlobStore> {
+                provider: ctx.provider().clone(),
+                head_timestamp: ctx.head().timestamp,
+                max_tx_input_bytes: ctx.config().txpool.max_tx_input_bytes,
+                tx_fee_cap: ctx.config().rpc.rpc_tx_fee_cap,
+                max_tx_gas_limit: ctx.config().txpool.max_tx_gas_limit,
+                minimum_priority_fee: ctx.config().txpool.minimum_priority_fee,
+                additional_validation_tasks: ctx.config().txpool.additional_validation_tasks,
+                pool_config: pool_config.clone(),
+                blob_store: blob_store.clone(),
+            };
+
+            if let Err(e) = sender.send(validator_config) {
+                info!("Failed to send validator config to tx_listener: {:?}", e);
+            } else {
+                info!("Successfully sent validator config to tx_listener");
+            }
+        }
 
         if validator.validator().eip4844() {
             // initializing the KZG settings can be expensive, this should be done upfront so that

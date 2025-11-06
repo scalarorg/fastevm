@@ -39,45 +39,6 @@ where
                 transactions.push(Arc::new(transaction));
             }
         }
-        //TODO: Improve ordering algorithm
-        transactions.sort_by(|tx1, tx2| {
-            if tx1.sender() == tx2.sender() {
-                return tx1.nonce().cmp(&tx2.nonce());
-            } else {
-                //We don't care about the order of different senders
-                return Ordering::Equal;
-            }
-        });
-        // let subdag_txs = decode_transactions::<Transaction>(transactions)
-        //     .map_err(|e| ErrorObjectOwned::owned(PARSE_ERROR_CODE, e.to_string(), None::<()>))?;
-        // // Add subdag transactions to the pool
-        // let pool = self.pool.clone();
-        // let txs = subdag_txs.clone();
-        // tokio::spawn(Box::pin(async move {
-        //     let mut missing_transactions = Vec::new();
-        //     for tx in txs.iter() {
-        //         let tx_hash = tx.hash();
-        //         if !pool.contains(tx_hash) {
-        //             let highest_nonce = pool
-        //                 .get_highest_transaction_by_sender(tx.sender())
-        //                 .map(|tx| tx.nonce());
-        //             debug!(
-        //                 "Adding subdag transaction to pool: {:?}, sender: {:?}, nonce: {:?}, highest nonce: {:?}",
-        //                 tx_hash,
-        //                 tx.sender_ref(),
-        //                 tx.nonce(),
-        //                 highest_nonce
-        //             );
-        //             missing_transactions.push(tx.clone());
-        //         } else {
-        //             debug!("Transaction already in pool: {:?}", tx_hash);
-        //         }
-        //     }
-        //     let result = pool
-        //         .add_transactions(TransactionOrigin::External, missing_transactions)
-        //         .await;
-        //     debug!("Result of adding transactions to pool: {:?}", result);
-        // }));
         Ok(Self {
             leader,
             transactions,

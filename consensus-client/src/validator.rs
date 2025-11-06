@@ -1,6 +1,7 @@
 // Copyright (c) Scalar Org, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::engine_api::Transactions;
 use anyhow::Result;
 use consensus_config::{AuthorityIndex, Committee, NetworkKeyPair, Parameters, ProtocolKeyPair};
 use consensus_core::{
@@ -10,13 +11,13 @@ use consensus_core::{
 use mysten_metrics::RegistryService;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use sui_protocol_config::{ConsensusNetwork, ProtocolConfig};
 use tokio::sync::mpsc;
-use tracing::{error, info};
-
-use crate::engine_api::PayloadItem;
-
-// Simple transaction verifier that accepts all transactions
+use tracing::{debug, error, info};
+// Configuration constants for transaction batching
+const BATCH_TIMEOUT_MS: u64 = 100; // Send batch after 1 second even if not full
+                                   // Simple transaction verifier that accepts all transactions
 #[derive(Debug)]
 struct SimpleTransactionVerifier;
 
@@ -36,14 +37,17 @@ pub struct ValidatorNode {
     authority_index: AuthorityIndex,
     working_directory: PathBuf,
     consensus_authority: Option<ConsensusAuthority>,
+    protocol_config: ProtocolConfig,
 }
 
 impl ValidatorNode {
     pub fn new(authority_index: u32, working_directory: PathBuf) -> Self {
+        let protocol_config = ProtocolConfig::get_for_max_version_UNSAFE();
         Self {
             authority_index: AuthorityIndex::new_for_test(authority_index),
             working_directory,
             consensus_authority: None,
+            protocol_config,
         }
     }
 
@@ -54,7 +58,7 @@ impl ValidatorNode {
         keypairs: Vec<(NetworkKeyPair, ProtocolKeyPair)>,
         registry_service: RegistryService,
         commit_consumer: CommitConsumer,
-        input_payload_rx: mpsc::UnboundedReceiver<PayloadItem>,
+        input_payload_rx: mpsc::UnboundedReceiver<Transactions>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Starting validator node {}", self.authority_index);
 
@@ -86,7 +90,7 @@ impl ValidatorNode {
             self.authority_index,
             committee,
             parameters,
-            ProtocolConfig::get_for_max_version_UNSAFE(),
+            self.protocol_config.clone(),
             protocol_keypair.clone(),
             network_keypair.clone(),
             Arc::new(Clock::new_for_test(0)),
@@ -111,7 +115,7 @@ impl ValidatorNode {
 
     async fn start_transaction_processing(
         &self,
-        mut input_txs_rx: mpsc::UnboundedReceiver<PayloadItem>,
+        mut txs_receiver: mpsc::UnboundedReceiver<Transactions>,
     ) {
         // Process received payload from execution client
         let transaction_client = self
@@ -119,20 +123,55 @@ impl ValidatorNode {
             .as_ref()
             .unwrap()
             .transaction_client();
+        let max_transactions_in_block_count =
+            self.protocol_config.max_num_transactions_in_block() as usize;
         tokio::spawn(async move {
-            while let Some(payload) = input_txs_rx.recv().await {
-                let tx_data = payload.into_iter().map(|tx| tx.into()).collect();
-                match transaction_client.submit(tx_data).await {
-                    Ok((block_ref, _status_receiver)) => {
-                        info!(
-                            "Transaction submitted successfully to Mysticeti consensus, included in block: {:?}",
-                            block_ref
-                        );
+            // Transaction buffer for batching
+            let mut buffer = Vec::new();
+
+            // Create a periodic timer for batch timeout
+            let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
+            let mut total_received_txs = 0_u64;
+            let mut total_send_txs = 0_u64;
+            loop {
+                tokio::select! {
+                    // Handle new transaction events
+                    Some(raw_tx) = txs_receiver.recv() => {
+                        total_received_txs += raw_tx.len() as u64;
+                        // because of this push, buffer has at least 1 transaction
+                        for tx in raw_tx {
+                            buffer.push(tx.into());
+                        }
+                        // Send batch if threshold is reached
+                        if buffer.len() >= max_transactions_in_block_count {
+                            // Split buffer to send only max_transactions_in_block_count transactions
+                            let batch: Vec<_> = buffer.drain(0..max_transactions_in_block_count).collect();
+                            let batch_size = batch.len();
+                            total_send_txs += batch_size as u64;
+                            if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
+                                debug!("[Threshold] Sending batch of {} transactions to mysticeti. Total sent/received transactions: {}/{}", batch_size, total_send_txs, total_received_txs);
+                            } else {
+                                error!("[Threshold] Failed to submit batch of {} transactions", batch_size);
+                            }
+                            batch_timer.reset();
+                        }
                     }
-                    Err(e) => {
-                        error!("Failed to submit transaction to Mysticeti consensus: {}", e);
+                    // Handle batch timeout
+                    _ = batch_timer.tick() => {
+                        if !buffer.is_empty() {
+                            let batch = std::mem::take(&mut buffer);
+                            let batch_size = batch.len();
+                            total_send_txs += batch_size as u64;
+                            if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
+                                info!("[Timer] Sending batch of {} transactions to mysticeti. Total sent/received transactions: {}/{}", batch_size, total_send_txs, total_received_txs);
+                            } else {
+                                error!("[Timer] Failed to submit batch of {} transactions", batch_size);
+                            }
+                        }
+                        batch_timer.reset();
                     }
                 }
+                //End loop
             }
         });
 

@@ -37,12 +37,12 @@ reth-trie = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main"
 reth-trie-db = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-trie-db" }
 revm = { version = "28.0.1", default-features = false }
 
-alloy = { workspace = true }
 alloy-network = { workspace = true }
 alloy-rlp = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-provider = { workspace = true }
+alloy-transport-http = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-genesis = { workspace = true }
@@ -50,6 +50,7 @@ alloy-signer-local = { workspace = true }
 alloy-signer = { workspace = true }
 
 anyhow.workspace = true
+async-trait.workspace = true
 eyre.workspace = true
 hex.workspace = true
 jsonrpsee.workspace = true
@@ -60,7 +61,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 secp256k1 = { workspace = true }
-sha2 = "0.10"
+sha2 = { version = "0.10", default-features = false }
 tracing.workspace = true
 
 dotenv = "0.15.0"
@@ -70,10 +71,18 @@ bip39 = "2.2.0"
 k256 = "0.13.4"
 tiny-keccak = "2.0.2"
 rand.workspace = true
-clap = { version = "4.0", features = ["derive"] }
+clap = "4"
 chrono.workspace = true
 dotenvy = "0.15.7"
 
 [[bin]]
 name = "fastevm-test"
 path = "src/bin/fastevm-test.rs"
+
+[[example]]
+name = "rpc_client_example"
+path = "examples/rpc_client_example.rs"
+
+[[example]]
+name = "integration_example"
+path = "examples/integration_example.rs"

@@ -515,14 +515,14 @@ where
             let number_of_senders = accounts.len();
 
             // Randomly select a recipient from the sender addresses (excluding self)
-            let mut recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+            let mut recipient_idx = rand::rng().random_range(0..number_of_senders);
             while recipient_idx == sender_idx {
-                recipient_idx = rand::thread_rng().gen_range(0..number_of_senders);
+                recipient_idx = rand::rng().random_range(0..number_of_senders);
             }
             let recipient_account = &accounts[recipient_idx];
 
             // Randomly select an RPC provider
-            let provider_idx = rand::thread_rng().gen_range(0..providers.len());
+            let provider_idx = rand::rng().random_range(0..providers.len());
             let provider = &providers[provider_idx];
             let rpc_url = &available_urls[provider_idx];
 
@@ -532,7 +532,7 @@ where
             // Get current nonce for the sender
             let current_nonce = address_nonces.get(&account.address).copied().unwrap_or(0);
             // Create and sign the transfer transaction
-            let tx_envelope = match create_transfer_transaction(
+            let raw_tx = match create_transfer_transaction(
                 &account.private_key,
                 &recipient_account.address.to_string(),
                 chain_id,
@@ -541,7 +541,7 @@ where
             )
             .await
             {
-                Ok(envelope) => envelope,
+                Ok(raw_tx) => raw_tx,
                 Err(e) => {
                     println!(
                         "Worker {}: ❌ Failed to create transaction: {:?}",
@@ -553,7 +553,8 @@ where
             };
 
             // Broadcast the transaction to the network
-            match provider.send_tx_envelope(tx_envelope).await {
+            let start_time = Instant::now();
+            match provider.send_raw_transaction(&raw_tx).await {
                 Ok(_) => {
                     successful_transactions += 1;
                     // Update nonce for next transaction from this sender
