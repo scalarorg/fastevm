@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use sui_protocol_config::{ConsensusNetwork, ProtocolConfig};
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 // Configuration constants for transaction batching
 const BATCH_TIMEOUT_MS: u64 = 100; // Send batch after 1 second even if not full
                                    // Simple transaction verifier that accepts all transactions
@@ -149,7 +149,7 @@ impl ValidatorNode {
                             let batch_size = batch.len();
                             total_send_txs += batch_size as u64;
                             if let Ok((block_ref, _status_receiver)) = transaction_client.submit(batch).await {
-                                info!("[Threshold] Sending batch of {} transactions to mysticeti. Total sent/received transactions: {}/{}", batch_size, total_send_txs, total_received_txs);
+                                debug!("[Threshold] Sending batch of {} transactions to mysticeti. Total sent/received transactions: {}/{}", batch_size, total_send_txs, total_received_txs);
                             } else {
                                 error!("[Threshold] Failed to submit batch of {} transactions", batch_size);
                             }

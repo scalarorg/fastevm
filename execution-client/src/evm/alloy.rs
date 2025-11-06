@@ -85,7 +85,6 @@ where
         DB: Database + 'a,
         I: Inspector<EvmF::Context<&'a mut State<DB>>> + 'a,
     {
-        info!("Creating scalar block executor");
         ScalarBlockExecutor::new(evm, ctx, &self.spec, &self.receipt_builder)
     }
 }

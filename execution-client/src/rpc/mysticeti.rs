@@ -11,7 +11,7 @@ use reth_extension::MysticetiCommittedSubdag;
 use reth_extension::MysticetiConsensusApiServer;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 /// The type that implements the `txpool` rpc namespace trait
 pub struct MysticetiConsensusHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
@@ -169,7 +169,7 @@ impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> Mystice
         self.consensus_pool.add_committed_subdags(committed_subdags);
         let mut total_txs = self.total_txs.write();
         *total_txs += tx_counter as u64;
-        info!(
+        debug!(
             "Processed subdag index {:?}  with {:?} transactions, Total transactions: {:?}. Time taken: {:?}",
             commited_index,
             tx_counter,

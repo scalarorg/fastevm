@@ -345,7 +345,7 @@ where
                             // Send batch if threshold is reached
                             if buffer.len() >= BATCH_SIZE_THRESHOLD {
                                 total_send_txs += buffer.len() as u64;
-                                info!("[Threshold] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                                debug!("[Threshold] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                                 let batch = std::mem::take(&mut buffer);
                                 let msg = encode_transactions(batch);
                                 let _ = sink.send(msg).await;
@@ -356,7 +356,7 @@ where
                     _ = batch_timer.tick() => {
                         if !buffer.is_empty() {
                             total_send_txs += buffer.len() as u64;
-                            info!("[Timer] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            debug!("[Timer] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
                             let msg = encode_transactions(batch);
                             let _ = sink.send(msg).await;
@@ -463,7 +463,7 @@ where
                         buffer.extend(raw_txs);
                         if buffer.len() >= BATCH_SIZE_THRESHOLD {
                             total_send_txs += buffer.len() as u64;
-                            info!("[Threshold] Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
+                            debug!("[Threshold] Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
                             let batch = std::mem::take(&mut buffer);
                             let msg = SubscriptionMessage::from(
                                 serde_json::value::to_raw_value(&batch).expect("serialize batch"),

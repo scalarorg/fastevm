@@ -103,7 +103,7 @@ where
         for committed_subdag in committed_subdags {
             committed_queue.insert(committed_subdag.commit_ref.index as u64, committed_subdag);
         }
-        info!(
+        debug!(
             "Added {} committed subdags to queue. Queue size: {:?}",
             len,
             committed_queue.len()
