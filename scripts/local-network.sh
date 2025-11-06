@@ -31,7 +31,7 @@ EXECUTION_CLIENT=$PROJECT_ROOT/target/release/fastevm-execution
 CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
 
 # Default values for account generation
-DEFAULT_ACCOUNT_NUMBER=1000
+DEFAULT_ACCOUNT_NUMBER=100000
 DEFAULT_ACCOUNT_AMOUNT="1000000000000000000000"  # 1000 ETH in wei
 DEFAULT_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -409,10 +409,10 @@ start_execution_node() {
     
     # Build bootnodes string
     local bootnodes=""
-    local debug_level="-vvvv"
-    # if [ "$node_index" = "1" ]; then
-    #     debug_level="-vvvvv"
-    # fi
+    local debug_level="-vvv"
+    if [ "$node_index" = "1" ]; then
+        debug_level="-vvvv"
+    fi
     for i in {1..4}; do
         if [ $i -ne $node_index ]; then
             local peer_hex_file="$DATA_DIR/execution$i/p2p/secret.hex"
@@ -454,25 +454,7 @@ start_execution_node() {
             "--ws.origins" "*"
         )
     fi
-    
-    # Add remaining arguments
-    cmd_args+=(
-        "--authrpc.addr" "0.0.0.0"
-        "--authrpc.port" "$engine_port"
-        "--authrpc.jwtsecret" "$data_dir/jwt.hex"
-        "--addr" "0.0.0.0"
-        "--port" "$p2p_port"
-        "--discovery.addr" "0.0.0.0"
-        "--discovery.port" "$p2p_port"
-        "--p2p-secret-key" "$data_dir/p2p/secret.key"
-        "--bootnodes" "$bootnodes"
-        "--enable-txpool-listener"
-        "--committed-subdags-per-block" "30"
-        "--block-build-interval-ms" "100"
-        "$debug_level"
-    )
 
-    
     # Add --txpool.max-account-slots
     cmd_args+=(
         "--txpool.max-new-txns" "102400"
@@ -484,9 +466,30 @@ start_execution_node() {
         "--txpool.queued-max-count" "102400"
         "--txpool.queued-max-size" "128"
     )
+    # Builder
+    cmd_args+=(
+        "--builder.gaslimit" "240000000"
+    )
+    # Add remaining arguments
+    cmd_args+=(
+        "--authrpc.addr" "0.0.0.0"
+        "--authrpc.port" "$engine_port"
+        "--authrpc.jwtsecret" "$data_dir/jwt.hex"
+        "--addr" "0.0.0.0"
+        "--port" "$p2p_port"
+        "--discovery.addr" "0.0.0.0"
+        "--discovery.port" "$p2p_port"
+        "--p2p-secret-key" "$data_dir/p2p/secret.key"
+        "--bootnodes" "$bootnodes"
+        "--enable-tx-subscription"
+        "--committed-subdags-per-block" "10"
+        "--block-build-interval-ms" "100"
+        "$debug_level"
+    )    
+    
     # Start the node
     nohup "$EXECUTION_CLIENT" "${cmd_args[@]}" > "$log_file" 2>&1 &
-    
+
     local pid=$!
     echo $pid > "$pid_file"
     
@@ -608,10 +611,11 @@ stop_network() {
     rm -f "$PIDS_DIR"/*.pid
     # Stop mysticeti process
     # List of ports you want to kill
-    PORTS=(8545 8544 8543 8542 26657 26658 26659 26660)
+    PORTS=(26657 26658 26659 26660 8545 8544 8543 8542)
 
     for PORT in "${PORTS[@]}"; do
         PID=$(lsof -ti :$PORT)
+        echo "Killing process $PID on port $PORT"
         if [ -n "$PID" ]; then
             echo "🔪 Killing process $PID on port $PORT"
             kill -9 $PID

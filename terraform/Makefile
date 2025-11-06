@@ -1,7 +1,12 @@
 # FastEVM Terraform Deployment Makefile
 # Easy management of GCP infrastructure deployment
 
-.PHONY: help init plan apply destroy status logs clean validate format check test extract-test-config build-test-command run-batch-test wait-for-transactions scan-blocks clean-test
+.PHONY: help init plan apply destroy status logs clean validate format check test extract-test-config build-test-command run-batch-test wait-for-transactions scan-blocks clean-test ssh-node ssh-copy ssh-node-gcloud
+
+# Load environment variables from fastevm.env if it exists
+ifneq (,$(wildcard fastevm.env))
+    include fastevm.env
+endif
 
 # Default target
 help: ## Show this help message
@@ -145,6 +150,34 @@ ssh-node: ## SSH to a specific node (usage: make ssh-node NODE=1)
 		echo "No deployment info found. Run 'make apply' first."; \
 		exit 1; \
 	fi
+# Copy a file from a specific node's /data/logs directory
+ssh-copy: ## Copy file from node's /data/logs (usage: make ssh-copy NODE=1 FILE=logfile.txt)
+	@if [ -z "$(NODE)" ]; then echo "Usage: make ssh-copy NODE=1 FILE=logfile.txt"; exit 1; fi
+	@if [ -z "$(FILE)" ]; then echo "Usage: make ssh-copy NODE=1 FILE=logfile.txt"; exit 1; fi
+	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@chmod 600 fastevm-deploy-key
+	@echo "Getting node IP for node $(NODE)..."
+	@if [ -f "../deployment-info.json" ]; then \
+		NODE_IP=$$(jq -r ".instance_external_ips.value[$$((NODE-1))]" ../deployment-info.json 2>/dev/null || jq -r ".instance_ips.value[$$((NODE-1))]" ../deployment-info.json 2>/dev/null); \
+		if [ -z "$$NODE_IP" ] || [ "$$NODE_IP" = "null" ]; then \
+			echo "Could not get IP for node $(NODE)"; \
+			exit 1; \
+		fi; \
+		echo "Copying $(FILE) from $(PROJECT_NAME)-node-$(NODE) ($$NODE_IP):/data/logs/..."; \
+		scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+			-i fastevm-deploy-key \
+			ubuntu@$$NODE_IP:/data/logs/$(FILE) \
+			./$(FILE); \
+		if [ $$? -eq 0 ]; then \
+			echo "✅ Successfully copied $(FILE) to ./$(FILE)"; \
+		else \
+			echo "❌ Failed to copy $(FILE)"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
 
 # SSH to a specific node using gcloud (alternative method)
 ssh-node-gcloud: ## SSH to a specific node using gcloud (usage: make ssh-node-gcloud NODE=1)
@@ -166,8 +199,8 @@ fix-ssh-auth: ## Fix gcloud SSH authentication by adding SSH keys to all instanc
 # Compare genesis.json files across all nodes
 compare-genesis: ## Compare genesis.json files across all nodes to ensure consistency
 	@echo "Comparing genesis.json files across all nodes..."
-	@chmod +x compare-genesis.sh
-	@./compare-genesis.sh
+	@chmod +x ./scripts/compare-genesis.sh
+	@./scripts/compare-genesis.sh
 
 # Clean database on all nodes (fixes genesis hash mismatch)
 clean-database: ## Clean database on all nodes to fix genesis hash mismatch
@@ -235,12 +268,31 @@ prepare-configs: ## Prepare all configurations locally (auto-detects from Terraf
 	@GITHUB_REPO="$(GITHUB_REPO)" GITHUB_BRANCH="$(GITHUB_BRANCH)" ./scripts/prepare-configs.sh
 	@echo "Configurations prepared successfully!"
 
+# Prepare binaries (copy from local or build new ones) and distribute to all nodes
+prepare-binaries: ## Prepare binaries on both local and build node, then distribute to all nodes
+	@echo "Preparing and distributing binaries..."
+	@GITHUB_REPO="$(GITHUB_REPO)" GITHUB_BRANCH="$(GITHUB_BRANCH)" ./scripts/prepare-binaries.sh
+
 # Deploy configurations to remote nodes (with parallel execution)
 deploy-configs: ## Deploy prepared configurations to remote nodes in parallel
 	@echo "Deploying configurations to remote nodes..."
 	@if [ ! -d "deploy" ]; then echo "No deploy directory found. Run 'make prepare-configs' first."; exit 1; fi
 	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
 	@chmod 600 fastevm-deploy-key
+	@echo "Setting up SSH key on build node for direct distribution..."
+	@if [ -f "../deployment-info.json" ]; then \
+		BUILD_NODE_IP=$$(jq -r '.instance_external_ips.value[0]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[0]' ../deployment-info.json 2>/dev/null); \
+		if [ -n "$$BUILD_NODE_IP" ]; then \
+			echo "Copying SSH key to build node ($$BUILD_NODE_IP) for direct distribution..."; \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key ubuntu@$$BUILD_NODE_IP 'mkdir -p ~/.ssh && chmod 700 ~/.ssh'; \
+			scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key fastevm-deploy-key ubuntu@$$BUILD_NODE_IP:~/.ssh/fastevm-deploy-key; \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key ubuntu@$$BUILD_NODE_IP 'chmod 600 ~/.ssh/fastevm-deploy-key'; \
+			echo "✓ SSH key copied to build node for direct distribution"; \
+		fi; \
+	fi
 	@echo "Getting node IPs from Terraform output..."
 	@if [ -f "../deployment-info.json" ]; then \
 		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
@@ -251,8 +303,8 @@ deploy-configs: ## Deploy prepared configurations to remote nodes in parallel
 		echo "Deploying to nodes in parallel: $$NODE_IPS"; \
 		NODE_INDEX=0; \
 		for node_ip in $$NODE_IPS; do \
-			echo "Starting parallel deployment for node $$NODE_INDEX to $$node_ip..."; \
 			( \
+				echo "Starting deployment for node $$NODE_INDEX to $$node_ip..."; \
 				echo "Creating remote directory for node $$NODE_INDEX..."; \
 				ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
 					-i fastevm-deploy-key ubuntu@$$node_ip 'mkdir -p /tmp/fastevm-config'; \
@@ -261,48 +313,12 @@ deploy-configs: ## Deploy prepared configurations to remote nodes in parallel
 					-i fastevm-deploy-key -r deploy/node$$NODE_INDEX/* ubuntu@$$node_ip:/tmp/fastevm-config/; \
 				echo "Running deployment script for node $$NODE_INDEX..."; \
 				ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-					-i fastevm-deploy-key ubuntu@$$node_ip "PREFUND_ACCOUNT_COUNT='$(PREFUND_ACCOUNT_COUNT)' PREFUND_BALANCE='$(PREFUND_BALANCE)' TEST_MNEMONIC='$(TEST_MNEMONIC)' bash /tmp/fastevm-config/deploy.sh"; \
+					-i fastevm-deploy-key ubuntu@$$node_ip "GITHUB_REPO='$(GITHUB_REPO)' GITHUB_BRANCH='$(GITHUB_BRANCH)' bash /tmp/fastevm-config/deploy.sh"; \
 				echo "✓ Node $$NODE_INDEX deployment completed successfully"; \
 			) & \
 			NODE_INDEX=$$((NODE_INDEX + 1)); \
 		done; \
-		echo "Waiting for all parallel deployments to complete..."; \
 		wait; \
-		echo "✓ All nodes deployed successfully!"; \
-	else \
-		echo "No deployment info found. Run 'make apply' first."; \
-		exit 1; \
-	fi
-
-# Deploy configurations sequentially (for debugging or limited resources)
-deploy-configs-sequential: ## Deploy prepared configurations to remote nodes sequentially
-	@echo "Deploying configurations to remote nodes sequentially..."
-	@if [ ! -d "deploy" ]; then echo "No deploy directory found. Run 'make prepare-configs' first."; exit 1; fi
-	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
-	@chmod 600 fastevm-deploy-key
-	@echo "Getting node IPs from Terraform output..."
-	@if [ -f "../deployment-info.json" ]; then \
-		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
-		if [ -z "$$NODE_IPS" ]; then \
-			echo "Could not get node IPs from Terraform output"; \
-			exit 1; \
-		fi; \
-		echo "Deploying to nodes sequentially: $$NODE_IPS"; \
-		NODE_INDEX=0; \
-		for node_ip in $$NODE_IPS; do \
-			echo "Deploying node $$NODE_INDEX to $$node_ip..."; \
-			echo "Creating remote directory..."; \
-			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-				-i fastevm-deploy-key ubuntu@$$node_ip 'mkdir -p /tmp/fastevm-config'; \
-			echo "Copying configuration files..."; \
-			scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-				-i fastevm-deploy-key -r deploy/node$$NODE_INDEX/* ubuntu@$$node_ip:/tmp/fastevm-config/; \
-			echo "Running deployment script..."; \
-			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-				-i fastevm-deploy-key ubuntu@$$node_ip "PREFUND_ACCOUNT_COUNT='$(PREFUND_ACCOUNT_COUNT)' PREFUND_BALANCE='$(PREFUND_BALANCE)' TEST_MNEMONIC='$(TEST_MNEMONIC)' bash /tmp/fastevm-config/deploy.sh"; \
-			echo "✓ Node $$NODE_INDEX deployment completed"; \
-			NODE_INDEX=$$((NODE_INDEX + 1)); \
-		done; \
 		echo "✓ All nodes deployed successfully!"; \
 	else \
 		echo "No deployment info found. Run 'make apply' first."; \
@@ -313,15 +329,100 @@ deploy-configs-sequential: ## Deploy prepared configurations to remote nodes seq
 prepare-and-deploy: prepare-configs deploy-configs ## Prepare configs locally and deploy to remote nodes
 	@echo "Full preparation and deployment completed!"
 
-# Complete deployment (infrastructure + configs + deploy)
-deploy-all: check-prereqs init apply prepare-configs deploy-configs verify-deployment ## Complete deployment: create infrastructure, prepare configs, and deploy all nodes
+# Stop services on all nodes
+stop-services: ## Stop FastEVM services on all nodes
+	@echo "Stopping FastEVM services on all nodes..."
+	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@chmod 600 fastevm-deploy-key
+	@echo "Getting node IPs from Terraform output..."
+	@if [ -f "../deployment-info.json" ]; then \
+		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
+		if [ -z "$$NODE_IPS" ]; then \
+			echo "Could not get node IPs from Terraform output"; \
+			exit 1; \
+		fi; \
+		NODE_COUNT=$$(echo "$$NODE_IPS" | wc -l | tr -d ' '); \
+		echo "Found $$NODE_COUNT nodes"; \
+		echo "Stopping services on all nodes in parallel..."; \
+		for node_ip in $$NODE_IPS; do \
+			(echo "Stopping services on node $$node_ip..." && \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i fastevm-deploy-key ubuntu@$$node_ip 'sudo bash /tmp/fastevm-config/service.sh stop' && \
+			echo "✓ Services stopped on $$node_ip") & \
+		done; \
+		echo "Waiting for all services to stop..."; \
+		wait; \
+		echo "Services stopped on all nodes!"; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
+
+# Generate prefunded accounts on all nodes (after binary distribution)
+setup-node: ## Generate prefunded accounts on all nodes after binary distribution
+	@echo "Generating prefunded accounts on all nodes..."
+	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@chmod 600 fastevm-deploy-key
+	@echo "Getting node IPs from Terraform output..."
+	@if [ -f "../deployment-info.json" ]; then \
+		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
+		if [ -z "$$NODE_IPS" ]; then \
+			echo "Could not get node IPs from Terraform output"; \
+			exit 1; \
+		fi; \
+		echo "Generating prefunded accounts on nodes: $$NODE_IPS"; \
+		for node_ip in $$NODE_IPS; do \
+			echo "Generating prefunded accounts on node $$node_ip..."; \
+			scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key scripts/setup-node.sh ubuntu@$$node_ip:/tmp/fastevm-config/; \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i fastevm-deploy-key ubuntu@$$node_ip 'chmod +x /tmp/fastevm-config/setup-node.sh && /tmp/fastevm-config/setup-node.sh'; \
+			echo "✓ Prefunded accounts generated on $$node_ip"; \
+		done; \
+		echo "✓ Prefunded accounts generation completed on all nodes!"; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
+
+# Start services on all nodes
+start-services: ## Start FastEVM services on all nodes
+	@echo "Starting FastEVM services on all nodes..."
+	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@chmod 600 fastevm-deploy-key
+	@echo "Getting node IPs from Terraform output..."
+	@if [ -f "../deployment-info.json" ]; then \
+		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
+		if [ -z "$$NODE_IPS" ]; then \
+			echo "Could not get node IPs from Terraform output"; \
+			exit 1; \
+		fi; \
+		NODE_COUNT=$$(echo "$$NODE_IPS" | wc -l | tr -d ' '); \
+		echo "Found $$NODE_COUNT nodes"; \
+		echo "Starting services on all nodes in parallel..."; \
+		for node_ip in $$NODE_IPS; do \
+			(echo "Starting services on node $$node_ip..." && \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i fastevm-deploy-key ubuntu@$$node_ip 'sudo bash /tmp/fastevm-config/service.sh start' && \
+			echo "✓ Services started on $$node_ip") & \
+		done; \
+		echo "Waiting for all services to start..."; \
+		wait; \
+		echo "Waiting for services to initialize..."; \
+		sleep 60; \
+		echo "Services started on all nodes!"; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
+
+# Complete deployment (infrastructure + configs + deploy + prepare binaries + generate accounts + start services)
+deploy-all: check-prereqs init apply prepare-configs deploy-configs prepare-binaries setup-node start-services verify-deployment ## Complete deployment: create infrastructure, prepare configs, deploy all nodes, prepare binaries, generate accounts, and start services
 	@echo "=== FastEVM Complete Deployment Finished ==="
-	@echo "All nodes are being configured and started..."
+	@echo "All nodes are configured and started..."
 	@echo "Check status with: make status"
 	@echo "Test endpoints with: make test-rpc"
 
 # Deploy with existing infrastructure (skip Terraform)
-deploy-existing: check-prereqs prepare-configs deploy-configs verify-deployment ## Deploy to existing infrastructure (skip Terraform)
+deploy-existing: check-prereqs prepare-configs deploy-configs prepare-binaries setup-node start-services verify-deployment ## Deploy to existing infrastructure (skip Terraform)
 	@echo "=== Deployment to Existing Infrastructure Finished ==="
 
 # Destroy and redeploy
@@ -335,15 +436,20 @@ verify-deployment: ## Verify deployment health
 		echo "Waiting for services to start..."; \
 		sleep 30; \
 		echo "Testing node connectivity..."; \
-		for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
-			node_ip=$$(jq -r ".instance_external_ips.value[$$i]" ../deployment-info.json 2>/dev/null || jq -r ".instance_ips.value[$$i]" ../deployment-info.json 2>/dev/null); \
+		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
+		NODE_COUNT=$$(echo "$$NODE_IPS" | wc -l | tr -d ' '); \
+		NODE_INDEX=0; \
+		for node_ip in $$NODE_IPS; do \
 			http_port=8545; \
-			echo "Testing node $$i ($$node_ip:$$http_port)..."; \
-			if curl -s -f "http://$$node_ip:$$http_port" > /dev/null; then \
-				echo "✓ Node $$i is responding"; \
+			echo "Testing node $$NODE_INDEX ($$node_ip:$$http_port)..."; \
+			if curl -s -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' "http://$$node_ip:$$http_port" | jq -e '.result' > /dev/null 2>&1; then \
+				echo "✓ Node $$NODE_INDEX is responding (JSON-RPC working)"; \
+			elif nc -z -w5 $$node_ip $$http_port 2>/dev/null; then \
+				echo "✓ Node $$NODE_INDEX port is open (service running)"; \
 			else \
-				echo "⚠ Node $$i is not responding yet (services may still be starting)"; \
+				echo "⚠ Node $$NODE_INDEX is not responding yet (services may still be starting)"; \
 			fi; \
+			NODE_INDEX=$$((NODE_INDEX + 1)); \
 		done; \
 		echo "Deployment verification completed!"; \
 	else \
@@ -511,18 +617,12 @@ test: ## Test deployment: build batch command, send transactions, and scan block
 	@echo "✅ Test completed successfully!"
 
 # Extract test configuration from deployment
-extract-test-config: ## Extract RPC endpoints and all required variables for testing
+extract-test-config: ## Extract configuration variables for testing (RPC URLs are extracted dynamically)
 	@echo "Extracting test configuration..."
 	@if [ -f "../deployment-info.json" ]; then \
 		echo "# FastEVM Test Configuration" > test.env; \
 		echo "# Generated from deployment-info.json" >> test.env; \
 		echo "# Generated on: $$(date)" >> test.env; \
-		echo "" >> test.env; \
-		echo "# RPC Endpoints for 4 execution nodes" >> test.env; \
-		echo "RPC_URL1=$$(jq -r '.node_endpoints.value."node-1".http_rpc' ../deployment-info.json)" >> test.env; \
-		echo "RPC_URL2=$$(jq -r '.node_endpoints.value."node-2".http_rpc' ../deployment-info.json)" >> test.env; \
-		echo "RPC_URL3=$$(jq -r '.node_endpoints.value."node-3".http_rpc' ../deployment-info.json)" >> test.env; \
-		echo "RPC_URL4=$$(jq -r '.node_endpoints.value."node-4".http_rpc' ../deployment-info.json)" >> test.env; \
 		echo "" >> test.env; \
 		echo "# Network Configuration" >> test.env; \
 		echo "CHAIN_ID=202501" >> test.env; \
@@ -547,17 +647,13 @@ extract-test-config: ## Extract RPC endpoints and all required variables for tes
 		echo "Configuration extracted to test.env"; \
 		echo ""; \
 		echo "📋 Configuration Summary:"; \
-		echo "  RPC Endpoints:"; \
-		echo "    RPC_URL1: $$(jq -r '.node_endpoints.value."node-1".http_rpc' ../deployment-info.json)"; \
-		echo "    RPC_URL2: $$(jq -r '.node_endpoints.value."node-2".http_rpc' ../deployment-info.json)"; \
-		echo "    RPC_URL3: $$(jq -r '.node_endpoints.value."node-3".http_rpc' ../deployment-info.json)"; \
-		echo "    RPC_URL4: $$(jq -r '.node_endpoints.value."node-4".http_rpc' ../deployment-info.json)"; \
 		echo "  Chain ID: 202501"; \
 		echo "  Test Parameters:"; \
 		echo "    Sender Count: $${TEST_SENDER_COUNT:-100}"; \
 		echo "    Transaction Count: $${TEST_TRANSACTION_COUNT:-1}"; \
 		echo "    Transaction Value: $${TEST_TRANSACTION_VALUE:-1000000000000000} wei"; \
 		echo "    Waiting Time: $${TEST_WAITING_TIME_SECONDS:-30} seconds"; \
+		echo "  Note: RPC URLs are extracted dynamically from deployment-info.json during test execution"; \
 	else \
 		echo "❌ No deployment info found"; \
 		exit 1; \
@@ -577,7 +673,7 @@ build-test-command: ## Build the fastevm-test command binary
 # Run batch test with extracted configuration
 run-batch-test: ## Run batch transactions using extracted configuration
 	@echo "Running batch transactions..."
-	@if [ ! -f "test.env" ]; then \
+	@if [ ! -f "fastevm.env" ]; then \
 		echo "❌ No test configuration found. Run 'make extract-test-config' first."; \
 		exit 1; \
 	fi
@@ -585,8 +681,16 @@ run-batch-test: ## Run batch transactions using extracted configuration
 		echo "❌ fastevm-test command not found. Run 'make build-test-command' first."; \
 		exit 1; \
 	fi
+	@if [ ! -f "../deployment-info.json" ]; then \
+		echo "❌ No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
 	@echo "🚀 Starting batch transaction test..."
-	@set -a && . ./test.env && set +a && \
+	@set -a && . ./fastevm.env && set +a && \
+	RPC_URL1=$$(jq -r '.node_endpoints.value."node-1".http_rpc' ../deployment-info.json) && \
+	RPC_URL2=$$(jq -r '.node_endpoints.value."node-2".http_rpc' ../deployment-info.json) && \
+	RPC_URL3=$$(jq -r '.node_endpoints.value."node-3".http_rpc' ../deployment-info.json) && \
+	RPC_URL4=$$(jq -r '.node_endpoints.value."node-4".http_rpc' ../deployment-info.json) && \
 	../target/release/fastevm-test batch \
 		--sender-count $$TEST_SENDER_COUNT \
 		--transaction-count $$TEST_TRANSACTION_COUNT \
@@ -596,11 +700,11 @@ run-batch-test: ## Run batch transactions using extracted configuration
 # Wait for transactions to be processed
 wait-for-transactions: ## Wait for configured time for transactions to be processed
 	@echo "Waiting for transactions to be processed..."
-	@if [ ! -f "test.env" ]; then \
+	@if [ ! -f "fastevm.env" ]; then \
 		echo "❌ No test configuration found. Run 'make extract-test-config' first."; \
 		exit 1; \
 	fi
-	@WAIT_TIME=$$(grep TEST_WAITING_TIME_SECONDS test.env | cut -d'=' -f2); \
+	@WAIT_TIME=$$(grep TEST_WAITING_TIME_SECONDS fastevm.env | cut -d'=' -f2); \
 	echo "⏳ Waiting $$WAIT_TIME seconds for transactions to be processed..."; \
 	sleep $$WAIT_TIME; \
 	echo "✅ Wait completed!"
@@ -608,7 +712,7 @@ wait-for-transactions: ## Wait for configured time for transactions to be proces
 # Scan blocks to verify transactions
 scan-blocks: ## Scan blocks to verify transaction processing
 	@echo "Scanning blocks for transaction verification..."
-	@if [ ! -f "test.env" ]; then \
+	@if [ ! -f "fastevm.env" ]; then \
 		echo "❌ No test configuration found. Run 'make extract-test-config' first."; \
 		exit 1; \
 	fi
@@ -616,8 +720,13 @@ scan-blocks: ## Scan blocks to verify transaction processing
 		echo "❌ fastevm-test command not found. Run 'make build-test-command' first."; \
 		exit 1; \
 	fi
+	@if [ ! -f "../deployment-info.json" ]; then \
+		echo "❌ No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
 	@echo "🔍 Scanning blocks for transaction verification..."
-	@set -a && . ./test.env && set +a && \
+	@set -a && . ./fastevm.env && set +a && \
+	RPC_URL1=$$(jq -r '.node_endpoints.value."node-1".http_rpc' ../deployment-info.json) && \
 	../target/release/fastevm-test scan \
 		--count 10 \
 		--url $$RPC_URL1 \
@@ -650,14 +759,27 @@ test-custom: ## Run test with custom parameters (usage: make test-custom TEST_SE
 show-test-config: extract-test-config ## Show current test configuration
 	@echo "📋 Current Test Configuration:"
 	@echo "=============================="
-	@if [ -f "test.env" ]; then \
-		cat test.env; \
+	@if [ -f "fastevm.env" ]; then \
+		cat fastevm.env; \
 	else \
 		echo "No test configuration found. Run 'make extract-test-config' first."; \
+	fi
+
+# Show current RPC endpoints
+show-rpc-endpoints: ## Show current RPC endpoints from deployment
+	@echo "🌐 Current RPC Endpoints:"
+	@echo "========================="
+	@if [ -f "../deployment-info.json" ]; then \
+		echo "Node 1: $$(jq -r '.node_endpoints.value."node-1".http_rpc' ../deployment-info.json)"; \
+		echo "Node 2: $$(jq -r '.node_endpoints.value."node-2".http_rpc' ../deployment-info.json)"; \
+		echo "Node 3: $$(jq -r '.node_endpoints.value."node-3".http_rpc' ../deployment-info.json)"; \
+		echo "Node 4: $$(jq -r '.node_endpoints.value."node-4".http_rpc' ../deployment-info.json)"; \
+	else \
+		echo "❌ No deployment info found. Run 'make apply' first."; \
 	fi
 
 # Clean test files
 clean-test: ## Clean up test files
 	@echo "Cleaning up test files..."
-	@rm -f test.env
+	@rm -f fastevm.env
 	@echo "Test files cleaned!"

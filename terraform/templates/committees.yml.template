@@ -1,0 +1,11 @@
+epoch: 0
+authorities:
+{{AUTHORITIES_LIST}}
+
+docker_network:
+  base_ip: {{BASE_IP}}
+  start_ip: {{START_IP}}
+  end_ip: {{END_IP}}
+  port: 26657
+quorum_threshold: {{NODE_COUNT}}
+validity_threshold: {{NODE_COUNT}}

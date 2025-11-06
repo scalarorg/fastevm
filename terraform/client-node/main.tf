@@ -57,14 +57,6 @@ data "google_compute_subnetwork" "fastevm_subnet" {
   region = var.region
 }
 
-# Create persistent disk for client node (same pattern as main nodes)
-resource "google_compute_disk" "client_disk" {
-  name = "${var.project_name}-disk"
-  type = var.disk_type
-  zone = var.zone
-  size = var.client_disk_size
-}
-
 # Service account for client node
 resource "google_service_account" "client_service_account" {
   account_id   = "${var.project_name}-sa"
@@ -96,14 +88,9 @@ resource "google_compute_instance" "client_node" {
   boot_disk {
     initialize_params {
       image = var.image
-      size  = 20
+      size  = 40
       type  = "pd-standard"
     }
-  }
-
-  attached_disk {
-    source      = google_compute_disk.client_disk.id
-    device_name = "fastevm-data"
   }
 
   network_interface {
@@ -132,7 +119,7 @@ resource "google_compute_instance" "client_node" {
       apt-get update -y
       apt-get upgrade -y
       
-      # Install required packages
+      # Install required packages (including C compiler)
       log "Installing required packages..."
       apt-get install -y \
           curl \
@@ -155,7 +142,54 @@ resource "google_compute_instance" "client_node" {
           lsb-release \
           openssh-client
       
+      # Wait for package installation to fully complete
+      log "Waiting for package installation to complete..."
+      sleep 5
+      
+      # Refresh environment and verify compilers
+      log "Refreshing environment..."
+      export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      hash -r
+      
+      # Verify C compiler is available with retry logic
+      log "Verifying C compiler installation..."
+      for i in {1..5}; do
+          if command -v cc &> /dev/null && command -v gcc &> /dev/null; then
+              log "C compiler verification passed (attempt $i)"
+              break
+          else
+              log "C compiler not found, retrying... (attempt $i/5)"
+              sleep 2
+              hash -r
+          fi
+      done
+      
+      # Final verification
+      if ! command -v cc &> /dev/null; then
+          log "ERROR: C compiler (cc) not found after installation"
+          exit 1
+      fi
+      
+      if ! command -v gcc &> /dev/null; then
+          log "ERROR: GCC compiler not found after installation"
+          exit 1
+      fi
+      
+      # Create completion marker for other scripts
+      log "Creating startup completion marker..."
+      touch /var/log/client-startup-complete
+      
+      # Final verification that everything is working
+      log "Performing final system verification..."
+      if command -v cc &> /dev/null && command -v gcc &> /dev/null; then
+          log "Final verification: Compilers are available"
+      else
+          log "WARNING: Compilers may not be properly available"
+      fi
+      
       log "Package installation completed successfully!"
+      log "C compiler verification passed"
+      log "Startup script completed - ready for compilation"
       EOF
   }
 
@@ -163,8 +197,6 @@ resource "google_compute_instance" "client_node" {
     email  = google_service_account.client_service_account.email
     scopes = ["cloud-platform"]
   }
-
-  depends_on = [google_compute_disk.client_disk]
 
   labels = {
     environment = "testing"
