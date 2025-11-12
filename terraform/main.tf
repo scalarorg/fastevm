@@ -208,6 +208,10 @@ resource "google_compute_backend_service" "fastevm_backend" {
   }
 
   health_checks = [google_compute_health_check.fastevm_health_check.id]
+
+  depends_on = [
+    google_compute_instance_group.fastevm_group
+  ]
 }
 
 resource "google_compute_instance_group" "fastevm_group" {
@@ -225,6 +229,14 @@ resource "google_compute_instance_group" "fastevm_group" {
   named_port {
     name = "engine-api"
     port = 8551
+  }
+
+  depends_on = [
+    google_compute_instance.fastevm_nodes
+  ]
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 

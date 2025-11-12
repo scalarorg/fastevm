@@ -66,11 +66,15 @@ get_client_ip() {
 }
 
 # Function to extract RPC URLs from Terraform
+# Usage: extract_rpc_urls [internal|external]
+# Default: external (public IPs)
 extract_rpc_urls() {
+    local ip_type="${1:-external}"  # Default to external if not specified
     local terraform_cmd=$(find_terraform)
     
     log_info "Extracting RPC URLs from main Terraform deployment..."
     log_info "Terraform directory: $PROJECT_ROOT"
+    log_info "Using IP type: $ip_type"
     
     # Change to main terraform directory to get node_endpoints
     if [ ! -d "$PROJECT_ROOT" ]; then
@@ -101,13 +105,51 @@ extract_rpc_urls() {
         exit 1
     fi
     
-    # Extract RPC URLs using http_rpc (which uses external/public IPs)
-    local rpc_url1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].http_rpc // empty' 2>/dev/null)
-    local rpc_url2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].http_rpc // empty' 2>/dev/null)
-    local rpc_url3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].http_rpc // empty' 2>/dev/null)
-    local rpc_url4=$(echo "$node_endpoints_output" | jq -r '.["node-4"].http_rpc // empty' 2>/dev/null)
+    # Extract IPs based on type
+    local ip1=""
+    local ip2=""
+    local ip3=""
+    local ip4=""
     
-    # Extract external IPs for logging
+    if [ "$ip_type" = "internal" ]; then
+        # Use internal IPs
+        ip1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].internal_ip // empty' 2>/dev/null)
+        ip2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].internal_ip // empty' 2>/dev/null)
+        ip3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].internal_ip // empty' 2>/dev/null)
+        ip4=$(echo "$node_endpoints_output" | jq -r '.["node-4"].internal_ip // empty' 2>/dev/null)
+        
+        # Build RPC URLs with internal IPs
+        local rpc_url1="http://${ip1}:8545"
+        local rpc_url2="http://${ip2}:8545"
+        local rpc_url3="http://${ip3}:8545"
+        local rpc_url4="http://${ip4}:8545"
+    else
+        # Use external IPs (default behavior)
+        ip1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].external_ip // empty' 2>/dev/null)
+        ip2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].external_ip // empty' 2>/dev/null)
+        ip3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].external_ip // empty' 2>/dev/null)
+        ip4=$(echo "$node_endpoints_output" | jq -r '.["node-4"].external_ip // empty' 2>/dev/null)
+        
+        # Use http_rpc which already has the format (or build it)
+        rpc_url1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].http_rpc // empty' 2>/dev/null)
+        rpc_url2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].http_rpc // empty' 2>/dev/null)
+        rpc_url3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].http_rpc // empty' 2>/dev/null)
+        rpc_url4=$(echo "$node_endpoints_output" | jq -r '.["node-4"].http_rpc // empty' 2>/dev/null)
+        
+        # Fallback to building URLs if http_rpc is not available
+        if [ -z "$rpc_url1" ] || [ "$rpc_url1" = "null" ]; then
+            rpc_url1="http://${ip1}:8545"
+            rpc_url2="http://${ip2}:8545"
+            rpc_url3="http://${ip3}:8545"
+            rpc_url4="http://${ip4}:8545"
+        fi
+    fi
+    
+    # Extract both IP types for logging
+    local internal_ip1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].internal_ip // empty' 2>/dev/null)
+    local internal_ip2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].internal_ip // empty' 2>/dev/null)
+    local internal_ip3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].internal_ip // empty' 2>/dev/null)
+    local internal_ip4=$(echo "$node_endpoints_output" | jq -r '.["node-4"].internal_ip // empty' 2>/dev/null)
     local external_ip1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].external_ip // empty' 2>/dev/null)
     local external_ip2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].external_ip // empty' 2>/dev/null)
     local external_ip3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].external_ip // empty' 2>/dev/null)
@@ -125,11 +167,19 @@ extract_rpc_urls() {
         exit 1
     fi
     
-    log_success "RPC URLs extracted successfully (using public IPs):"
-    log_info "  RPC_URL1=$rpc_url1 (external IP: $external_ip1)"
-    log_info "  RPC_URL2=$rpc_url2 (external IP: $external_ip2)"
-    log_info "  RPC_URL3=$rpc_url3 (external IP: $external_ip3)"
-    log_info "  RPC_URL4=$rpc_url4 (external IP: $external_ip4)"
+    if [ "$ip_type" = "internal" ]; then
+        log_success "RPC URLs extracted successfully (using internal IPs):"
+        log_info "  RPC_URL1=$rpc_url1 (internal IP: $ip1, external IP: $external_ip1)"
+        log_info "  RPC_URL2=$rpc_url2 (internal IP: $ip2, external IP: $external_ip2)"
+        log_info "  RPC_URL3=$rpc_url3 (internal IP: $ip3, external IP: $external_ip3)"
+        log_info "  RPC_URL4=$rpc_url4 (internal IP: $ip4, external IP: $external_ip4)"
+    else
+        log_success "RPC URLs extracted successfully (using external/public IPs):"
+        log_info "  RPC_URL1=$rpc_url1 (external IP: $ip1, internal IP: $internal_ip1)"
+        log_info "  RPC_URL2=$rpc_url2 (external IP: $ip2, internal IP: $internal_ip2)"
+        log_info "  RPC_URL3=$rpc_url3 (external IP: $ip3, internal IP: $internal_ip3)"
+        log_info "  RPC_URL4=$rpc_url4 (external IP: $ip4, internal IP: $internal_ip4)"
+    fi
     
     # Export RPC URLs
     export RPC_URL1="$rpc_url1"
@@ -171,20 +221,33 @@ get_balance() {
 }
 
 # Function to run test with RPC URLs
+# Usage: run_test <client_ip> <command> <success_msg> <error_msg> [ip_type]
+# ip_type: "internal" or "external" (default: "external")
 run_test() {
     local client_ip="$1"
     local command="$2"
     local success_msg="$3"
     local error_msg="$4"
+    local ip_type="${5:-external}"  # Default to external IPs
     
     log_info "Running test: $command"
     
-    # Extract RPC URLs
-    extract_rpc_urls
+    # Extract RPC URLs with specified IP type
+    extract_rpc_urls "$ip_type"
     
     # Run the test
+    # When using internal IPs, don't use ENV_FILE to avoid conflicts with public IPs in the file
+    local env_file_export=""
+    if [ "$ip_type" = "internal" ]; then
+        # Don't set ENV_FILE when using internal IPs - rely on environment variables only
+        env_file_export=""
+    else
+        # Use ENV_FILE when using external IPs (default behavior)
+        env_file_export="ENV_FILE='/home/ubuntu/fastevm.env'"
+    fi
+    
     local exit_code=0
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "cd /home/ubuntu && export RPC_URL1='$RPC_URL1' RPC_URL2='$RPC_URL2' RPC_URL3='$RPC_URL3' RPC_URL4='$RPC_URL4' ENV_FILE='/home/ubuntu/fastevm.env' && $command" 2>/dev/null || exit_code=$?
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "cd /home/ubuntu && export RPC_URL1='$RPC_URL1' RPC_URL2='$RPC_URL2' RPC_URL3='$RPC_URL3' RPC_URL4='$RPC_URL4' $env_file_export && $command" 2>/dev/null || exit_code=$?
     
     # Check if the command was successful (exit code 0) or timed out (exit code 124)
     if [ $exit_code -eq 0 ] || [ $exit_code -eq 124 ]; then
@@ -203,6 +266,7 @@ run_scan_test() {
     local counter="$3"
     local success_msg="$4"
     local error_msg="$5"
+    local ip_type="${6:-external}"  # Default to external IPs for run-scan
     
     local command="fastevm-test scan"
     log_info "Running scan test with START_NUMBER=$start_number COUNTER=$counter"
@@ -217,12 +281,22 @@ run_scan_test() {
         exit 1
     fi
     
-    # Extract RPC URLs
-    extract_rpc_urls
+    # Extract RPC URLs with specified IP type
+    extract_rpc_urls "$ip_type"
     
     # Run the scan test
+    # When using internal IPs, don't use ENV_FILE to avoid conflicts with public IPs in the file
+    local env_file_export=""
+    if [ "$ip_type" = "internal" ]; then
+        # Don't set ENV_FILE when using internal IPs - rely on environment variables only
+        env_file_export=""
+    else
+        # Use ENV_FILE when using external IPs (default behavior)
+        env_file_export="ENV_FILE='/home/ubuntu/fastevm.env'"
+    fi
+    
     local exit_code=0
-    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "cd /home/ubuntu && export RPC_URL1='$RPC_URL1' RPC_URL2='$RPC_URL2' RPC_URL3='$RPC_URL3' RPC_URL4='$RPC_URL4' BLOCK_NUMBER=$start_number ENV_FILE='/home/ubuntu/fastevm.env' && $command --start $start_number --count $counter" 2>/dev/null || exit_code=$?
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "cd /home/ubuntu && export RPC_URL1='$RPC_URL1' RPC_URL2='$RPC_URL2' RPC_URL3='$RPC_URL3' RPC_URL4='$RPC_URL4' BLOCK_NUMBER=$start_number $env_file_export && $command --start $start_number --count $counter" 2>/dev/null || exit_code=$?
     
     # Check if the command was successful (exit code 0) or timed out (exit code 124)
     if [ $exit_code -eq 0 ] || [ $exit_code -eq 124 ]; then
@@ -320,8 +394,8 @@ run_auto_test() {
     
     log_info "Starting automated test sequence on $client_ip..."
     
-    # Extract RPC URLs
-    extract_rpc_urls
+    # Extract RPC URLs using internal IPs (since client node is on same network)
+    extract_rpc_urls "internal"
     
     # Verify all RPC endpoints are accessible before proceeding
     verify_rpc_endpoints "$client_ip"
@@ -333,15 +407,15 @@ run_auto_test() {
     # Get balance
     get_balance "$client_ip" "$RPC_URL1" "0x07076387734b5b0a2c81d3a84a892fa5e89cdc76"
     
-    # Run batch transaction test
-    run_test "$client_ip" "fastevm-test batch" "Batch transaction test completed" "❌ Batch transaction test failed"
+    # Run batch transaction test (using internal IPs)
+    run_test "$client_ip" "fastevm-test batch" "Batch transaction test completed" "❌ Batch transaction test failed" "internal"
     
     # Wait for transactions to be processed
     log_info "Waiting $test_sleep_duration seconds for transactions to be processed..."
     sleep "$test_sleep_duration"
     
-    # Run final block scan test
-    run_scan_test "$client_ip" "$start_block" "200" "Final block scan test completed" "⚠️ Final block scan test had issues"
+    # Run final block scan test (using internal IPs, same as auto-test)
+    run_scan_test "$client_ip" "$start_block" "200" "Final block scan test completed" "⚠️ Final block scan test had issues" "internal"
     
     log_success "🎉 Automated test sequence completed!"
 }
@@ -384,7 +458,7 @@ main() {
             local client_ip=$(get_client_ip)
             local start_number="$1"
             local counter="$2"
-            extract_rpc_urls
+            extract_rpc_urls "external"  # run-scan-direct uses external IPs
             ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "cd /home/ubuntu && export RPC_URL1='$RPC_URL1' RPC_URL2='$RPC_URL2' RPC_URL3='$RPC_URL3' RPC_URL4='$RPC_URL4' ENV_FILE='/home/ubuntu/fastevm.env' && fastevm-test scan $(if [ -n "$start_number" ]; then echo "--start $start_number"; fi) $(if [ -n "$counter" ]; then echo "--count $counter"; fi)" 2>/dev/null
             ;;
         "auto-test")

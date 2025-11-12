@@ -196,6 +196,44 @@ if [ -f "/opt/fastevm-binaries/fastevm-test" ]; then
 else
     log "No pre-built binary found, building from source..."
     
+    # Ensure build tools are installed before installing Rust
+    log "Installing build tools (build-essential, gcc, make, etc.)..."
+    export DEBIAN_FRONTEND=noninteractive
+    sudo apt-get update -y > /dev/null 2>&1
+    sudo apt-get install -y \
+        build-essential \
+        gcc \
+        g++ \
+        make \
+        pkg-config \
+        libssl-dev \
+        curl \
+        git \
+        ca-certificates \
+        > /dev/null 2>&1
+    
+    # Refresh command cache and verify C compiler is available
+    log "Refreshing command cache..."
+    hash -r
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    
+    log "Verifying C compiler installation..."
+    # Retry verification with a short delay
+    for i in {1..3}; do
+        if command -v cc &> /dev/null || command -v gcc &> /dev/null; then
+            log "C compiler verified: $(which cc 2>/dev/null || which gcc 2>/dev/null)"
+            break
+        else
+            if [ $i -eq 3 ]; then
+                log "ERROR: C compiler (cc/gcc) not found after installation"
+                exit 1
+            fi
+            log "C compiler not found, retrying... (attempt $i/3)"
+            sleep 2
+            hash -r
+        fi
+    done
+    
     # Install Rust
     log "Installing Rust system-wide..."
     export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.cargo/bin"

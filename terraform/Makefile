@@ -82,6 +82,12 @@ plan: init validate ## Plan Terraform deployment
 	terraform plan $(TF_VARS) -out=tfplan
 	@echo "Plan created successfully!"
 
+# Refresh Terraform state
+refresh: ## Refresh Terraform state to sync with GCP
+	@echo "Refreshing Terraform state..."
+	terraform refresh $(TF_VARS)
+	@echo "State refreshed successfully!"
+
 # Apply deployment
 apply: plan ## Apply Terraform deployment
 	@echo "Applying Terraform deployment..."
