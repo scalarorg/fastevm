@@ -19,9 +19,10 @@ pub async fn get_nonces(
     let mut nonces = BTreeMap::new();
     // Get the initial nonce for the sender address
     println!(
-        "Getting nonces from {} for addresses {} to {}",
+        "📡 Getting nonces from RPC URL: {} for addresses {} to {}",
         url, start_idx, end_idx
     );
+    println!("   Connecting to: {}", url);
     let provider = match ProviderBuilder::new().connect(url).await {
         Ok(provider) => provider,
         Err(e) => {

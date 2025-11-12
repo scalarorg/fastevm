@@ -35,9 +35,7 @@ secp256k1 = { workspace = true }
 reth-network-peers = { workspace = true }
 reth-basic-payload-builder = { workspace = true }
 reth-chainspec = { workspace = true }
-reth-cli-runner = { workspace = true }
 reth-ethereum = { workspace = true }
-reth-ethereum-cli = { workspace = true, default-features = false }
 reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
 reth-evm = { workspace = true }
@@ -48,16 +46,20 @@ reth-rpc-layer = { workspace = true }
 reth-transaction-pool = { workspace = true }
 reth-tracing = { workspace = true }
 reth-db-api = { workspace = true }
-reth-metrics = { workspace = true }
 reth-node-api = { workspace = true }
 reth-node-builder = { workspace = true }
-reth-node-core = { workspace = true }
-reth-libmdbx = { workspace = true }
 reth-db = { workspace = true, features = ["mdbx"] }
 reth-payload-builder = { workspace = true }
-reth-fs-util = { workspace = true }
-reth-storage-errors = { workspace = true }
 revm = { workspace = true }
+
+# Customize execution
+# reth-cli-runner = { workspace = true }
+# reth-ethereum-cli = { workspace = true, default-features = false }
+# reth-fs-util = { workspace = true }
+# reth-libmdbx = { workspace = true }
+# reth-metrics = { workspace = true }
+# reth-node-core = { workspace = true }
+# reth-storage-errors = { workspace = true }
 
 # Additional dependencies for RPC and caching
 jsonrpsee = { workspace = true }

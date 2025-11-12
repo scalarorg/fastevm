@@ -34,25 +34,48 @@ fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c7
 fastcrypto-tbls = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9" }
 fastcrypto-zkp = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9", package = "fastcrypto-zkp" }
 
-# Core dependencies
+# Alloy dependencies
+# eth
 alloy-chains = { version = "0.2.5", default-features = false }
-alloy-consensus = { version = "1.0.37", default-features = false }
-alloy-eips = { version = "1.0.37", default-features = false }
-alloy-evm = { version = "0.21.0", default-features = false }
-alloy-network = { version = "1.0.37", default-features = false }
-alloy-rpc-types-engine = { version = "1.0.37", default-features = false }
-alloy-rpc-types-eth = { version = "1.0.37", default-features = false }
-alloy-signer = { version = "1.0.37", default-features = false }
-alloy-signer-local = { version = "1.0.37", default-features = false }
-alloy-serde = { version = "1.0.37", default-features = false }
-alloy-hardforks = "0.3.5"
-alloy-provider = { version = "1.0.37", features = ["reqwest"], default-features = false }
+alloy-dyn-abi = "1.3.1"
+alloy-eip2124 = { version = "0.2.0", default-features = false }
+alloy-evm = { package = "alloy-evm", git = "https://github.com/Galxe/alloy-evm", branch = "v0.21.3-gravity", default-features = false }
 alloy-primitives = { version = "1.3.1", default-features = false, features = ["map-foldhash"] }
 alloy-rlp = { version = "0.3.10", default-features = false, features = ["core-net"] }
+alloy-sol-macro = "1.3.1"
+alloy-sol-types = { version = "1.3.1", default-features = false }
+alloy-trie = { version = "0.9.1", default-features = false }
+
+alloy-hardforks = "0.3.5"
+
+alloy-consensus = { version = "1.0.37", default-features = false }
+alloy-contract = { version = "1.0.37", default-features = false }
+alloy-eips = { version = "1.0.37", default-features = false }
+alloy-genesis = { version = "1.0.37", default-features = false }
+alloy-json-rpc = { version = "1.0.37", default-features = false }
+alloy-network = { version = "1.0.37", default-features = false }
+alloy-network-primitives = { version = "1.0.37", default-features = false }
+alloy-provider = { version = "1.0.37", features = ["reqwest"], default-features = false }
+alloy-pubsub = { version = "1.0.37", default-features = false }
+alloy-rpc-client = { version = "1.0.37", default-features = false }
+alloy-rpc-types = { version = "1.0.37", features = ["eth"], default-features = false }
+alloy-rpc-types-admin = { version = "1.0.37", default-features = false }
+alloy-rpc-types-anvil = { version = "1.0.37", default-features = false }
+alloy-rpc-types-beacon = { version = "1.0.37", default-features = false }
+alloy-rpc-types-debug = { version = "1.0.37", default-features = false }
+alloy-rpc-types-engine = { version = "1.0.37", default-features = false }
+alloy-rpc-types-eth = { version = "1.0.37", default-features = false }
+alloy-rpc-types-mev = { version = "1.0.37", default-features = false }
+alloy-rpc-types-trace = { version = "1.0.37", default-features = false }
+alloy-rpc-types-txpool = { version = "1.0.37", default-features = false }
+alloy-serde = { version = "1.0.37", default-features = false }
+alloy-signer = { version = "1.0.37", default-features = false }
+alloy-signer-local = { version = "1.0.37", default-features = false }
 alloy-transport = { version = "1.0.37" }
 alloy-transport-http = { version = "1.0.37", features = ["reqwest-rustls-tls"], default-features = false }
 alloy-transport-ipc = { version = "1.0.37", default-features = false }
 alloy-transport-ws = { version = "1.0.37", default-features = false }
+
 
 # Reth (using gravity-reth)
 reth-basic-payload-builder = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-basic-payload-builder" }
@@ -87,7 +110,20 @@ reth-network-peers = { git = "https://github.com/Galxe/gravity-reth.git", branch
 # reth-tokio-util = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-tokio-util" }
 reth-transaction-pool = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-transaction-pool" }
 
-revm = { version = "28.0.1", default-features = false }
+# revm
+revm = { package = "revm", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-bytecode = { package = "revm-bytecode", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-database = { package = "revm-database", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-state = { package = "revm-state", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-primitives = { package = "revm-primitives", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-interpreter = { package = "revm-interpreter", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-inspector = { package = "revm-inspector", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-context = { package = "revm-context", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-context-interface = { package = "revm-context-interface", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-database-interface = { package = "revm-database-interface", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+op-revm = { package = "op-revm", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
+revm-inspectors = { package = "revm-inspectors", git = "https://github.com/Galxe/revm-inspectors", branch = "v0.30.0-gravity" }
+
 walkdir = "2.3.3"
 anyhow = "1.0"
 auto_impl = "1"
@@ -162,7 +198,6 @@ derive_more = { version = "2", default-features = false, features = ["full"] }
 # Testing dependencies
 tokio-test = "0.4"
 criterion = { package = "codspeed-criterion-compat", version = "2.7" }
-alloy-genesis = { version = "1.0.37", default-features = false }
 rayon = "1.7"
 
 # misc-testing
@@ -185,10 +220,10 @@ opt-level = 1
 
 [patch."https://github.com/paradigmxyz/reth.git"]
 # Override upstream reth CLI crates with local copies in `reth/`
-reth-cli = { path = "reth/cli/cli" }
-reth-cli-commands = { path = "reth/cli/commands" }
-reth-db = { path = "reth/storage/db" }
-reth-engine-tree = { path = "reth/engine/tree" }
-reth-ethereum-cli = { path = "reth/ethereum/cli" }
-reth-trie-db = { path = "reth/trie/db" }
-reth-trie-parallel = { path = "reth/trie/parallel" }
+# reth-cli = { path = "reth/cli/cli" }
+# reth-cli-commands = { path = "reth/cli/commands" }
+# reth-db = { path = "reth/storage/db" }
+# reth-engine-tree = { path = "reth/engine/tree" }
+# reth-ethereum-cli = { path = "reth/ethereum/cli" }
+# reth-trie-db = { path = "reth/trie/db" }
+# reth-trie-parallel = { path = "reth/trie/parallel" }

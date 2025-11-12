@@ -70,15 +70,48 @@ extract_rpc_urls() {
     local terraform_cmd=$(find_terraform)
     
     log_info "Extracting RPC URLs from main Terraform deployment..."
+    log_info "Terraform directory: $PROJECT_ROOT"
     
     # Change to main terraform directory to get node_endpoints
+    if [ ! -d "$PROJECT_ROOT" ]; then
+        log_error "Terraform directory not found: $PROJECT_ROOT"
+        log_error "Make sure you're running this from the terraform/client-node directory"
+        exit 1
+    fi
+    
     cd "$PROJECT_ROOT"
     
+    # Check if terraform state exists
+    if [ ! -f "terraform.tfstate" ] && [ ! -f ".terraform/terraform.tfstate" ]; then
+        log_error "Terraform state not found in $PROJECT_ROOT"
+        log_error "Make sure the main FastEVM deployment is completed first"
+        cd "$CLIENT_NODE_DIR"
+        exit 1
+    fi
+    
     # Extract RPC URLs from main deployment
-    local rpc_url1=$($terraform_cmd output -json node_endpoints | jq -r '.["node-1"].http_rpc')
-    local rpc_url2=$($terraform_cmd output -json node_endpoints | jq -r '.["node-2"].http_rpc')
-    local rpc_url3=$($terraform_cmd output -json node_endpoints | jq -r '.["node-3"].http_rpc')
-    local rpc_url4=$($terraform_cmd output -json node_endpoints | jq -r '.["node-4"].http_rpc')
+    log_info "Running: $terraform_cmd output -json node_endpoints"
+    local node_endpoints_output=$($terraform_cmd output -json node_endpoints 2>&1)
+    local terraform_exit_code=$?
+    
+    if [ $terraform_exit_code -ne 0 ]; then
+        log_error "Failed to get terraform output: $node_endpoints_output"
+        log_error "Make sure the main FastEVM deployment is completed and terraform is initialized"
+        cd "$CLIENT_NODE_DIR"
+        exit 1
+    fi
+    
+    # Extract RPC URLs using http_rpc (which uses external/public IPs)
+    local rpc_url1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].http_rpc // empty' 2>/dev/null)
+    local rpc_url2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].http_rpc // empty' 2>/dev/null)
+    local rpc_url3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].http_rpc // empty' 2>/dev/null)
+    local rpc_url4=$(echo "$node_endpoints_output" | jq -r '.["node-4"].http_rpc // empty' 2>/dev/null)
+    
+    # Extract external IPs for logging
+    local external_ip1=$(echo "$node_endpoints_output" | jq -r '.["node-1"].external_ip // empty' 2>/dev/null)
+    local external_ip2=$(echo "$node_endpoints_output" | jq -r '.["node-2"].external_ip // empty' 2>/dev/null)
+    local external_ip3=$(echo "$node_endpoints_output" | jq -r '.["node-3"].external_ip // empty' 2>/dev/null)
+    local external_ip4=$(echo "$node_endpoints_output" | jq -r '.["node-4"].external_ip // empty' 2>/dev/null)
     
     # Change back to client-node directory
     cd "$CLIENT_NODE_DIR"
@@ -86,11 +119,17 @@ extract_rpc_urls() {
     # Validate RPC URLs
     if [ "$rpc_url1" = "null" ] || [ -z "$rpc_url1" ]; then
         log_error "Failed to extract RPC URLs from main Terraform deployment"
+        log_error "Terraform output: $node_endpoints_output"
         log_error "Make sure the main FastEVM deployment is completed first"
+        log_error "Try running: cd $PROJECT_ROOT && terraform output node_endpoints"
         exit 1
     fi
     
-    log_success "RPC URLs extracted: $rpc_url1, $rpc_url2, $rpc_url3, $rpc_url4"
+    log_success "RPC URLs extracted successfully (using public IPs):"
+    log_info "  RPC_URL1=$rpc_url1 (external IP: $external_ip1)"
+    log_info "  RPC_URL2=$rpc_url2 (external IP: $external_ip2)"
+    log_info "  RPC_URL3=$rpc_url3 (external IP: $external_ip3)"
+    log_info "  RPC_URL4=$rpc_url4 (external IP: $external_ip4)"
     
     # Export RPC URLs
     export RPC_URL1="$rpc_url1"
@@ -195,6 +234,85 @@ run_scan_test() {
     fi
 }
 
+# Function to check RPC endpoint health
+check_rpc_health() {
+    local client_ip="$1"
+    local rpc_url="$2"
+    local endpoint_name="$3"
+    
+    log_info "Checking health of $endpoint_name: $rpc_url"
+    
+    local response=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "curl -s -m 5 -X POST -H 'Content-Type: application/json' --data '{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}' $rpc_url 2>/dev/null" 2>/dev/null)
+    
+    if echo "$response" | jq -e '.result' >/dev/null 2>&1; then
+        log_success "$endpoint_name is healthy"
+        return 0
+    else
+        log_error "$endpoint_name is not responding: $response"
+        return 1
+    fi
+}
+
+# Function to verify all RPC endpoints are accessible
+verify_rpc_endpoints() {
+    local client_ip="$1"
+    
+    log_info "Verifying all RPC endpoints are accessible..."
+    
+    local all_healthy=true
+    local healthy_count=0
+    local failed_endpoints=""
+    
+    if check_rpc_health "$client_ip" "$RPC_URL1" "RPC_URL1"; then
+        healthy_count=$((healthy_count + 1))
+    else
+        all_healthy=false
+        failed_endpoints="$failed_endpoints RPC_URL1"
+    fi
+    
+    if check_rpc_health "$client_ip" "$RPC_URL2" "RPC_URL2"; then
+        healthy_count=$((healthy_count + 1))
+    else
+        all_healthy=false
+        failed_endpoints="$failed_endpoints RPC_URL2"
+    fi
+    
+    if check_rpc_health "$client_ip" "$RPC_URL3" "RPC_URL3"; then
+        healthy_count=$((healthy_count + 1))
+    else
+        all_healthy=false
+        failed_endpoints="$failed_endpoints RPC_URL3"
+    fi
+    
+    if check_rpc_health "$client_ip" "$RPC_URL4" "RPC_URL4"; then
+        healthy_count=$((healthy_count + 1))
+    else
+        all_healthy=false
+        failed_endpoints="$failed_endpoints RPC_URL4"
+    fi
+    
+    if [ $healthy_count -eq 0 ]; then
+        log_error "❌ No RPC endpoints are accessible. Cannot proceed with tests."
+        log_error "Please verify:"
+        log_error "  1. Main FastEVM deployment is running"
+        log_error "  2. RPC services are started on all nodes"
+        log_error "  3. Firewall rules allow access from client node"
+        log_error "  4. RPC URLs are correct:"
+        log_error "     RPC_URL1=$RPC_URL1"
+        log_error "     RPC_URL2=$RPC_URL2"
+        log_error "     RPC_URL3=$RPC_URL3"
+        log_error "     RPC_URL4=$RPC_URL4"
+        exit 1
+    elif [ "$all_healthy" = false ]; then
+        log_warning "⚠️  Only $healthy_count out of 4 RPC endpoints are accessible"
+        log_warning "Failed endpoints:$failed_endpoints"
+        log_warning "Tests may fail or have reduced performance"
+        log_warning "Consider checking the unreachable endpoints"
+    else
+        log_success "✅ All 4 RPC endpoints are accessible"
+    fi
+}
+
 # Function to run auto-test sequence
 run_auto_test() {
     local client_ip="$1"
@@ -204,6 +322,9 @@ run_auto_test() {
     
     # Extract RPC URLs
     extract_rpc_urls
+    
+    # Verify all RPC endpoints are accessible before proceeding
+    verify_rpc_endpoints "$client_ip"
     
     # Get current block number
     local start_block=$(get_current_block "$client_ip" "$RPC_URL1")

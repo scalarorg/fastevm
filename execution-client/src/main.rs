@@ -11,15 +11,12 @@
 // alloy_consensus is used in transaction_listener.rs
 use alloy_consensus as _;
 mod consensus;
-mod db;
-mod evm;
 mod payload;
 mod pool;
 mod rpc;
 
 mod types;
 use clap::Parser;
-use evm::*;
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_transaction_pool::blobstore::DiskFileBlobStore;
 use tokio::sync::mpsc::unbounded_channel;
@@ -34,13 +31,14 @@ use crate::{
 };
 use reth_ethereum::{
     chainspec::ChainSpecProvider,
+    cli::{chainspec::EthereumChainSpecParser, Cli},
     node::{
         builder::{components::BasicPayloadServiceBuilder, NodeBuilder, NodeHandle},
         node::EthereumAddOns,
         EthereumNode,
     },
 };
-use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
+// use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
 use reth_extension::{MysticetiConsensusApiServer, MysticetiTransactionApiServer};
 use std::sync::Arc;
 use tracing::{error, info};
@@ -118,7 +116,6 @@ fn main() -> eyre::Result<()> {
                 // use default ethereum components but use our custom payload builder
                 .with_components(
                     EthereumNode::components()
-                        .executor(ScalarExecutorBuilder::default())
                         .payload(mysticeti_payload_builder)
                         .pool(
                             MysticetiPoolBuilder::<_, DiskFileBlobStore>::default()

@@ -32,6 +32,7 @@ CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
 
 # Default values for account generation
 DEFAULT_ACCOUNT_NUMBER=100000
+DEFAULT_ACCOUNT_NUMBER=100000
 DEFAULT_ACCOUNT_AMOUNT="1000000000000000000000"  # 1000 ETH in wei
 DEFAULT_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -39,6 +40,11 @@ DEFAULT_MNEMONIC="abandon abandon abandon abandon abandon abandon abandon abando
 ACCOUNT_COUNT="$DEFAULT_ACCOUNT_NUMBER"
 ACCOUNT_AMOUNT="$DEFAULT_ACCOUNT_AMOUNT"
 MNEMONIC="$DEFAULT_MNEMONIC"
+
+# Execution node configuration (can be overridden by environment variables)
+COMMITTED_SUBDAGS_PER_BLOCK="${COMMITTED_SUBDAGS_PER_BLOCK:-30}"
+BLOCK_BUILD_INTERVAL_MS="${BLOCK_BUILD_INTERVAL_MS:-100}"
+
 # Port configuration
 EXECUTION_PORTS=(8545 8544 8543 8542)  # HTTP RPC ports
 EXECUTION_PORTS_WS=(8546 8548 8550 8552)  # WebSocket RPC ports
@@ -413,6 +419,10 @@ start_execution_node() {
     if [ "$node_index" = "1" ]; then
         debug_level="-vvvv"
     fi
+    local debug_level="-vvv"
+    if [ "$node_index" = "1" ]; then
+        debug_level="-vvvv"
+    fi
     for i in {1..4}; do
         if [ $i -ne $node_index ]; then
             local peer_hex_file="$DATA_DIR/execution$i/p2p/secret.hex"
@@ -470,6 +480,11 @@ start_execution_node() {
     cmd_args+=(
         "--builder.gaslimit" "240000000"
     )
+    # Disable gravity-specific features to prevent panic when pipe execution event bus is not initialized
+    cmd_args+=(
+        "--gravity.disable-pipe-execution"
+    )
+    
     # Add remaining arguments
     cmd_args+=(
         "--authrpc.addr" "0.0.0.0"
@@ -482,13 +497,14 @@ start_execution_node() {
         "--p2p-secret-key" "$data_dir/p2p/secret.key"
         "--bootnodes" "$bootnodes"
         "--enable-tx-subscription"
-        "--committed-subdags-per-block" "10"
-        "--block-build-interval-ms" "100"
+        "--committed-subdags-per-block" "$COMMITTED_SUBDAGS_PER_BLOCK"
+        "--block-build-interval-ms" "$BLOCK_BUILD_INTERVAL_MS"
         "$debug_level"
-    )    
+    )
     
     # Start the node
     nohup "$EXECUTION_CLIENT" "${cmd_args[@]}" > "$log_file" 2>&1 &
+
 
     local pid=$!
     echo $pid > "$pid_file"
@@ -612,9 +628,11 @@ stop_network() {
     # Stop mysticeti process
     # List of ports you want to kill
     PORTS=(26657 26658 26659 26660 8545 8544 8543 8542)
+    PORTS=(26657 26658 26659 26660 8545 8544 8543 8542)
 
     for PORT in "${PORTS[@]}"; do
         PID=$(lsof -ti :$PORT)
+        echo "Killing process $PID on port $PORT"
         echo "Killing process $PID on port $PORT"
         if [ -n "$PID" ]; then
             echo "🔪 Killing process $PID on port $PORT"
