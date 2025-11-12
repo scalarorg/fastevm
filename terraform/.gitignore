@@ -1,13 +1,12 @@
 # Binary backups
 binaries/
-
+.terraform/
 # Terraform files
 *.tfstate
 *.tfstate.*
 *.tfplan
 *.tfplan.*
 tfplan
-.terraform/
 .terraform.lock.hcl
 # terraform.tfvars
 !terraform.tfvars.example
@@ -351,10 +350,6 @@ vault/
 
 # Nomad
 nomad/
-
-# Terraform Cloud
-.terraformrc
-terraform.rc
 
 # Local state files
 terraform.tfstate.local

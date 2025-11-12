@@ -521,7 +521,8 @@ async fn send_batch_transfer_transactions(
     let mut rpc_clients = Vec::new();
 
     for (idx, rpc_url) in rpc_urls.iter().enumerate() {
-        println!("Connecting to RPC endpoint {}: {}", idx + 1, rpc_url);
+        println!("📡 Connecting to RPC endpoint {}: {}", idx + 1, rpc_url);
+        println!("   RPC URL: {}", rpc_url);
         match DirectRpcClient::new(rpc_url).await {
             Ok(client) => {
                 rpc_clients.push(client);
@@ -901,18 +902,85 @@ where
             let rpc_url: &String = &available_urls[provider_idx];
 
             let batch_len = tx_batch.len();
-            match rpc_client.batch_send_raw_transaction(tx_batch).await {
+
+            println!(
+                "📤 Worker {}: Sending batch {} ({} transactions) to provider {}: {}",
+                worker_id, batch_idx, batch_len, provider_idx, rpc_url
+            );
+
+            // Try sending with the assigned provider
+            match rpc_client
+                .batch_send_raw_transaction(tx_batch.clone())
+                .await
+            {
                 Ok(_) => {
                     successful_transactions += batch_len;
                     *rpc_usage_stats.entry(rpc_url.clone()).or_insert(0) += batch_len;
                 }
                 Err(e) => {
                     let error_msg = format!("{e:?}");
-                    println!(
-                        "❌ Worker {}: Batch {} failed for provider {}: {:?}",
-                        worker_id, batch_idx, provider_idx, error_msg
-                    );
-                    failed_transactions += batch_len;
+                    // Check if it's a connection error - if so, try other providers
+                    if error_msg.contains("Connection refused")
+                        || error_msg.contains("Connect")
+                        || error_msg.contains("connection")
+                    {
+                        println!(
+                            "⚠️  Worker {}: Batch {} failed for provider {} (connection error), trying other providers...",
+                            worker_id, batch_idx, provider_idx
+                        );
+
+                        // Try other providers in round-robin order
+                        let mut retry_success = false;
+                        for retry_idx in 0..rpc_clients.len() {
+                            if retry_idx == provider_idx {
+                                continue; // Skip the failed provider
+                            }
+
+                            let retry_client: &C = &rpc_clients[retry_idx];
+                            let retry_url: &String = &available_urls[retry_idx];
+
+                            println!(
+                                "🔄 Worker {}: Retrying batch {} with provider {}: {}",
+                                worker_id, batch_idx, retry_idx, retry_url
+                            );
+
+                            match retry_client
+                                .batch_send_raw_transaction(tx_batch.clone())
+                                .await
+                            {
+                                Ok(_) => {
+                                    successful_transactions += batch_len;
+                                    *rpc_usage_stats.entry(retry_url.clone()).or_insert(0) +=
+                                        batch_len;
+                                    println!(
+                                        "✅ Worker {}: Batch {} retried successfully with provider {}",
+                                        worker_id, batch_idx, retry_idx
+                                    );
+                                    retry_success = true;
+                                    break;
+                                }
+                                Err(_) => {
+                                    // Try next provider
+                                    continue;
+                                }
+                            }
+                        }
+
+                        if !retry_success {
+                            println!(
+                                "❌ Worker {}: Batch {} failed for provider {} and all retry attempts: {:?}",
+                                worker_id, batch_idx, provider_idx, error_msg
+                            );
+                            failed_transactions += batch_len;
+                        }
+                    } else {
+                        // Non-connection error, don't retry
+                        println!(
+                            "❌ Worker {}: Batch {} failed for provider {}: {:?}",
+                            worker_id, batch_idx, provider_idx, error_msg
+                        );
+                        failed_transactions += batch_len;
+                    }
                 }
             }
         }

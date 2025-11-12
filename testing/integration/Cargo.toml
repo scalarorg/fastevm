@@ -16,13 +16,11 @@ ef-tests = []
 asm-keccak = ["alloy-primitives/asm-keccak", "revm/asm-keccak"]
 
 [dependencies]
-
+reth-extension = { workspace = true }
 reth-chainspec = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-chainspec" }
-
 reth-ethereum-primitives = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-ethereum-primitives" }
 reth-primitives-traits = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-primitives-traits" }
 reth-consensus = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-consensus" }
-
 reth-db = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-db", features = ["mdbx", "test-utils", "disable-lock"] }
 reth-db-api= { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-db-api" }
 reth-db-common = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-db-common" }

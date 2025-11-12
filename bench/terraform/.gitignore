@@ -1,0 +1,6 @@
+terraform.tfstate
+terraform.tfstate.*
+.terraform/
+.terraform.lock.hcl
+gravity-deploy-key
+gravity-deploy-key.pub

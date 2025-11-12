@@ -169,6 +169,10 @@ impl DirectRpcClient {
         // Use the custom batchSendRawTransactionAsync method
         match self {
             DirectRpcClient::Http(client) => {
+                debug!(
+                    "Sending batch of {} transactions via HTTP RPC",
+                    transactions.len()
+                );
                 MysticetiTransactionApiClient::batch_send_raw_transaction_async(
                     client,
                     transactions.to_vec(),
@@ -176,6 +180,10 @@ impl DirectRpcClient {
                 .await?
             }
             DirectRpcClient::WebSocket(client) => {
+                debug!(
+                    "Sending batch of {} transactions via WebSocket RPC",
+                    transactions.len()
+                );
                 MysticetiTransactionApiClient::batch_send_raw_transaction_async(
                     client,
                     transactions.to_vec(),
