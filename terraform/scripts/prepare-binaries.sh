@@ -206,12 +206,33 @@ get_all_node_ips() {
     return 1
 }
 
+# Setup SSH key on build node for direct distribution
+setup_ssh_key_on_build_node() {
+    local build_node_ip="$1"
+    
+    log_info "Setting up SSH key on build node ($build_node_ip) for direct distribution..."
+    
+    # Create .ssh directory if it doesn't exist
+    ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$build_node_ip "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+    
+    # Copy SSH key to build node
+    scp $SSH_OPTS -i "$SSH_KEY_PATH" "$SSH_KEY_PATH" ubuntu@$build_node_ip:~/.ssh/fastevm-deploy-key
+    
+    # Set correct permissions on the key
+    ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$build_node_ip "chmod 600 ~/.ssh/fastevm-deploy-key"
+    
+    log_success "SSH key set up on build node"
+}
+
 # Distribute binaries from build node to all other nodes
 distribute_binaries() {
     local build_node_ip="$1"
     local all_nodes="$2"
     
     log_info "Distributing binaries from build node to all other nodes..."
+    
+    # Setup SSH key on build node first
+    setup_ssh_key_on_build_node "$build_node_ip"
     
     # First, install binaries on build node itself
     log_info "Installing binaries on build node ($build_node_ip)..."
