@@ -251,78 +251,12 @@ resource "null_resource" "wait_for_execution_ssh" {
   }
 }
 
-# Copy dev-node.sh script to execution node
-resource "null_resource" "copy_dev_node_script" {
-  depends_on = [null_resource.wait_for_execution_ssh]
-
-  provisioner "file" {
-    source      = "${path.module}/scripts/dev-node.sh"
-    destination = "/tmp/dev-node.sh"
-
-    connection {
-      type        = "ssh"
-      user        = var.ssh_user
-      private_key = tls_private_key.gravity_ssh.private_key_pem
-      host        = google_compute_instance.execution_node.network_interface[0].access_config[0].nat_ip
-    }
-  }
-
-  triggers = {
-    script_file = filemd5("${path.module}/scripts/dev-node.sh")
-    instance_id = google_compute_instance.execution_node.id
-  }
-}
-
-# Copy execution node setup script
-resource "null_resource" "copy_execution_setup_script" {
-  depends_on = [
-    null_resource.wait_for_execution_ssh,
-    null_resource.copy_dev_node_script
-  ]
-
-  provisioner "file" {
-    content     = local.execution_setup_script_content
-    destination = "/tmp/setup-execution-node.sh"
-
-    connection {
-      type        = "ssh"
-      user        = var.ssh_user
-      private_key = tls_private_key.gravity_ssh.private_key_pem
-      host        = google_compute_instance.execution_node.network_interface[0].access_config[0].nat_ip
-    }
-  }
-
-  triggers = {
-    script_content = sha256(local.execution_setup_script_content)
-    instance_id    = google_compute_instance.execution_node.id
-  }
-}
-
-# Execute execution node setup script
-resource "null_resource" "execute_execution_setup" {
-  depends_on = [null_resource.copy_execution_setup_script]
-
-  provisioner "remote-exec" {
-    inline = [
-      "chmod +x /tmp/setup-execution-node.sh",
-      "sudo mv /tmp/setup-execution-node.sh /opt/setup-execution-node.sh",
-      "sudo bash /opt/setup-execution-node.sh 2>&1 | tee -a /var/log/execution-node-setup.log || true",
-      "test -f /var/log/execution-node-setup-complete && exit 0 || exit 1"
-    ]
-
-    connection {
-      type        = "ssh"
-      user        = var.ssh_user
-      private_key = tls_private_key.gravity_ssh.private_key_pem
-      host        = google_compute_instance.execution_node.network_interface[0].access_config[0].nat_ip
-    }
-  }
-
-  triggers = {
-    script_content = sha256(local.execution_setup_script_content)
-    instance_id    = google_compute_instance.execution_node.id
-  }
-}
+# NOTE: Script copying and execution are now handled by deploy.sh
+# This allows for easier reruns without recreating infrastructure
+# The following resources have been moved to deploy.sh:
+# - copy_dev_node_script
+# - copy_execution_setup_script  
+# - execute_execution_setup
 
 # Wait for client node to be ready (SSH accessible)
 resource "null_resource" "wait_for_client_ssh" {
@@ -395,7 +329,7 @@ resource "null_resource" "copy_bench_config_template" {
 resource "null_resource" "copy_client_setup_script" {
   depends_on = [
     null_resource.wait_for_client_ssh,
-    null_resource.execute_execution_setup,
+    google_compute_instance.execution_node,
     null_resource.copy_dockerfile,
     null_resource.copy_bench_config_template
   ]

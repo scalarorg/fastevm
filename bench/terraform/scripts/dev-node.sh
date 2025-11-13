@@ -1,9 +1,10 @@
 #!/bin/bash
 
-# Gravity Reth Dev Node Startup Script
-# This script starts a single Gravity Reth dev node in dev mode
+# Gravity Reth Dev Node Management Script
+# This script manages node lifecycle: cleanup, data management, startup, and shutdown
+# System setup (packages, Rust, building) is handled by execution-node-setup.sh
+#
 # Dev mode automatically prefunds 20 accounts with 10,000 ETH each
-# 
 # The script also automatically funds the deployer account (0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266)
 # which is the first account from the Hardhat/Anvil default mnemonic.
 # This address corresponds to the private key used in bench_config.template for contract deployment.
@@ -129,6 +130,20 @@ check_prerequisites() {
 setup_directories() {
     log_info "Setting up directories..."
 
+    # Ensure the bench directory exists with correct permissions
+    local bench_dir="$PROJECT_ROOT/bench"
+    if [ ! -d "$bench_dir" ]; then
+        mkdir -p "$bench_dir"
+        # Try to set ownership if we have permissions (may fail if not root/sudo)
+        chown "$USER:$USER" "$bench_dir" 2>/dev/null || true
+    fi
+    
+    # Ensure we can write to the bench directory
+    if [ ! -w "$bench_dir" ]; then
+        log_error "Cannot write to $bench_dir. Please check permissions."
+        exit 1
+    fi
+
     mkdir -p "$DATA_DIR"
     mkdir -p "$LOGS_DIR"
     mkdir -p "$PIDS_DIR"
@@ -170,129 +185,99 @@ build_project() {
 
 # Generate JWT secret
 generate_jwt_secret() {
-    local data_dir="$1"
-    local jwt_file="$data_dir/jwt.hex"
-
+    local jwt_file="$1/jwt.hex"
+    mkdir -p "$(dirname "$jwt_file")"
     if [ ! -f "$jwt_file" ]; then
-        openssl rand -hex 32 | tr -d '\n' > "$jwt_file"
-        log_info "Generated JWT secret: $jwt_file"
+        log_info "Generating JWT secret at $jwt_file"
+        if ! openssl rand -hex 32 | tr -d '\n' > "$jwt_file" 2>/dev/null; then
+            log_error "Failed to generate JWT secret"
+            exit 1
+        fi
+        chmod 644 "$jwt_file" 2>/dev/null || true
+        if [ ! -f "$jwt_file" ]; then
+            log_error "JWT secret file not created at $jwt_file"
+            log_info "Directory contents: $(ls -la "$(dirname "$jwt_file")" 2>/dev/null || echo 'cannot list')"
+            exit 1
+        fi
+        log_success "JWT secret created successfully"
     else
-        log_info "JWT secret already exists: $jwt_file"
+        log_info "JWT secret already exists at $jwt_file"
     fi
+}
+
+# Cleanup: Kill processes and remove data directory
+cleanup_before_start() {
+    log_info "Cleaning up data and processes..."
+    
+    # Kill all reth processes
+    pkill -9 -f "reth" 2>/dev/null || true
+    fuser -k "$DATA_DIR" 2>/dev/null || true
+    
+    # Kill processes on ports
+    for port in "$HTTP_PORT" "$WS_PORT" "$ENGINE_PORT" "$P2P_PORT"; do
+        lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
+    done
+    
+    sleep 1
+    
+    # Remove data directory and logs
+    rm -rf "$DATA_DIR" "$LOGS_DIR/reth-node.log" 2>/dev/null || true
+    
+    # Recreate directories
+    mkdir -p "$LOGS_DIR" "$PIDS_DIR"
+    
+    log_success "Cleanup completed"
 }
 
 # Initialize node data
 init_node() {
     log_info "Initializing node data..."
-
-    # Generate JWT secret
+    mkdir -p "$DATA_DIR" "$LOGS_DIR" "$PIDS_DIR"
     generate_jwt_secret "$DATA_DIR"
-
     log_success "Node data initialized!"
 }
 
 # Start execution node
 start_execution_node() {
-    local log_file="$LOGS_DIR/reth-node.log"
-    local pid_file="$PIDS_DIR/reth-node.pid"
-
-    # Verify binary exists
-    if [ ! -f "$RETH_BIN" ]; then
-        log_error "Reth binary not found at $RETH_BIN"
-        log_info "Please build the project first or ensure the binary exists"
-        exit 1
-    fi
-
+    [ ! -f "$RETH_BIN" ] && { log_error "Reth binary not found at $RETH_BIN"; exit 1; }
+    
+    local jwt_file="$DATA_DIR/jwt.hex"
+    generate_jwt_secret "$DATA_DIR"
+    [ ! -f "$jwt_file" ] && { log_error "JWT secret file not found"; exit 1; }
+    
     log_info "Starting Gravity Reth node in dev mode..."
-    log_info "Dev mode prefunds 20 accounts with 10,000 ETH each"
     log_info "HTTP RPC: http://localhost:$HTTP_PORT"
-    if [ "$ENABLE_WS" = true ]; then
-        log_info "WebSocket RPC: ws://localhost:$WS_PORT"
-    fi
+    [ "$ENABLE_WS" = true ] && log_info "WebSocket RPC: ws://localhost:$WS_PORT"
     log_info "Engine API: http://localhost:$ENGINE_PORT"
-    log_info "P2P: localhost:$P2P_PORT"
-
+    
     # Build command arguments
     local cmd_args=(
-        "node"
-        "--dev"
-        "--datadir" "$DATA_DIR"
-        "--http"
-        "--http.api" "eth,net,web3,admin,debug"
-        "--http.addr" "0.0.0.0"
-        "--http.port" "$HTTP_PORT"
-        "--http.corsdomain" "*"
-    )
-
-    # Add WebSocket arguments if enabled
-    if [ "$ENABLE_WS" = true ]; then
-        cmd_args+=(
-            "--ws"
-            "--ws.api" "eth,net,web3,admin,debug"
-            "--ws.addr" "0.0.0.0"
-            "--ws.port" "$WS_PORT"
-            "--ws.origins" "*"
-        )
-    fi
-
-    # Add dev block time if specified
-    if [ -n "$DEV_BLOCK_TIME" ]; then
-        cmd_args+=(
-            "--dev.block-time" "$DEV_BLOCK_TIME"
-        )
-    fi
-
-    # Add dev block max transactions if specified
-    if [ -n "$DEV_BLOCK_MAX_TXNS" ]; then
-        cmd_args+=(
-            "--dev.block-max-transactions" "$DEV_BLOCK_MAX_TXNS"
-        )
-    fi
-
-    # Add engine API arguments
-    cmd_args+=(
-        "--authrpc.addr" "0.0.0.0"
-        "--authrpc.port" "$ENGINE_PORT"
-        "--authrpc.jwtsecret" "$DATA_DIR/jwt.hex"
-        "--rpc.max-connections" "10000"
-    )
-
-    # Add network arguments
-    cmd_args+=(
-        "--addr" "0.0.0.0"
-        "--port" "$P2P_PORT"
+        "node" "--dev" "--datadir" "$DATA_DIR"
+        "--http" "--http.api" "eth,net,web3,admin,debug"
+        "--http.addr" "0.0.0.0" "--http.port" "$HTTP_PORT" "--http.corsdomain" "*"
     )
     
+    [ "$ENABLE_WS" = true ] && cmd_args+=("--ws" "--ws.api" "eth,net,web3,admin,debug" "--ws.addr" "0.0.0.0" "--ws.port" "$WS_PORT" "--ws.origins" "*")
+    [ -n "$DEV_BLOCK_TIME" ] && cmd_args+=("--dev.block-time" "$DEV_BLOCK_TIME")
+    [ -n "$DEV_BLOCK_MAX_TXNS" ] && cmd_args+=("--dev.block-max-transactions" "$DEV_BLOCK_MAX_TXNS")
+    
     cmd_args+=(
-        "--txpool.max-new-txns" "102400"
-        "--txpool.max-account-slots" "102400"
-        "--txpool.max-pending-txns" "102400"
-        "--txpool.pending-max-count" "102400"
-        "--txpool.pending-max-size" "128"       
-        "--txpool.max-new-pending-txs-notifications" "102400"
-        "--txpool.queued-max-count" "102400"
-        "--txpool.queued-max-size" "128"
+        "--authrpc.addr" "0.0.0.0" "--authrpc.port" "$ENGINE_PORT" "--authrpc.jwtsecret" "$jwt_file"
+        "--rpc.max-connections" "10000" "--addr" "0.0.0.0" "--port" "$P2P_PORT"
+        "--txpool.max-new-txns" "102400" "--txpool.max-account-slots" "102400"
+        "--txpool.max-pending-txns" "102400" "--txpool.pending-max-count" "102400"
+        "--txpool.pending-max-size" "128" "--txpool.max-new-pending-txs-notifications" "102400"
+        "--txpool.queued-max-count" "102400" "--txpool.queued-max-size" "128"
+        "--gravity.disable-pipe-execution" "--gravity.disable-grevm"
     )
-    # Disable gravity-specific features for dev mode
-    # These features require additional setup that's not available in simple dev mode
-    cmd_args+=(
-        "--gravity.disable-pipe-execution"
-        "--gravity.disable-grevm"
-    )
-
-    # Start the node in foreground or background
+    
     if [ "$FOREGROUND" = true ]; then
-        log_info "Running in foreground mode (logs will appear in this terminal)"
-        log_info "Press Ctrl+C to stop the node"
-        echo
-        # Run in foreground
+        log_info "Running in foreground mode (Ctrl+C to stop)"
         "$RETH_BIN" "${cmd_args[@]}"
     else
-        # Start in background
-        nohup "$RETH_BIN" "${cmd_args[@]}" > "$log_file" 2>&1 &
-        local pid=$!
-        echo $pid > "$pid_file"
-        log_info "Gravity Reth node started (PID: $pid, Log: $log_file)"
+        nohup "$RETH_BIN" "${cmd_args[@]}" > "$LOGS_DIR/reth-node.log" 2>&1 &
+        echo $! > "$PIDS_DIR/reth-node.pid"
+        log_info "Node started (PID: $(cat "$PIDS_DIR/reth-node.pid"), Log: $LOGS_DIR/reth-node.log)"
     fi
 }
 
@@ -451,76 +436,57 @@ PYTHON_EOF
     fi
 }
 
+# Stop the node (used before starting to ensure clean state)
+stop_node_clean() {
+    [ -f "$PIDS_DIR/reth-node.pid" ] && kill "$(cat "$PIDS_DIR/reth-node.pid")" 2>/dev/null || true
+    for port in "$HTTP_PORT" "$WS_PORT" "$ENGINE_PORT" "$P2P_PORT"; do
+        lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
+    done
+    pkill -9 -f "reth" 2>/dev/null || true
+    rm -f "$PIDS_DIR/reth-node.pid"
+    sleep 1
+}
+
 # Start the dev node
 start_dev_node() {
     log_info "Starting Gravity Reth dev node..."
-
-    # Initialize node
+    log_info "Ensuring clean state (stopping any existing processes)..."
+    stop_node_clean
+    cleanup_before_start
     init_node
-
-    # Start execution node
+    log_info "Starting new node instance..."
     start_execution_node
-
-    # If running in foreground, the function will block and we won't reach here
-    if [ "$FOREGROUND" = true ]; then
-        return 0
-    fi
-
-    # Wait for execution node to be ready (background mode only)
+    
+    [ "$FOREGROUND" = true ] && return 0
+    
     wait_for_service "reth-node" "$HTTP_PORT" || {
-        log_error "Gravity Reth node failed to start"
+        log_error "Node failed to start"
         show_logs
         exit 1
     }
-
-    # Fund the deployer account after node is ready
+    
     fund_deployer_account
-
+    
     log_success "Gravity Reth dev node started successfully!"
     echo
     log_info "Node Information:"
     echo "  HTTP RPC: http://localhost:$HTTP_PORT"
-    if [ "$ENABLE_WS" = true ]; then
-        echo "  WebSocket RPC: ws://localhost:$WS_PORT"
-    fi
+    [ "$ENABLE_WS" = true ] && echo "  WebSocket RPC: ws://localhost:$WS_PORT"
     echo "  Engine API: http://localhost:$ENGINE_PORT"
     echo "  P2P Port: $P2P_PORT"
     echo "  Data Directory: $DATA_DIR"
     echo "  Logs: $LOGS_DIR/reth-node.log"
     echo
     log_info "Dev Mode: 20 accounts prefunded with 10,000 ETH each"
-    log_info "Mnemonic: test test test test test test test test test test test junk"
-    log_info "Deployer address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    log_info "Deployer: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
     echo
-    log_info "To view logs: $0 logs"
-    log_info "To stop: $0 stop"
+    log_info "To view logs: $0 logs | To stop: $0 stop"
 }
 
 # Stop the node
 stop_node() {
     log_info "Stopping Gravity Reth dev node..."
-
-    # Stop process from PID file
-    local pid_file="$PIDS_DIR/reth-node.pid"
-    if [ -f "$pid_file" ]; then
-        local pid=$(cat "$pid_file")
-        if kill "$pid" 2>/dev/null; then
-            log_info "Stopped reth node (PID: $pid)"
-        else
-            log_warning "Failed to stop reth node (PID: $pid)"
-        fi
-        rm -f "$pid_file"
-    fi
-
-    # Kill any process on the ports
-    for PORT in "$HTTP_PORT" "$WS_PORT" "$ENGINE_PORT" "$P2P_PORT"; do
-        PID=$(lsof -ti :$PORT 2>/dev/null)
-        if [ -n "$PID" ]; then
-            log_info "Killing process $PID on port $PORT"
-            kill -9 $PID 2>/dev/null || true
-        fi
-    done
-
+    stop_node_clean
     log_success "Node stopped!"
 }
 

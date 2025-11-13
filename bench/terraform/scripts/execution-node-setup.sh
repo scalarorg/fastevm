@@ -1,6 +1,7 @@
 #!/bin/bash
 # Execution Node Setup Script
-# This script clones gravity-reth, builds it, and runs dev-node.sh
+# This script handles system setup: packages, Rust installation, cloning, and building
+# Node management (startup, cleanup, data) is handled by dev-node.sh
 # This script is idempotent and can be re-run safely
 
 set -e
@@ -10,10 +11,24 @@ set -o pipefail
 log() {
     local message="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
     echo "$message"
-    echo "$message" >> /var/log/execution-node-setup.log
+    # Use sudo to write to log file if running as non-root
+    if [ "$EUID" -eq 0 ]; then
+        echo "$message" >> /var/log/execution-node-setup.log
+    else
+        echo "$message" | sudo tee -a /var/log/execution-node-setup.log > /dev/null
+    fi
 }
 
 log "Starting execution node setup..."
+
+# Ensure log file exists with proper permissions
+if [ "$EUID" -eq 0 ]; then
+    touch /var/log/execution-node-setup.log
+    chmod 644 /var/log/execution-node-setup.log
+else
+    sudo touch /var/log/execution-node-setup.log
+    sudo chmod 644 /var/log/execution-node-setup.log
+fi
 
 # Update system packages
 export DEBIAN_FRONTEND=noninteractive
@@ -270,115 +285,28 @@ if [ ! -f "$RETH_BIN" ]; then
 fi
 log "Build completed successfully"
 
-# Copy dev-node.sh to the bench folder
-# The script is copied from terraform/scripts/ by Terraform before this script runs
-DEV_NODE_SCRIPT="$GRAVITY_RETH_DIR/bench/dev-node.sh"
+# Ensure bench directory exists with correct ownership
+# Note: dev-node.sh is now copied by deploy.sh before this script runs
 mkdir -p "$GRAVITY_RETH_DIR/bench"
+chown -R ubuntu:ubuntu "$GRAVITY_RETH_DIR/bench" 2>/dev/null || true
+chmod 755 "$GRAVITY_RETH_DIR/bench" 2>/dev/null || true
 
-# Copy dev-node.sh from /tmp (where Terraform placed it) to the bench directory
-if [ -f "/tmp/dev-node.sh" ]; then
-    log "Copying dev-node.sh from Terraform scripts..."
-    cp /tmp/dev-node.sh "$DEV_NODE_SCRIPT"
-    chmod +x "$DEV_NODE_SCRIPT"
-    log "dev-node.sh copied successfully"
-elif [ -f "$GRAVITY_RETH_DIR/bench/dev-node.sh" ]; then
-    log "Found dev-node.sh in repository, using it"
-    chmod +x "$DEV_NODE_SCRIPT"
-else
-    log "WARNING: dev-node.sh not found, creating a simple fallback script"
-    # Fallback: create a simple wrapper that uses environment variables
-    cat > "$DEV_NODE_SCRIPT" << 'HEREDOC_EOF'
-#!/bin/bash
-# Simple dev-node.sh wrapper for gravity-reth
-
-set -e
-
-SCRIPT_DIR="$$(cd "$$(dirname "$${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$$(dirname "$$SCRIPT_DIR")"
-DATA_DIR="$$PROJECT_ROOT/bench/.dev-node-data"
-LOGS_DIR="$$PROJECT_ROOT/bench/.dev-node-logs"
-PIDS_DIR="$$PROJECT_ROOT/bench/.dev-node-pids"
-RETH_BIN="$$PROJECT_ROOT/target/release/reth"
-
-mkdir -p "$$DATA_DIR"
-mkdir -p "$$LOGS_DIR"
-mkdir -p "$$PIDS_DIR"
-
-# Set file descriptor limits to prevent "too many files open" errors
-ulimit -n 65536 2>/dev/null || true
-
-# Generate JWT secret if not exists
-JWT_FILE="$$DATA_DIR/jwt.hex"
-if [ ! -f "$$JWT_FILE" ]; then
-    openssl rand -hex 32 | tr -d '\n' > "$$JWT_FILE"
+# Verify dev-node.sh exists (should have been copied by deploy.sh)
+DEV_NODE_SCRIPT="$GRAVITY_RETH_DIR/bench/dev-node.sh"
+if [ ! -f "$DEV_NODE_SCRIPT" ]; then
+    log "ERROR: dev-node.sh not found at $DEV_NODE_SCRIPT"
+    log "Please ensure deploy.sh has copied the script before running execution-node-setup.sh"
+    exit 1
 fi
 
-# Start reth node in dev mode
-"$$RETH_BIN" node \
-    --dev \
-    --datadir "$$DATA_DIR" \
-    --http \
-    --http.api "eth,net,web3,admin,debug" \
-    --http.addr "0.0.0.0" \
-    --http.port "$${HTTP_PORT:-8545}" \
-    --http.corsdomain "*" \
-    --ws \
-    --ws.api "eth,net,web3,admin,debug" \
-    --ws.addr "0.0.0.0" \
-    --ws.port "$${WS_PORT:-8546}" \
-    --ws.origins "*" \
-    --authrpc.addr "0.0.0.0" \
-    --authrpc.port "$${ENGINE_PORT:-8551}" \
-    --authrpc.jwtsecret "$$JWT_FILE" \
-    --addr "0.0.0.0" \
-    --port "$${P2P_PORT:-30303}" \
-    > "$$LOGS_DIR/reth-node.log" 2>&1 &
-    
-echo $$! > "$$PIDS_DIR/reth-node.pid"
-echo "Reth node started with PID: $$(cat $$PIDS_DIR/reth-node.pid)"
-HEREDOC_EOF
-    chmod +x "$DEV_NODE_SCRIPT"
-fi
+# Ensure dev-node.sh has correct permissions
+chmod +x "$DEV_NODE_SCRIPT"
+chown ubuntu:ubuntu "$DEV_NODE_SCRIPT" 2>/dev/null || true
+log "dev-node.sh verified and ready"
 
-# Start the dev node in background
-log "Starting gravity-reth dev node..."
-cd "$GRAVITY_RETH_DIR"
-export HTTP_PORT=${http_port}
-export WS_PORT=${ws_port}
-export ENGINE_PORT=${engine_port}
-export P2P_PORT=${p2p_port}
-# Set file descriptor limits before starting the node
-ulimit -n 65536 2>/dev/null || true
-# Start as ubuntu user with proper limits
-if id ubuntu &>/dev/null 2>&1; then
-    sudo -u ubuntu bash -c "cd $GRAVITY_RETH_DIR && ulimit -n 65536 && bash $DEV_NODE_SCRIPT start" > /var/log/gravity-reth-startup.log 2>&1 &
-else
-    nohup bash "$DEV_NODE_SCRIPT" > /var/log/gravity-reth-startup.log 2>&1 &
-fi
-
-# Wait a bit for the node to start
-sleep 10
-
-# Check if the node is running
-log "Waiting for reth node to be ready..."
-NODE_READY=false
-for i in {1..30}; do
-    if curl -s "http://localhost:${http_port}" > /dev/null 2>&1; then
-        NODE_READY=true
-        break
-    fi
-    # Only log every 5th attempt to reduce verbosity
-    if [ $((i % 5)) -eq 0 ] || [ $i -eq 30 ]; then
-        log "Waiting for reth node... (attempt $${i}/30)"
-    fi
-    sleep 5
-done
-
-if [ "$NODE_READY" = "true" ]; then
-    log "Reth node is ready"
-else
-    log "WARNING: Reth node may not be fully ready, but setup will continue"
-fi
+# Note: Node startup is now handled by deploy.sh (step 4)
+# This script only prepares the environment (dependencies, build, etc.)
+log "Environment setup complete. Node will be started by deploy.sh"
 
 # Get the internal IP address
 INTERNAL_IP=$(curl -s http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip -H "Metadata-Flavor: Google" 2>/dev/null || echo "unknown")
