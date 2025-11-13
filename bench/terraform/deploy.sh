@@ -52,7 +52,7 @@ Commands:
   ssh-client        SSH to client node
   logs-execution    Show execution node logs (last 100 lines)
   logs-client       Show client node logs (last 100 lines)
-  rerun-execution   Re-run execution node setup script
+  rerun-execution   Re-run execution node setup and restart (cleanup + start)
   rerun-client      Re-run client node setup script
   all               Run: init, plan, apply, output (default)
 
@@ -75,7 +75,7 @@ Examples:
   $0 client            # Deploy client node only
   $0 ssh-execution      # SSH to execution node
   $0 ssh-client         # SSH to client node
-  $0 rerun-execution    # Re-run execution node setup script
+  $0 rerun-execution    # Re-run execution node setup and restart (cleanup + start)
   $0 rerun-client       # Re-run client node setup script
 
 EOF
@@ -128,6 +128,13 @@ cmd_apply() {
         terraform init
     fi
     
+    # Check if execution node already exists
+    local execution_exists=false
+    local output=$(terraform output -json execution_node_info 2>/dev/null || echo "")
+    if [ -n "$output" ] && [ "$output" != "null" ]; then
+        execution_exists=true
+    fi
+    
     if [ "$auto_approve" = "true" ]; then
         log_info "Applying Terraform configuration (auto-approve)..."
         terraform apply -auto-approve tfplan 2>/dev/null || terraform apply -auto-approve
@@ -140,6 +147,18 @@ cmd_apply() {
         fi
     fi
     log_success "Terraform configuration applied!"
+    
+    # After apply, check if execution node exists and run steps 2-4
+    local output_after=$(terraform output -json execution_node_info 2>/dev/null || echo "")
+    if [ -n "$output_after" ] && [ "$output_after" != "null" ]; then
+        log_info "Execution node exists, running steps 2-4 (copy scripts, setup, start)..."
+        # Wait a bit for SSH to be ready if it's a new node
+        if [ "$execution_exists" = "false" ]; then
+            log_info "Waiting for SSH to be ready..."
+            sleep 5
+        fi
+        cmd_restart_execution_internal
+    fi
 }
 
 # Destroy resources
@@ -259,7 +278,10 @@ cmd_deploy_execution() {
     
     cmd_init
     
-    # Resources needed for execution node
+    # Step 1: Create infrastructure with Terraform only
+    log_info "Step 1: Creating execution node infrastructure with Terraform..."
+    
+    # Resources needed for execution node (infrastructure only, no scripts)
     local targets=(
         "tls_private_key.gravity_ssh"
         "local_file.gravity_private_key"
@@ -272,9 +294,6 @@ cmd_deploy_execution() {
         "google_project_iam_binding.gravity_sa_binding"
         "google_compute_instance.execution_node"
         "null_resource.wait_for_execution_ssh"
-        "null_resource.copy_dev_node_script"
-        "null_resource.copy_execution_setup_script"
-        "null_resource.execute_execution_setup"
     )
     
     # Build target flags
@@ -283,15 +302,27 @@ cmd_deploy_execution() {
         target_flags="$target_flags -target=$target"
     done
     
-    log_info "Creating plan for execution node..."
+    log_info "Creating plan for execution node infrastructure..."
     terraform plan $target_flags -out=tfplan-execution
     
     if [ "$auto_approve" = "true" ]; then
-        log_info "Applying execution node configuration (auto-approve)..."
+        log_info "Applying execution node infrastructure (auto-approve)..."
         terraform apply -auto-approve tfplan-execution
     else
-        log_info "Applying execution node configuration..."
+        log_info "Applying execution node infrastructure..."
         terraform apply tfplan-execution
+    fi
+    
+    log_success "Step 1 completed: Infrastructure created!"
+    
+    # Wait a bit for SSH to be fully ready
+    log_info "Waiting for SSH to be ready..."
+    sleep 5
+    
+    # Steps 2-4: Copy scripts, execute setup, start dev node
+    if ! cmd_run_execution_steps; then
+        log_error "Failed to complete execution node setup"
+        exit 1
     fi
     
     log_success "Execution node deployment completed!"
@@ -309,6 +340,7 @@ cmd_deploy_client() {
     cmd_init
     
     # Resources needed for client node (includes shared resources)
+    # Note: execution node script resources removed - handled by deploy.sh now
     local targets=(
         "tls_private_key.gravity_ssh"
         "local_file.gravity_private_key"
@@ -321,9 +353,6 @@ cmd_deploy_client() {
         "google_project_iam_binding.gravity_sa_binding"
         "google_compute_instance.execution_node"
         "null_resource.wait_for_execution_ssh"
-        "null_resource.copy_dev_node_script"
-        "null_resource.copy_execution_setup_script"
-        "null_resource.execute_execution_setup"
         "google_compute_instance.client_node"
         "null_resource.wait_for_client_ssh"
         "null_resource.copy_client_setup_script"
@@ -435,15 +464,11 @@ cmd_ssh_client() {
     fi
 }
 
-# Re-run execution setup
+# Re-run execution setup and restart (starts from step 2)
 cmd_rerun_execution() {
-    log_info "Re-running execution node setup..."
-    if [ -f "run-setup.sh" ]; then
-        bash run-setup.sh execution
-    else
-        log_error "run-setup.sh not found"
-        exit 1
-    fi
+    log_info "Re-running execution node setup (steps 2-4)..."
+    cmd_run_execution_steps || exit 1
+    log_success "Execution node rerun completed successfully!"
 }
 
 # Re-run client setup
@@ -456,6 +481,82 @@ cmd_rerun_client() {
         exit 1
     fi
 }
+
+# Get execution node connection info (returns via global variables)
+get_execution_node_info() {
+    local ssh_key="gravity-deploy-key"
+    local output=$(terraform output -json execution_node_info 2>/dev/null || echo "")
+    
+    [ -z "$output" ] || [ "$output" = "null" ] && { log_error "Execution node not found. Run 'terraform apply' first."; return 1; }
+    
+    EXECUTION_NODE_IP=$(echo "$output" | grep -o '"external_ip":"[^"]*"' | cut -d'"' -f4)
+    EXECUTION_NODE_USER="ubuntu"
+    EXECUTION_NODE_SSH_KEY="$ssh_key"
+    
+    [ -z "$EXECUTION_NODE_IP" ] && { log_error "Could not extract execution node IP"; return 1; }
+    [ ! -f "$ssh_key" ] && { log_error "SSH key not found: $ssh_key"; return 1; }
+    
+    return 0
+}
+
+# Helper: Execute SSH command on execution node
+ssh_execution() {
+    local cmd="$1"
+    get_execution_node_info || return 1
+    ssh -i "$EXECUTION_NODE_SSH_KEY" -o StrictHostKeyChecking=no "$EXECUTION_NODE_USER@$EXECUTION_NODE_IP" "$cmd"
+}
+
+# Helper: Copy file to execution node
+scp_execution() {
+    local local_file="$1"
+    local remote_path="$2"
+    get_execution_node_info || return 1
+    scp -i "$EXECUTION_NODE_SSH_KEY" -o StrictHostKeyChecking=no "$local_file" "$EXECUTION_NODE_USER@$EXECUTION_NODE_IP:$remote_path" >/dev/null 2>&1
+}
+
+# Run steps 2-4: Copy scripts, execute setup, start dev node
+cmd_run_execution_steps() {
+    log_info "Running execution node steps 2-4..."
+    
+    # Step 2: Copy scripts
+    log_info "Step 2: Copying scripts to remote node..."
+    get_execution_node_info || return 1
+    
+    local dev_node_script="$SCRIPT_DIR/scripts/dev-node.sh"
+    local execution_setup_script="$SCRIPT_DIR/scripts/execution-node-setup.sh"
+    
+    [ ! -f "$dev_node_script" ] && { log_error "dev-node.sh not found"; return 1; }
+    [ ! -f "$execution_setup_script" ] && { log_error "execution-node-setup.sh not found"; return 1; }
+    
+    scp_execution "$dev_node_script" "/tmp/dev-node.sh" || { log_error "Failed to copy dev-node.sh"; return 1; }
+    scp_execution "$execution_setup_script" "/tmp/setup-execution-node.sh" || { log_error "Failed to copy execution-node-setup.sh"; return 1; }
+    
+    # Install scripts step by step
+    ssh_execution "mkdir -p /opt/gravity-reth/bench" || { log_error "Failed to create bench directory"; return 1; }
+    ssh_execution "cp /tmp/dev-node.sh /opt/gravity-reth/bench/dev-node.sh" || { log_error "Failed to copy dev-node.sh"; return 1; }
+    ssh_execution "chmod +x /opt/gravity-reth/bench/dev-node.sh /tmp/setup-execution-node.sh" || { log_error "Failed to set permissions"; return 1; }
+    ssh_execution "sudo mv /tmp/setup-execution-node.sh /opt/setup-execution-node.sh" || { log_error "Failed to move setup script"; return 1; }
+    log_success "Scripts copied"
+    
+    # Step 3: Execute setup
+    log_info "Step 3: Executing execution-node-setup.sh..."
+    ssh_execution "sudo bash /opt/setup-execution-node.sh 2>&1 | sudo tee -a /var/log/execution-node-setup.log" || { log_error "Setup script failed. Check /var/log/execution-node-setup.log"; return 1; }
+    ssh_execution "test -f /var/log/execution-node-setup-complete" || { log_error "Setup did not complete successfully"; return 1; }
+    log_success "Setup completed"
+    
+    # Step 4: Start dev node
+    log_info "Step 4: Starting dev node..."
+    ssh_execution "bash -c 'cd /opt/gravity-reth && bash bench/dev-node.sh start'" || { log_error "Failed to start dev node"; return 1; }
+    log_success "Dev node started"
+    
+    return 0
+}
+
+# Internal function to restart execution node (used by cmd_apply)
+cmd_restart_execution_internal() {
+    cmd_run_execution_steps
+}
+
 
 # Show execution node logs
 cmd_logs_execution() {
@@ -554,7 +655,7 @@ if [ "$VERBOSE" = "true" ]; then
 fi
 
 # Check for terraform.tfvars (except for destroy and help)
-if [ "$COMMAND" != "destroy" ] && [ "$COMMAND" != "ssh-execution" ] && [ "$COMMAND" != "ssh-client" ] && [ "$COMMAND" != "logs-execution" ] && [ "$COMMAND" != "logs-client" ] && [ "$COMMAND" != "rerun-execution" ] && [ "$COMMAND" != "rerun-client" ]; then
+if [ "$COMMAND" != "destroy" ] && [ "$COMMAND" != "ssh-execution" ] && [ "$COMMAND" != "ssh-client" ] && [ "$COMMAND" != "logs-execution" ] && [ "$COMMAND" != "logs-client" ] && [ "$COMMAND" != "rerun-execution" ] && [ "$COMMAND" != "rerun-client" ] && [ "$COMMAND" != "restart-execution" ]; then
     check_tfvars
 fi
 
@@ -599,7 +700,7 @@ case "$COMMAND" in
     logs-client)
         cmd_logs_client
         ;;
-    rerun-execution)
+    rerun-execution|restart-execution)
         cmd_rerun_execution
         ;;
     rerun-client)
