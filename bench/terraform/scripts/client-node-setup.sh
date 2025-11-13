@@ -131,25 +131,44 @@ fi
 # Clone gravity_bench repository
 log "Cloning gravity_bench repository..."
 GRAVITY_BENCH_DIR="/opt/gravity_bench"
+# Ensure /opt directory exists and has correct permissions
+if [ ! -d "/opt" ]; then
+    mkdir -p /opt
+fi
+# If directory exists, ensure it's owned by RUST_USER before operations
 if [ -d "$GRAVITY_BENCH_DIR" ]; then
-    log "Directory $GRAVITY_BENCH_DIR already exists, pulling latest changes..."
+    log "Directory $GRAVITY_BENCH_DIR already exists, ensuring ownership..."
+    chown -R "$RUST_USER:$RUST_USER" "$GRAVITY_BENCH_DIR" 2>/dev/null || true
+    log "Pulling latest changes..."
     cd "$GRAVITY_BENCH_DIR"
-    git pull --quiet > /dev/null 2>&1 || {
+    sudo -u "$RUST_USER" git pull --quiet > /dev/null 2>&1 || {
         log "WARNING: Failed to pull latest changes, continuing with existing code..."
     }
 else
     log "Cloning repository..."
-    git clone -b ${gravity_bench_branch} ${gravity_bench_repo} "$GRAVITY_BENCH_DIR" --quiet > /dev/null 2>&1
+    # Create parent directory with correct ownership
+    mkdir -p "$(dirname "$GRAVITY_BENCH_DIR")"
+    # Clone as RUST_USER to ensure correct ownership from the start
+    sudo -u "$RUST_USER" git clone -b ${gravity_bench_branch} ${gravity_bench_repo} "$GRAVITY_BENCH_DIR" --quiet > /dev/null 2>&1
     cd "$GRAVITY_BENCH_DIR"
     log "Repository cloned successfully"
 fi
+
+# Ensure the directory is owned by the target user (double-check)
+log "Verifying ownership of $GRAVITY_BENCH_DIR..."
+chown -R "$RUST_USER:$RUST_USER" "$GRAVITY_BENCH_DIR" 2>/dev/null || true
 
 # Set up Python virtual environment
 log "Setting up Python virtual environment..."
 VENV_DIR="/opt/gravity_bench/venv"
 if [ ! -d "$VENV_DIR" ]; then
     log "Creating Python virtual environment..."
-    python3 -m venv "$VENV_DIR"
+    # Create venv as RUST_USER to ensure correct ownership
+    sudo -u "$RUST_USER" python3 -m venv "$VENV_DIR"
+    chown -R "$RUST_USER:$RUST_USER" "$VENV_DIR" 2>/dev/null || true
+else
+    # Ensure existing venv has correct ownership
+    chown -R "$RUST_USER:$RUST_USER" "$VENV_DIR" 2>/dev/null || true
 fi
 
 # Activate virtual environment and add to PATH
@@ -170,12 +189,19 @@ fi
 log "Running setup.sh to download contracts and install npm packages..."
 if [ -f "$GRAVITY_BENCH_DIR/setup.sh" ]; then
     cd "$GRAVITY_BENCH_DIR"
-    # Ensure setup.sh is executable
+    # Ensure setup.sh is executable and owned by RUST_USER
     chmod +x "$GRAVITY_BENCH_DIR/setup.sh"
+    chown "$RUST_USER:$RUST_USER" "$GRAVITY_BENCH_DIR/setup.sh" 2>/dev/null || true
+    # Ensure all directories are owned by RUST_USER before running setup
+    chown -R "$RUST_USER:$RUST_USER" "$GRAVITY_BENCH_DIR" 2>/dev/null || true
     # Run setup.sh with the virtual environment's Python in PATH
     sudo -u "$RUST_USER" env PATH="$VENV_DIR/bin:$RUST_HOME/.cargo/bin:$PATH" bash "$GRAVITY_BENCH_DIR/setup.sh" > /var/log/gravity-bench-setup.log 2>&1 || {
         log "WARNING: setup.sh encountered errors, check /var/log/gravity-bench-setup.log"
+        log "Checking setup log for details..."
+        tail -50 /var/log/gravity-bench-setup.log 2>/dev/null || true
     }
+    # Ensure ownership is maintained after setup.sh runs
+    chown -R "$RUST_USER:$RUST_USER" "$GRAVITY_BENCH_DIR" 2>/dev/null || true
     log "setup.sh completed"
 else
     log "WARNING: setup.sh not found, skipping contract download and npm package installation"

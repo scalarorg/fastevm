@@ -35,13 +35,101 @@ check_root() {
 install_services() {
     log_info "Installing FastEVM systemd services..."
     
+    # Prepare all required directories and files with proper permissions
+    log_info "Preparing all required directories and files..."
+    
+    # Create all data directories
+    mkdir -p /data/execution
+    mkdir -p /data/consensus
+    mkdir -p /data/logs
+    mkdir -p /data/config
+    
+    # Create execution subdirectories
+    mkdir -p /data/execution/db
+    mkdir -p /data/execution/p2p
+    
+    # Set ownership for all directories
+    chown -R ubuntu:ubuntu /data/execution
+    chown -R ubuntu:ubuntu /data/consensus
+    chown -R ubuntu:ubuntu /data/logs
+    chown -R ubuntu:ubuntu /data/config
+    
+    # Create log files with proper permissions
+    touch /data/logs/fastevm-execution.log
+    touch /data/logs/fastevm-consensus.log
+    chown ubuntu:ubuntu /data/logs/*.log
+    chmod 664 /data/logs/*.log
+    
+    # Ensure JWT secret exists if not already present
+    if [ ! -f /data/execution/jwt.hex ]; then
+        openssl rand -hex 32 > /data/execution/jwt.hex
+        chown ubuntu:ubuntu /data/execution/jwt.hex
+        chmod 644 /data/execution/jwt.hex
+    fi
+    
+    # Ensure P2P secret key exists if not already present
+    if [ ! -f /data/execution/p2p/secret.key ]; then
+        openssl rand -hex 32 > /data/execution/p2p/secret.key
+        chown ubuntu:ubuntu /data/execution/p2p/secret.key
+        chmod 600 /data/execution/p2p/secret.key
+    fi
+    
+    log_success "All directories and files prepared with proper permissions"
+    
     # Create systemd service for execution client
     log_info "Creating fastevm-execution.service..."
     
-    # Ensure log file exists with proper permissions
+    # Create database initialization script
+    log_info "Creating database initialization script..."
+    tee /usr/local/bin/fastevm-init-db.sh > /dev/null << 'INITSCRIPT'
+#!/bin/bash
+# FastEVM Database Initialization Script
+# This script ensures the database is initialized before starting the service
+
+if [ ! -d /data/execution/db ] || [ -z "$(ls -A /data/execution/db 2>/dev/null)" ]; then
+    if [ -f /data/config/genesis.json ] && [ -f /usr/local/bin/fastevm-execution ]; then
+        /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json || true
+    fi
+fi
+INITSCRIPT
+    chmod +x /usr/local/bin/fastevm-init-db.sh
+    chown ubuntu:ubuntu /usr/local/bin/fastevm-init-db.sh
+    
+    # Prepare all required directories and files with proper permissions
+    log_info "Preparing all required directories and files..."
+    
+    # Create all data directories
+    mkdir -p /data/logs
+    mkdir -p /data/config
+    
+    # Create execution subdirectories
+    mkdir -p /data/execution/db
+    mkdir -p /data/execution/p2p
+    
+    # Set ownership for all directories
+    chown -R ubuntu:ubuntu /data
+    
+    # Create log files with proper permissions
     touch /data/logs/fastevm-execution.log
-    chown ubuntu:ubuntu /data/logs/fastevm-execution.log
-    chmod 644 /data/logs/fastevm-execution.log
+    touch /data/logs/fastevm-consensus.log
+    chown ubuntu:ubuntu /data/logs/*.log
+    chmod 664 /data/logs/*.log
+    
+    # Ensure JWT secret exists if not already present
+    if [ ! -f /data/execution/jwt.hex ]; then
+        openssl rand -hex 32 > /data/execution/jwt.hex
+        chown ubuntu:ubuntu /data/execution/jwt.hex
+        chmod 644 /data/execution/jwt.hex
+    fi
+    
+    # Ensure P2P secret key exists if not already present
+    if [ ! -f /data/execution/p2p/secret.key ]; then
+        openssl rand -hex 32 > /data/execution/p2p/secret.key
+        chown ubuntu:ubuntu /data/execution/p2p/secret.key
+        chmod 600 /data/execution/p2p/secret.key
+    fi
+    
+    log_success "All directories and files prepared with proper permissions"
     
     # Load environment variables from node.env file
     log_info "Loading environment variables from node.env file..."
@@ -71,6 +159,8 @@ Environment=HTTP_PORT=8545
 Environment=WS_PORT=8546
 Environment=ENGINE_PORT=8551
 Environment=P2P_PORT=30303
+# Ensure database is initialized before starting
+ExecStartPre=/usr/local/bin/fastevm-init-db.sh
 ExecStart=/usr/local/bin/fastevm-execution node \
     --chain /data/config/genesis.json \
     --datadir /data/execution \
@@ -94,6 +184,7 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --txpool.max-new-pending-txs-notifications 102400 \
     --txpool.queued-max-count 102400 \
     --txpool.queued-max-size 128 \
+    --gravity.disable-pipe-execution \
     --authrpc.addr 0.0.0.0 \
     --authrpc.port ${ENGINE_PORT} \
     --authrpc.jwtsecret /data/execution/jwt.hex \
@@ -119,11 +210,6 @@ EOF
     # Create systemd service for consensus client
     log_info "Creating fastevm-consensus.service..."
     
-    # Ensure log file exists with proper permissions
-    touch /data/logs/fastevm-consensus.log
-    chown ubuntu:ubuntu /data/logs/fastevm-consensus.log
-    chmod 644 /data/logs/fastevm-consensus.log
-    
     tee /etc/systemd/system/fastevm-consensus.service > /dev/null << 'EOF'
 [Unit]
 Description=FastEVM Consensus Client
@@ -134,7 +220,7 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/data
-ExecStart=/bin/bash -c '/usr/local/bin/fastevm-consensus start --config /data/config/node.yml >> /data/logs/fastevm-consensus.log 2>&1'
+ExecStart=/usr/local/bin/fastevm-consensus start --config /data/config/node.yml
 Restart=always
 RestartSec=10
 StandardOutput=append:/data/logs/fastevm-consensus.log
