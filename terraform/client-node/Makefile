@@ -283,12 +283,13 @@ setup: ## Run setup script on remote client node (bootstrap + configure)
 	@echo "🚀 Running setup script on client node..."
 	@$(GET_CLIENT_IP); \
 	echo "Executing setup script on $$CLIENT_IP..."; \
-	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && bash ~/client-config/setup.sh'; \
-	if [ $$? -eq 0 ]; then \
+	if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && bash ~/client-config/setup.sh'; then \
 		echo "✅ Setup script executed successfully"; \
 		echo "⏳ Waiting for setup to complete..."; \
 	else \
 		echo "❌ Setup script execution failed"; \
+		echo "📋 Checking setup log for errors..."; \
+		ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -50 /home/ubuntu/client-setup.log 2>/dev/null || echo "Log file not found"'; \
 		exit 1; \
 	fi
 

@@ -221,18 +221,49 @@ clean-database: ## Clean database on all nodes to fix genesis hash mismatch
 		fi; \
 		NODE_INDEX=0; \
 		for node_ip in $$NODE_IPS; do \
-			echo "Cleaning database on node $$NODE_INDEX ($$node_ip)..."; \
+			echo "Cleaning and re-initializing database on node $$NODE_INDEX ($$node_ip)..."; \
 			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-				-i fastevm-deploy-key ubuntu@$$node_ip "sudo systemctl stop fastevm-execution fastevm-consensus || true; sudo rm -rf /data/execution/db/*; sudo chown -R ubuntu:ubuntu /data/execution/db" & \
+				-i fastevm-deploy-key ubuntu@$$node_ip " \
+					echo 'Stopping services...'; \
+					sudo systemctl stop fastevm-execution fastevm-consensus || true; \
+					sleep 2; \
+					echo 'Removing database directory...'; \
+					sudo rm -rf /data/execution/db || true; \
+					echo 'Recreating database directory...'; \
+					sudo mkdir -p /data/execution/db; \
+					sudo chown -R ubuntu:ubuntu /data/execution/db; \
+					sudo chmod -R 755 /data/execution/db; \
+					if [ -f /data/config/genesis.json ] && [ -f /usr/local/bin/fastevm-execution ]; then \
+						echo 'Re-initializing database with genesis from /data/config/genesis.json...'; \
+						if /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json 2>&1; then \
+							echo 'Database initialized successfully'; \
+						else \
+							echo 'ERROR: Database initialization failed'; \
+							exit 1; \
+						fi; \
+					else \
+						echo 'ERROR: Genesis file or execution binary not found'; \
+						echo 'Genesis file exists: ' \$$([ -f /data/config/genesis.json ] && echo 'YES' || echo 'NO'); \
+						echo 'Execution binary exists: ' \$$([ -f /usr/local/bin/fastevm-execution ] && echo 'YES' || echo 'NO'); \
+						exit 1; \
+					fi \
+				" || echo "Failed to clean database on node $$NODE_INDEX ($$node_ip)" & \
 			NODE_INDEX=$$((NODE_INDEX + 1)); \
 		done; \
 		wait; \
-		echo "Database cleanup completed on all nodes!"; \
+		echo "Database cleanup and re-initialization completed on all nodes!"; \
 		echo "You can now restart services with: make restart"; \
 	else \
 		echo "No deployment info found. Run 'make apply' first."; \
 		exit 1; \
 	fi
+
+# Fix genesis hash mismatch (verify genesis + clean database)
+fix-genesis: compare-genesis clean-database ## Verify genesis consistency and fix database if needed
+	@echo "Genesis hash mismatch fix completed!"
+	@echo "Next steps:"
+	@echo "  1. Verify genesis files are consistent: make compare-genesis"
+	@echo "  2. Restart services: make restart"
 
 # Check node health
 health: ## Check health of all nodes
@@ -390,6 +421,82 @@ setup-node: ## Generate prefunded accounts on all nodes after binary distributio
 		exit 1; \
 	fi
 
+# Cleanup and restart services (stop services, clean logs and database, then start fresh)
+cleanup-and-restart-services: ## Stop services, clean logs and database, then start fresh services
+	@echo "Cleaning up and restarting FastEVM services on all nodes..."
+	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
+	@chmod 600 fastevm-deploy-key
+	@echo "Getting node IPs from Terraform output..."
+	@if [ -f "../deployment-info.json" ]; then \
+		NODE_IPS=$$(jq -r '.instance_external_ips.value[]' ../deployment-info.json 2>/dev/null || jq -r '.instance_ips.value[]' ../deployment-info.json 2>/dev/null); \
+		if [ -z "$$NODE_IPS" ]; then \
+			echo "Could not get node IPs from Terraform output"; \
+			exit 1; \
+		fi; \
+		NODE_COUNT=$$(echo "$$NODE_IPS" | wc -l | tr -d ' '); \
+		echo "Found $$NODE_COUNT nodes"; \
+		echo "Stopping services on all nodes..."; \
+		for node_ip in $$NODE_IPS; do \
+			(echo "Stopping services on node $$node_ip..." && \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i fastevm-deploy-key ubuntu@$$node_ip 'sudo systemctl stop fastevm-execution fastevm-consensus 2>/dev/null || true' && \
+			echo "✓ Services stopped on $$node_ip") & \
+		done; \
+		wait; \
+		echo "Waiting for services to fully stop..."; \
+		sleep 5; \
+		echo "Cleaning logs and database on all nodes..."; \
+		for node_ip in $$NODE_IPS; do \
+			(echo "Cleaning data on node $$node_ip..." && \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i fastevm-deploy-key ubuntu@$$node_ip ' \
+				echo "Removing log files..."; \
+				sudo rm -rf /data/logs/*.log /data/logs/*.log.* 2>/dev/null || true; \
+				sudo mkdir -p /data/logs; \
+				sudo chown -R ubuntu:ubuntu /data/logs; \
+				echo "Removing database directories and static files..."; \
+				sudo rm -rf /data/execution/db /data/execution/db.* 2>/dev/null || true; \
+				sudo rm -rf /data/execution/static_files 2>/dev/null || true; \
+				sudo rm -rf /data/consensus/db /data/consensus/db.* 2>/dev/null || true; \
+				sudo mkdir -p /data/execution /data/consensus; \
+				sudo chown -R ubuntu:ubuntu /data/execution /data/consensus; \
+				echo "Re-initializing database with genesis..."; \
+				if [ -f /data/config/genesis.json ] && [ -f /usr/local/bin/fastevm-execution ]; then \
+					echo "Running: /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json"; \
+					if /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json > /tmp/init.log 2>&1; then \
+						echo "Database re-initialized successfully"; \
+						cat /tmp/init.log || true; \
+					else \
+						echo "ERROR: Database re-initialization failed. Log:"; \
+						cat /tmp/init.log || true; \
+						exit 1; \
+					fi; \
+				else \
+					echo "ERROR: Genesis file or execution binary not found"; \
+					echo "Genesis exists: $([ -f /data/config/genesis.json ] && echo YES || echo NO)"; \
+					echo "Binary exists: $([ -f /usr/local/bin/fastevm-execution ] && echo YES || echo NO)"; \
+					exit 1; \
+				fi; \
+				echo "✓ Data cleaned and re-initialized on $$node_ip" \
+			' && \
+			echo "✓ Cleanup completed on $$node_ip") & \
+		done; \
+		wait; \
+		echo "Cleanup and re-initialization completed on all nodes!"; \
+		echo "Starting fresh services on all nodes..."; \
+		for node_ip in $$NODE_IPS; do \
+			(echo "Starting services on node $$node_ip..." && \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i fastevm-deploy-key ubuntu@$$node_ip 'sudo bash /tmp/fastevm-config/service.sh start' && \
+			echo "✓ Services started on $$node_ip") & \
+		done; \
+		echo "Waiting for all services to start..."; \
+		wait; \
+		echo "Waiting for services to initialize..."; \
+		sleep 60; \
+		echo "Services started on all nodes!"; \
+	else \
+		echo "No deployment info found. Run 'make apply' first."; \
+		exit 1; \
+	fi
+
 # Start services on all nodes
 start-services: ## Start FastEVM services on all nodes
 	@echo "Starting FastEVM services on all nodes..."
@@ -421,14 +528,15 @@ start-services: ## Start FastEVM services on all nodes
 	fi
 
 # Complete deployment (infrastructure + configs + deploy + prepare binaries + generate accounts + start services)
-deploy-all: check-prereqs init apply prepare-configs deploy-configs prepare-binaries setup-node start-services verify-deployment ## Complete deployment: create infrastructure, prepare configs, deploy all nodes, prepare binaries, generate accounts, and start services
+# If nodes already exist, cleanup old data before starting fresh services
+deploy-all: check-prereqs init apply prepare-configs deploy-configs prepare-binaries setup-node cleanup-and-restart-services verify-deployment ## Complete deployment: create infrastructure, prepare configs, deploy all nodes, prepare binaries, generate accounts, cleanup old data, and start fresh services
 	@echo "=== FastEVM Complete Deployment Finished ==="
-	@echo "All nodes are configured and started..."
+	@echo "All nodes are configured and started with fresh data..."
 	@echo "Check status with: make status"
 	@echo "Test endpoints with: make test-rpc"
 
 # Deploy with existing infrastructure (skip Terraform)
-deploy-existing: check-prereqs prepare-configs deploy-configs prepare-binaries setup-node start-services verify-deployment ## Deploy to existing infrastructure (skip Terraform)
+deploy-existing: check-prereqs prepare-configs deploy-configs prepare-binaries setup-node cleanup-and-restart-services verify-deployment ## Deploy to existing infrastructure (skip Terraform, cleanup old data and start fresh)
 	@echo "=== Deployment to Existing Infrastructure Finished ==="
 
 # Destroy and redeploy

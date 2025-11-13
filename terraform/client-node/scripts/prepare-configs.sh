@@ -161,143 +161,24 @@ update_shared_env() {
     log_success "Shared fastevm.env updated with RPC URLs: $shared_env_file"
 }
 
-# Function to generate combined setup script
-generate_setup_script() {
-    log_info "Generating combined setup script..."
+# Function to verify setup script exists (use direct file instead of generating)
+copy_setup_script() {
+    log_info "Verifying setup script exists in config directory..."
     
-    cat > "${CONFIG_DIR}/setup.sh" << 'EOF'
-#!/bin/bash
-# FastEVM Client Node Setup Script (Bootstrap + Configuration)
-
-set -e
-
-PROJECT_DIR="/home/ubuntu/fastevm"
-CONFIG_DIR="/home/ubuntu/client-config"
-LOG_FILE="/home/ubuntu/client-setup.log"
-
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
-}
-
-log "Starting FastEVM client node setup..."
-
-# =============================================================================
-# BOOTSTRAP PHASE
-# =============================================================================
-log "=== BOOTSTRAP PHASE ==="
-
-# Check if binaries are available locally, otherwise build
-log "Checking for pre-built binaries..."
-if [ -f "/opt/fastevm-binaries/fastevm-test" ]; then
-    log "Pre-built binary found, installing..."
-    sudo cp /opt/fastevm-binaries/fastevm-test /usr/local/bin/
-    sudo chmod +x /usr/local/bin/fastevm-test
-    log "Binary installed from pre-built source"
-else
-    log "No pre-built binary found, building from source..."
+    # The setup.sh file should already be in the config directory
+    local setup_script="${CONFIG_DIR}/setup.sh"
     
-    # Ensure build tools are installed before installing Rust
-    log "Installing build tools (build-essential, gcc, make, etc.)..."
-    export DEBIAN_FRONTEND=noninteractive
-    sudo apt-get update -y > /dev/null 2>&1
-    sudo apt-get install -y \
-        build-essential \
-        gcc \
-        g++ \
-        make \
-        pkg-config \
-        libssl-dev \
-        curl \
-        git \
-        ca-certificates \
-        > /dev/null 2>&1
-    
-    # Refresh command cache and verify C compiler is available
-    log "Refreshing command cache..."
-    hash -r
-    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    
-    log "Verifying C compiler installation..."
-    # Retry verification with a short delay
-    for i in {1..3}; do
-        if command -v cc &> /dev/null || command -v gcc &> /dev/null; then
-            log "C compiler verified: $(which cc 2>/dev/null || which gcc 2>/dev/null)"
-            break
-        else
-            if [ $i -eq 3 ]; then
-                log "ERROR: C compiler (cc/gcc) not found after installation"
-                exit 1
-            fi
-            log "C compiler not found, retrying... (attempt $i/3)"
-            sleep 2
-            hash -r
-        fi
-    done
-    
-    # Install Rust
-    log "Installing Rust system-wide..."
-    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.cargo/bin"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    export PATH="$HOME/.cargo/bin:$PATH"
-    source $HOME/.cargo/env
-    rustup default stable
-
-    # Clone and build FastEVM
-    log "Cloning FastEVM repository..."
-    cd /home/ubuntu
-    if [ -d "$PROJECT_DIR" ]; then
-        cd "$PROJECT_DIR"
-        git fetch origin
-        git checkout "GITHUB_BRANCH_PLACEHOLDER"
-        git pull origin "GITHUB_BRANCH_PLACEHOLDER"
-    else
-        git clone -b "GITHUB_BRANCH_PLACEHOLDER" "GITHUB_REPO_PLACEHOLDER" "$PROJECT_DIR"
-    fi
-
-    # Build test binary
-    log "Building FastEVM test binary..."
-    cd "$PROJECT_DIR/testing/integration"
-    cargo build --release --bin fastevm-test
-
-    if [ ! -f "$PROJECT_DIR/target/release/fastevm-test" ]; then
-        log "ERROR: Build failed - binary not found"
+    if [ ! -f "$setup_script" ]; then
+        log_error "Setup script not found at: $setup_script"
+        log_error "Please create terraform/client-node/config/setup.sh with the setup script"
         exit 1
     fi
-
-    # Install binary
-    log "Installing test binary..."
-    sudo cp "$PROJECT_DIR/target/release/fastevm-test" /usr/local/bin/
-    sudo chmod +x /usr/local/bin/fastevm-test
     
-    # Backup the binary for future use
-    log "Backing up binary for future deployments..."
-    sudo mkdir -p /opt/fastevm-binaries
-    sudo cp "$PROJECT_DIR/target/release/fastevm-test" /opt/fastevm-binaries/
-    sudo chown ubuntu:ubuntu /opt/fastevm-binaries/fastevm-test
-    chmod +x /opt/fastevm-binaries/fastevm-test
-fi
-
-# Create completion markers
-touch /home/ubuntu/client-bootstrap-complete
-touch /home/ubuntu/client-config-complete
-
-log "FastEVM client node setup completed successfully!"
-log "Bootstrap and configuration phases completed"
-EOF
-
-    # Replace placeholders
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        sed -i "" "s|GITHUB_REPO_PLACEHOLDER|${GITHUB_REPO}|g" "${CONFIG_DIR}/setup.sh"
-        sed -i "" "s|GITHUB_BRANCH_PLACEHOLDER|${GITHUB_BRANCH}|g" "${CONFIG_DIR}/setup.sh"
-    else
-        # Linux
-        sed -i "s|GITHUB_REPO_PLACEHOLDER|${GITHUB_REPO}|g" "${CONFIG_DIR}/setup.sh"
-        sed -i "s|GITHUB_BRANCH_PLACEHOLDER|${GITHUB_BRANCH}|g" "${CONFIG_DIR}/setup.sh"
-    fi
-    chmod +x "${CONFIG_DIR}/setup.sh"
+    # Ensure the script is executable
+    chmod +x "$setup_script"
     
-    log_success "Combined setup script generated: ${CONFIG_DIR}/setup.sh"
+    log_success "Setup script verified and made executable: $setup_script"
+    log_success "You can edit the setup script directly at: $setup_script"
 }
 
 # Main execution
@@ -307,7 +188,7 @@ main() {
     detect_rpc_urls
     create_config_structure
     update_shared_env
-    generate_setup_script
+    copy_setup_script
     
     log_success "Client node configuration preparation completed!"
     log_success "Next steps: make deploy-configs → make setup"

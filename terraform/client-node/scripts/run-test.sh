@@ -236,15 +236,7 @@ run_test() {
     extract_rpc_urls "$ip_type"
     
     # Run the test
-    # When using internal IPs, don't use ENV_FILE to avoid conflicts with public IPs in the file
-    local env_file_export=""
-    if [ "$ip_type" = "internal" ]; then
-        # Don't set ENV_FILE when using internal IPs - rely on environment variables only
-        env_file_export=""
-    else
-        # Use ENV_FILE when using external IPs (default behavior)
-        env_file_export="ENV_FILE='/home/ubuntu/fastevm.env'"
-    fi
+    local env_file_export="ENV_FILE='/home/ubuntu/fastevm.env'"
     
     local exit_code=0
     ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "cd /home/ubuntu && export RPC_URL1='$RPC_URL1' RPC_URL2='$RPC_URL2' RPC_URL3='$RPC_URL3' RPC_URL4='$RPC_URL4' $env_file_export && $command" 2>/dev/null || exit_code=$?
@@ -283,17 +275,8 @@ run_scan_test() {
     
     # Extract RPC URLs with specified IP type
     extract_rpc_urls "$ip_type"
-    
-    # Run the scan test
-    # When using internal IPs, don't use ENV_FILE to avoid conflicts with public IPs in the file
-    local env_file_export=""
-    if [ "$ip_type" = "internal" ]; then
-        # Don't set ENV_FILE when using internal IPs - rely on environment variables only
-        env_file_export=""
-    else
-        # Use ENV_FILE when using external IPs (default behavior)
-        env_file_export="ENV_FILE='/home/ubuntu/fastevm.env'"
-    fi
+
+    local env_file_export="ENV_FILE='/home/ubuntu/fastevm.env'"
     
     local exit_code=0
     ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i "$CLIENT_NODE_DIR/client-deploy-key" "ubuntu@$client_ip" "cd /home/ubuntu && export RPC_URL1='$RPC_URL1' RPC_URL2='$RPC_URL2' RPC_URL3='$RPC_URL3' RPC_URL4='$RPC_URL4' BLOCK_NUMBER=$start_number $env_file_export && $command --start $start_number --count $counter" 2>/dev/null || exit_code=$?
