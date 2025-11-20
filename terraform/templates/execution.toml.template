@@ -25,7 +25,7 @@ addr = "0.0.0.0"
 jwtsecret = "/data/execution/jwt.hex"
 
 [chain]
-chain = "/data/config/genosis.json"
+chain = "/data/config/genesis.json"
 
 [datadir]
 path = "/data/execution"

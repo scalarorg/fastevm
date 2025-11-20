@@ -4,7 +4,7 @@ export WS_PORT=8546
 export ENGINE_PORT=8551
 export P2P_PORT=30303
 /usr/local/bin/fastevm-execution node \
-    --chain /data/config/genosis.json \
+    --chain /data/config/genesis.json \
     --datadir /data/execution \
     --engine.always-process-payload-attributes-on-canonical-head \
     --http \

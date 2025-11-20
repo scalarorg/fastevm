@@ -120,24 +120,8 @@ resource "google_project_iam_binding" "gravity_sa_binding" {
   ]
 }
 
-# Prepare execution node setup script with variables
-locals {
-  execution_setup_script_content = templatefile("${path.module}/scripts/execution-node-setup.sh", {
-    gravity_reth_repo   = var.gravity_reth_repo
-    gravity_reth_branch = var.gravity_reth_branch
-    http_port           = var.http_port
-    ws_port             = var.ws_port
-    engine_port         = var.engine_port
-    p2p_port            = var.p2p_port
-  })
-
-  client_setup_script_content = templatefile("${path.module}/scripts/client-node-setup.sh", {
-    gravity_bench_repo        = var.gravity_bench_repo
-    gravity_bench_branch      = var.gravity_bench_branch
-    execution_node_internal_ip = google_compute_instance.execution_node.network_interface[0].network_ip
-    http_port                 = var.http_port
-  })
-}
+# Note: execution-node-setup.sh is copied and executed remotely via deploy.sh
+# Template variables are substituted in deploy.sh before copying
 
 # Execution node instance
 resource "google_compute_instance" "execution_node" {
@@ -153,7 +137,7 @@ resource "google_compute_instance" "execution_node" {
     initialize_params {
       image = var.image
       size  = var.execution_disk_size
-      type  = "pd-standard"
+      type  = var.execution_disk_type
     }
   }
 
@@ -252,6 +236,10 @@ resource "null_resource" "wait_for_execution_ssh" {
 }
 
 # NOTE: Script copying and execution are now handled by deploy.sh
+# The following files are copied to execution node via deploy.sh:
+# - client-build.sh (with localhost configuration)
+# - client-benchmark.sh (with localhost configuration)
+# - bench_config.toml (with EXECUTION_NODE replaced with http://localhost:8545)
 # This allows for easier reruns without recreating infrastructure
 # The following resources have been moved to deploy.sh:
 # - copy_dev_node_script
@@ -325,18 +313,21 @@ resource "null_resource" "copy_bench_config_template" {
   }
 }
 
-# Copy client node setup script
-resource "null_resource" "copy_client_setup_script" {
+# ============================================================================
+# CLIENT SETUP: Setup VM and Install Rust
+# ============================================================================
+
+# Copy all client scripts to the remote node
+resource "null_resource" "copy_client_scripts" {
   depends_on = [
     null_resource.wait_for_client_ssh,
     google_compute_instance.execution_node,
-    null_resource.copy_dockerfile,
     null_resource.copy_bench_config_template
   ]
 
   provisioner "file" {
-    content     = local.client_setup_script_content
-    destination = "/tmp/setup-client-node.sh"
+    source      = "${path.module}/scripts/client-setup.sh"
+    destination = "/tmp/client-setup.sh"
 
     connection {
       type        = "ssh"
@@ -346,23 +337,36 @@ resource "null_resource" "copy_client_setup_script" {
     }
   }
 
-  triggers = {
-    script_content     = sha256(local.client_setup_script_content)
-    instance_id        = google_compute_instance.client_node.id
-    execution_node_ip  = google_compute_instance.execution_node.network_interface[0].network_ip
-  }
-}
+  provisioner "file" {
+    source      = "${path.module}/scripts/client-build.sh"
+    destination = "/tmp/client-build.sh"
 
-# Execute client node setup script
-resource "null_resource" "execute_client_setup" {
-  depends_on = [null_resource.copy_client_setup_script]
+    connection {
+      type        = "ssh"
+      user        = var.ssh_user
+      private_key = tls_private_key.gravity_ssh.private_key_pem
+      host        = google_compute_instance.client_node.network_interface[0].access_config[0].nat_ip
+    }
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/client-benchmark.sh"
+    destination = "/tmp/client-benchmark.sh"
+
+    connection {
+      type        = "ssh"
+      user        = var.ssh_user
+      private_key = tls_private_key.gravity_ssh.private_key_pem
+      host        = google_compute_instance.client_node.network_interface[0].access_config[0].nat_ip
+    }
+  }
 
   provisioner "remote-exec" {
     inline = [
-      "if [ -f /tmp/setup-client-node.sh ]; then chmod +x /tmp/setup-client-node.sh && sudo mv /tmp/setup-client-node.sh /opt/setup-client-node.sh; fi",
-      "if [ ! -f /opt/setup-client-node.sh ]; then echo 'ERROR: Setup script not found at /opt/setup-client-node.sh or /tmp/setup-client-node.sh' && exit 1; fi",
-      "sudo bash /opt/setup-client-node.sh 2>&1 | sudo tee -a /var/log/client-node-setup.log || true",
-      "test -f /var/log/client-node-setup-complete && exit 0 || exit 1"
+      "sudo mv /tmp/client-setup.sh /opt/client-setup.sh",
+      "sudo mv /tmp/client-build.sh /opt/client-build.sh",
+      "sudo mv /tmp/client-benchmark.sh /opt/client-benchmark.sh",
+      "sudo chmod +x /opt/client-setup.sh /opt/client-build.sh /opt/client-benchmark.sh"
     ]
 
     connection {
@@ -374,9 +378,46 @@ resource "null_resource" "execute_client_setup" {
   }
 
   triggers = {
-    script_content     = sha256(local.client_setup_script_content)
-    instance_id        = google_compute_instance.client_node.id
-    execution_node_ip  = google_compute_instance.execution_node.network_interface[0].network_ip
+    setup_script_file    = filemd5("${path.module}/scripts/client-setup.sh")
+    build_script_file    = filemd5("${path.module}/scripts/client-build.sh")
+    benchmark_script_file = filemd5("${path.module}/scripts/client-benchmark.sh")
+    instance_id          = google_compute_instance.client_node.id
+    execution_node_ip    = google_compute_instance.execution_node.network_interface[0].network_ip
   }
 }
+
+# Client setup scripts are copied to /opt/ on the client node
+# To execute manually via SSH:
+#   ssh -i gravity-deploy-key ${var.ssh_user}@<client_node_ip>
+#   sudo bash /opt/client-setup.sh
+#   sudo bash /opt/client-build.sh
+#   sudo bash /opt/client-benchmark.sh  # optional
+
+# ============================================================================
+# CLIENT SCRIPTS EXECUTION
+# ============================================================================
+# 
+# Scripts are copied to /opt/ on the client node. Execute them manually via SSH:
+# 
+# 1. SSH to client node:
+#    ssh -i gravity-deploy-key ${var.ssh_user}@<client_node_ip>
+# 
+# 2. Run setup (installs system packages and Rust):
+#    sudo bash /opt/client-setup.sh
+# 
+# 3. Run build (clones repo, builds client code, prepares config):
+#    sudo bash /opt/client-build.sh
+# 
+# 4. Run benchmark (optional):
+#    sudo bash /opt/client-benchmark.sh
+# 
+# Logs are available at:
+#    /var/log/client-setup.log
+#    /var/log/client-build.log
+#    /var/log/client-benchmark.log
+# 
+# Completion markers:
+#    /var/log/client-setup-complete
+#    /var/log/client-build-complete
+#    /var/log/client-benchmark-complete
 

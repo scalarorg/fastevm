@@ -21,6 +21,11 @@ use reth_payload_builder::PayloadId;
 use reth_provider::CanonStateSubscriptions;
 use reth_transaction_pool::TransactionPool;
 use std::{collections::VecDeque, sync::Arc};
+use tracing::warn;
+
+// Memory optimization: Maximum number of payloads to buffer
+// If payloads are built faster than executed, this prevents unbounded growth
+const MAX_PAYLOAD_BUFFER_SIZE: usize = 10;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info};
@@ -229,12 +234,28 @@ where
                 new_built_payload = built_payload_stream.next() => {
                     match new_built_payload {
                         Some(new_payload) => {
+                            let payload_number = new_payload.block().header().number();
+                            let tx_count = new_payload.block().body().transactions().len();
+
+                            // Check if buffer is getting too large
+                            if self.payload_buffer.len() >= MAX_PAYLOAD_BUFFER_SIZE {
+                                warn!(
+                                    "Payload buffer is full ({}), dropping oldest payload. This may indicate payload execution is slower than payload building.",
+                                    self.payload_buffer.len()
+                                );
+                                // Remove oldest payload to make room
+                                let _ = self.payload_buffer.pop_front();
+                            }
+
                             info!("New built payload with number {} and {} txs, put it to the buffer. Current payload buffer size: {:?}",
-                                new_payload.block().header().number(),
-                                new_payload.block().body().transactions().len(),
+                                payload_number,
+                                tx_count,
                                 self.payload_buffer.len() + 1);
+
+                            // Avoid cloning if possible - use Arc if payload supports it, otherwise clone only when needed
                             self.last_built_payload.replace(new_payload.clone());
                             self.payload_buffer.push_back(new_payload);
+
                             if self.last_processing_payload.is_none() {
                                 if let Some(payload) = self.payload_buffer.pop_front() {
                                     info!("Last processing payload is None. Execute next proposal block.");
@@ -298,6 +319,8 @@ where
                     //Try to build next proposal block
                     let last_built_block_number = self.last_built_payload.as_ref().map(|payload| payload.block().header().number()).unwrap_or_default();
                     if last_built_block_number == self.canonical_block_number || self.last_built_payload.is_none() {
+                        // Clone is necessary here as build_next_proposal_block needs ownership
+                        // The payload is large but this is only called periodically
                         match self.build_next_proposal_block(self.last_built_payload.clone()).await {
                             Ok(Some(payload_id)) => {
                                 debug!("Build next proposal block successfully. Pending payload id: {:?}", payload_id);

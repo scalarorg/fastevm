@@ -1,7 +1,7 @@
 # FastEVM Terraform Deployment Makefile
 # Easy management of GCP infrastructure deployment
 
-.PHONY: help init plan apply destroy status logs clean validate format check test extract-test-config build-test-command run-batch-test wait-for-transactions scan-blocks clean-test ssh-node ssh-copy ssh-node-gcloud
+.PHONY: help init plan apply destroy status logs clean validate format check test extract-test-config build-test-command run-batch-test wait-for-transactions scan-blocks clean-test ssh-node ssh-copy ssh-node-gcloud cleanup-services start-services
 
 # Load environment variables from fastevm.env if it exists
 ifneq (,$(wildcard fastevm.env))
@@ -22,6 +22,10 @@ help: ## Show this help message
 	@echo "  ZONE           - GCP Zone (default: us-central1-a)"
 	@echo "  NODE_COUNT     - Number of nodes (default: 4)"
 	@echo "  MACHINE_TYPE   - Instance type (default: e2-standard-4)"
+	@echo "  DISK_TYPE      - Disk type (default: pd-standard)"
+	@echo "                    Compatible with e2-standard-4: pd-standard, pd-ssd, pd-balanced"
+	@echo "                    Note: hyperdisk-balanced requires N1/N2/C2/C3/M1/M2/M3 machine types"
+	@echo "  Note: These can be set in fastevm.env file"
 	@echo ""
 	@echo "Test Environment Variables:"
 	@echo "  TEST_SENDER_COUNT        - Number of sender accounts (default: 100)"
@@ -36,6 +40,7 @@ REGION ?= us-central1
 ZONE ?= us-central1-a
 NODE_COUNT ?= 4
 MACHINE_TYPE ?= e2-standard-4
+DISK_TYPE ?= pd-standard
 PROJECT_NAME ?= fastevm
 GITHUB_REPO ?= https://github.com/scalarorg/fastevm.git
 GITHUB_BRANCH ?= main
@@ -46,6 +51,7 @@ TF_VARS = -var="project_id=$(PROJECT_ID)" \
           -var="zone=$(ZONE)" \
           -var="node_count=$(NODE_COUNT)" \
           -var="machine_type=$(MACHINE_TYPE)" \
+          -var="disk_type=$(DISK_TYPE)" \
           -var="project_name=$(PROJECT_NAME)" \
           -var="github_repo=$(GITHUB_REPO)" \
           -var="github_branch=$(GITHUB_BRANCH)"
@@ -77,9 +83,9 @@ format: ## Format Terraform files
 	@echo "Terraform files formatted!"
 
 # Plan deployment
-plan: init validate ## Plan Terraform deployment
+plan: init validate import-existing ## Plan Terraform deployment
 	@echo "Planning Terraform deployment..."
-	terraform plan $(TF_VARS) -out=tfplan
+	@terraform plan $(TF_VARS) -out=tfplan
 	@echo "Plan created successfully!"
 
 # Refresh Terraform state
@@ -88,10 +94,68 @@ refresh: ## Refresh Terraform state to sync with GCP
 	terraform refresh $(TF_VARS)
 	@echo "State refreshed successfully!"
 
+# Import existing instances into Terraform state
+import-existing: init ## Import existing GCP instances into Terraform state
+	@echo "Checking for existing instances and importing them..."
+	@IMPORTED=0; \
+	for i in $$(seq 0 $$(($(NODE_COUNT) - 1))); do \
+		instance_name="$(PROJECT_NAME)-node-$$(($$i + 1))"; \
+		instance_path="projects/$(PROJECT_ID)/zones/$(ZONE)/instances/$$instance_name"; \
+		terraform_resource="google_compute_instance.fastevm_nodes[$$i]"; \
+		\
+		echo ""; \
+		echo "=== Node $$i ($$instance_name) ==="; \
+		if terraform state show "$$terraform_resource" >/dev/null 2>&1; then \
+			echo "  ✓ Already tracked in Terraform state"; \
+			continue; \
+		fi; \
+		\
+		echo "  → Attempting to import $$instance_name..."; \
+		if terraform import "$$terraform_resource" "$$instance_path" >/tmp/import-$$i.log 2>&1; then \
+			echo "  ✓ Successfully imported $$instance_name"; \
+			IMPORTED=$$((IMPORTED + 1)); \
+		else \
+			IMPORT_ERR=$$(cat /tmp/import-$$i.log | tail -5); \
+			if echo "$$IMPORT_ERR" | grep -Eiq "not found|was not found|404"; then \
+				echo "  • Instance not found in GCP (yet). It will be created."; \
+			else \
+				echo "  ⚠ Failed to import $$instance_name"; \
+				echo "$$IMPORT_ERR"; \
+			fi; \
+		fi; \
+	done; \
+	if [ $$IMPORTED -gt 0 ]; then \
+		echo ""; \
+		echo "Imported $$IMPORTED instance(s). Refreshing Terraform state..."; \
+		terraform refresh -auto-approve $(TF_VARS) >/dev/null 2>&1 || true; \
+	fi
+	@echo "Import check completed!"
+
 # Apply deployment
 apply: plan ## Apply Terraform deployment
 	@echo "Applying Terraform deployment..."
-	terraform apply tfplan
+	@if ! terraform apply tfplan 2>&1 | tee /tmp/terraform-apply.log; then \
+		if grep -q "already exists" /tmp/terraform-apply.log; then \
+			echo ""; \
+			echo "Detected existing instances. Importing them and retrying..."; \
+			$(MAKE) import-existing || true; \
+			echo "Regenerating plan with imported instances..."; \
+			terraform plan $(TF_VARS) -out=tfplan; \
+			echo "Re-applying with updated plan..."; \
+			terraform apply tfplan || { \
+				echo ""; \
+				echo "Apply failed. Please check the errors above."; \
+				echo "You can try:"; \
+				echo "  1. Run 'make import-existing' to import existing instances"; \
+				echo "  2. Or run 'make destroy' to remove existing instances"; \
+				exit 1; \
+			}; \
+		else \
+			echo ""; \
+			echo "Apply failed with errors. Please check the output above."; \
+			exit 1; \
+		fi; \
+	fi
 	@echo "Deployment applied successfully!"
 	@echo ""
 	@echo "Getting deployment information..."
@@ -339,23 +403,46 @@ deploy-configs: ## Deploy prepared configurations to remote nodes in parallel
 		fi; \
 		echo "Deploying to nodes in parallel: $$NODE_IPS"; \
 		NODE_INDEX=0; \
+		FAILED_NODES=""; \
 		for node_ip in $$NODE_IPS; do \
 			( \
 				echo "Starting deployment for node $$NODE_INDEX to $$node_ip..."; \
 				echo "Creating remote directory for node $$NODE_INDEX..."; \
-				ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-					-i fastevm-deploy-key ubuntu@$$node_ip 'mkdir -p /tmp/fastevm-config'; \
+				if ! ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+					-i fastevm-deploy-key ubuntu@$$node_ip 'mkdir -p /tmp/fastevm-config'; then \
+					echo "✗ Failed to create directory on node $$NODE_INDEX ($$node_ip)"; \
+					exit 1; \
+				fi; \
 				echo "Copying configuration files for node $$NODE_INDEX..."; \
-				scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-					-i fastevm-deploy-key -r deploy/node$$NODE_INDEX/* ubuntu@$$node_ip:/tmp/fastevm-config/; \
+				if ! scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+					-i fastevm-deploy-key -r deploy/node$$NODE_INDEX/* ubuntu@$$node_ip:/tmp/fastevm-config/; then \
+					echo "✗ Failed to copy files to node $$NODE_INDEX ($$node_ip)"; \
+					exit 1; \
+				fi; \
 				echo "Running deployment script for node $$NODE_INDEX..."; \
-				ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-					-i fastevm-deploy-key ubuntu@$$node_ip "GITHUB_REPO='$(GITHUB_REPO)' GITHUB_BRANCH='$(GITHUB_BRANCH)' bash /tmp/fastevm-config/deploy.sh"; \
+				if ! ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+					-i fastevm-deploy-key ubuntu@$$node_ip "GITHUB_REPO='$(GITHUB_REPO)' GITHUB_BRANCH='$(GITHUB_BRANCH)' bash /tmp/fastevm-config/deploy.sh 2>&1"; then \
+					echo "✗ Deployment script failed on node $$NODE_INDEX ($$node_ip)"; \
+					echo "Check logs on node $$NODE_INDEX: ssh -i fastevm-deploy-key ubuntu@$$node_ip 'cat /var/log/fastevm-deployment-complete 2>/dev/null || echo No deployment log found'"; \
+					exit 1; \
+				fi; \
 				echo "✓ Node $$NODE_INDEX deployment completed successfully"; \
-			) & \
+			) || echo "NODE_$$NODE_INDEX_FAILED" & \
 			NODE_INDEX=$$((NODE_INDEX + 1)); \
 		done; \
-		wait; \
+		FAILED_COUNT=0; \
+		for pid in $$(jobs -p); do \
+			if ! wait $$pid; then \
+				FAILED_COUNT=$$((FAILED_COUNT + 1)); \
+			fi; \
+		done; \
+		if [ $$FAILED_COUNT -gt 0 ]; then \
+			echo "✗ Deployment failed on $$FAILED_COUNT node(s)"; \
+			echo "To debug, SSH to the failed node(s) and check:"; \
+			echo "  - /var/log/fastevm-deployment-complete"; \
+			echo "  - /tmp/fastevm-config/deploy.sh output"; \
+			exit 1; \
+		fi; \
 		echo "✓ All nodes deployed successfully!"; \
 	else \
 		echo "No deployment info found. Run 'make apply' first."; \
@@ -406,7 +493,6 @@ setup-node: ## Generate prefunded accounts on all nodes after binary distributio
 			echo "Could not get node IPs from Terraform output"; \
 			exit 1; \
 		fi; \
-		echo "Generating prefunded accounts on nodes: $$NODE_IPS"; \
 		for node_ip in $$NODE_IPS; do \
 			echo "Generating prefunded accounts on node $$node_ip..."; \
 			scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
@@ -421,9 +507,9 @@ setup-node: ## Generate prefunded accounts on all nodes after binary distributio
 		exit 1; \
 	fi
 
-# Cleanup and restart services (stop services, clean logs and database, then start fresh)
-cleanup-and-restart-services: ## Stop services, clean logs and database, then start fresh services
-	@echo "Cleaning up and restarting FastEVM services on all nodes..."
+# Cleanup services (stop services, clean logs and database)
+cleanup-services: ## Stop services and clean logs and database on all nodes
+	@echo "Cleaning up FastEVM services on all nodes..."
 	@if [ ! -f "fastevm-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
 	@chmod 600 fastevm-deploy-key
 	@echo "Getting node IPs from Terraform output..."
@@ -449,49 +535,20 @@ cleanup-and-restart-services: ## Stop services, clean logs and database, then st
 			(echo "Cleaning data on node $$node_ip..." && \
 			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i fastevm-deploy-key ubuntu@$$node_ip ' \
 				echo "Removing log files..."; \
-				sudo rm -rf /data/logs/*.log /data/logs/*.log.* 2>/dev/null || true; \
+				sudo rm -rf /data/logs 2>/dev/null || true; \
 				sudo mkdir -p /data/logs; \
 				sudo chown -R ubuntu:ubuntu /data/logs; \
 				echo "Removing database directories and static files..."; \
-				sudo rm -rf /data/execution/db /data/execution/db.* 2>/dev/null || true; \
-				sudo rm -rf /data/execution/static_files 2>/dev/null || true; \
-				sudo rm -rf /data/consensus/db /data/consensus/db.* 2>/dev/null || true; \
+				sudo rm -rf /data/execution 2>/dev/null || true; \
+				sudo rm -rf /data/consensus 2>/dev/null || true; \
 				sudo mkdir -p /data/execution /data/consensus; \
 				sudo chown -R ubuntu:ubuntu /data/execution /data/consensus; \
-				echo "Re-initializing database with genesis..."; \
-				if [ -f /data/config/genesis.json ] && [ -f /usr/local/bin/fastevm-execution ]; then \
-					echo "Running: /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json"; \
-					if /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json > /tmp/init.log 2>&1; then \
-						echo "Database re-initialized successfully"; \
-						cat /tmp/init.log || true; \
-					else \
-						echo "ERROR: Database re-initialization failed. Log:"; \
-						cat /tmp/init.log || true; \
-						exit 1; \
-					fi; \
-				else \
-					echo "ERROR: Genesis file or execution binary not found"; \
-					echo "Genesis exists: $([ -f /data/config/genesis.json ] && echo YES || echo NO)"; \
-					echo "Binary exists: $([ -f /usr/local/bin/fastevm-execution ] && echo YES || echo NO)"; \
-					exit 1; \
-				fi; \
 				echo "✓ Data cleaned and re-initialized on $$node_ip" \
 			' && \
 			echo "✓ Cleanup completed on $$node_ip") & \
 		done; \
 		wait; \
 		echo "Cleanup and re-initialization completed on all nodes!"; \
-		echo "Starting fresh services on all nodes..."; \
-		for node_ip in $$NODE_IPS; do \
-			(echo "Starting services on node $$node_ip..." && \
-			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i fastevm-deploy-key ubuntu@$$node_ip 'sudo bash /tmp/fastevm-config/service.sh start' && \
-			echo "✓ Services started on $$node_ip") & \
-		done; \
-		echo "Waiting for all services to start..."; \
-		wait; \
-		echo "Waiting for services to initialize..."; \
-		sleep 60; \
-		echo "Services started on all nodes!"; \
 	else \
 		echo "No deployment info found. Run 'make apply' first."; \
 		exit 1; \
@@ -529,14 +586,14 @@ start-services: ## Start FastEVM services on all nodes
 
 # Complete deployment (infrastructure + configs + deploy + prepare binaries + generate accounts + start services)
 # If nodes already exist, cleanup old data before starting fresh services
-deploy-all: check-prereqs init apply prepare-configs deploy-configs prepare-binaries setup-node cleanup-and-restart-services verify-deployment ## Complete deployment: create infrastructure, prepare configs, deploy all nodes, prepare binaries, generate accounts, cleanup old data, and start fresh services
+deploy-all: check-prereqs init apply prepare-configs cleanup-services deploy-configs prepare-binaries setup-node start-services verify-deployment ## Complete deployment: create infrastructure, prepare configs, deploy all nodes, prepare binaries, generate accounts, cleanup old data, and start fresh services
 	@echo "=== FastEVM Complete Deployment Finished ==="
 	@echo "All nodes are configured and started with fresh data..."
 	@echo "Check status with: make status"
 	@echo "Test endpoints with: make test-rpc"
 
 # Deploy with existing infrastructure (skip Terraform)
-deploy-existing: check-prereqs prepare-configs deploy-configs prepare-binaries setup-node cleanup-and-restart-services verify-deployment ## Deploy to existing infrastructure (skip Terraform, cleanup old data and start fresh)
+deploy-existing: check-prereqs prepare-configs cleanup-services deploy-configs prepare-binaries setup-node start-services verify-deployment ## Deploy to existing infrastructure (skip Terraform, cleanup old data and start fresh)
 	@echo "=== Deployment to Existing Infrastructure Finished ==="
 
 # Destroy and redeploy

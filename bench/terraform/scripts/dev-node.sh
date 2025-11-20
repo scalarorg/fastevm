@@ -30,15 +30,15 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-# When this script is placed at /opt/gravity-reth/bench/dev-node.sh:
-# SCRIPT_DIR will be /opt/gravity-reth/bench
+# SCRIPT_DIR will be /opt/dev-node.sh
 # PROJECT_ROOT will be /opt/gravity-reth
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-DATA_DIR="$PROJECT_ROOT/bench/.dev-node-data"
-LOGS_DIR="$PROJECT_ROOT/bench/.dev-node-logs"
-PIDS_DIR="$PROJECT_ROOT/bench/.dev-node-pids"
-
+PROJECT_ROOT="/opt/gravity-reth"
+DATA_DIR="/opt/bench/.dev-node-data"
+LOGS_DIR="/opt/bench/.dev-node-logs"
+PIDS_DIR="/opt/bench/.dev-node-pids"
+sudo mkdir -p "/opt/bench"
+sudo chown -R ubuntu:ubuntu "/opt/bench"
+sudo chmod -R 755 "/opt/bench"
 # Binary paths
 RETH_BIN="$PROJECT_ROOT/target/release/reth"
 
@@ -52,6 +52,34 @@ BUILD_PROJECT=true
 FOREGROUND=false
 DEV_BLOCK_TIME="${DEV_BLOCK_TIME:-}"
 DEV_BLOCK_MAX_TXNS="${DEV_BLOCK_MAX_TXNS:-}"
+BUILDER_GAS_LIMIT="${BUILDER_GAS_LIMIT:-240000000}"
+LOG_LEVEL="${LOG_LEVEL:-debug}"
+
+# Convert log level string to -v format
+# trace = -vvvv, debug = -vvv, info = -vv, warn = -v, error = (no flag)
+convert_log_level() {
+    case "$1" in
+        trace)
+            echo "-vvvvv"
+            ;;
+        debug)
+            echo "-vvvv"
+            ;;
+        info)
+            echo "-vvv"
+            ;;
+        warn|warning)
+            echo "-vv"
+            ;;
+        error)
+            echo "-v"
+            ;;
+        *)
+            # Default to debug if unknown
+            echo "-vvv"
+            ;;
+    esac
+}
 
 # Logging functions
 log_info() {
@@ -253,23 +281,30 @@ start_execution_node() {
     # Build command arguments
     local cmd_args=(
         "node" "--dev" "--datadir" "$DATA_DIR"
-        "--http" "--http.api" "eth,net,web3,admin,debug"
+        "--http" "--http.api" "eth,net,web3,admin,debug,txpool"
         "--http.addr" "0.0.0.0" "--http.port" "$HTTP_PORT" "--http.corsdomain" "*"
     )
     
-    [ "$ENABLE_WS" = true ] && cmd_args+=("--ws" "--ws.api" "eth,net,web3,admin,debug" "--ws.addr" "0.0.0.0" "--ws.port" "$WS_PORT" "--ws.origins" "*")
+    [ "$ENABLE_WS" = true ] && cmd_args+=("--ws" "--ws.api" "eth,net,web3,admin,debug,txpool" "--ws.addr" "0.0.0.0" "--ws.port" "$WS_PORT" "--ws.origins" "*")
     [ -n "$DEV_BLOCK_TIME" ] && cmd_args+=("--dev.block-time" "$DEV_BLOCK_TIME")
     [ -n "$DEV_BLOCK_MAX_TXNS" ] && cmd_args+=("--dev.block-max-transactions" "$DEV_BLOCK_MAX_TXNS")
     
+    # Convert log level to -v format
+    local log_level_flag=$(convert_log_level "$LOG_LEVEL")
     cmd_args+=(
+        "--builder.gaslimit" "$BUILDER_GAS_LIMIT"
         "--authrpc.addr" "0.0.0.0" "--authrpc.port" "$ENGINE_PORT" "--authrpc.jwtsecret" "$jwt_file"
         "--rpc.max-connections" "10000" "--addr" "0.0.0.0" "--port" "$P2P_PORT"
         "--txpool.max-new-txns" "102400" "--txpool.max-account-slots" "102400"
         "--txpool.max-pending-txns" "102400" "--txpool.pending-max-count" "102400"
         "--txpool.pending-max-size" "128" "--txpool.max-new-pending-txs-notifications" "102400"
         "--txpool.queued-max-count" "102400" "--txpool.queued-max-size" "128"
-        "--gravity.disable-pipe-execution" "--gravity.disable-grevm"
     )
+    cmd_args+=(
+        "--gravity.disable-pipe-execution"
+    )
+    # Add log level flag only if not empty
+    [ -n "$log_level_flag" ] && cmd_args+=("$log_level_flag")
     
     if [ "$FOREGROUND" = true ]; then
         log_info "Running in foreground mode (Ctrl+C to stop)"
@@ -592,6 +627,14 @@ parse_arguments() {
                 DEV_BLOCK_MAX_TXNS="$2"
                 shift 2
                 ;;
+            --builder-gas-limit)
+                BUILDER_GAS_LIMIT="$2"
+                shift 2
+                ;;
+            --log-level)
+                LOG_LEVEL="$2"
+                shift 2
+                ;;
             --foreground|--fg)
                 FOREGROUND=true
                 shift
@@ -636,6 +679,8 @@ show_help() {
     echo "  --p2p-port PORT    - P2P port (default: 30303)"
     echo "  --dev-block-time DURATION - Block time interval (e.g., 12s)"
     echo "  --dev-block-max-txns N    - Max transactions per block"
+    echo "  --builder-gas-limit N    - Block gas limit (default: 240000000)"
+    echo "  --log-level LEVEL        - Log level: trace (-vvvv), debug (-vvv), info (-vv), warn (-v), error (default: debug)"
     echo "  --foreground, --fg - Run node in foreground (logs in terminal, blocks)"
     echo "  --no-build         - Skip building the project"
     echo "  --help, -h         - Show this help message"
@@ -645,6 +690,8 @@ show_help() {
     echo "  WS_PORT            - WebSocket RPC port (overrides --ws-port)"
     echo "  ENGINE_PORT        - Engine API port (overrides --engine-port)"
     echo "  P2P_PORT           - P2P port (overrides --p2p-port)"
+    echo "  BUILDER_GAS_LIMIT  - Block gas limit (default: 240000000)"
+    echo "  LOG_LEVEL          - Log level: trace (-vvvvv), debug (-vvvv), info (-vvv), warn (-vv), error (-v), ( default: debug)"
     echo "  DEV_BLOCK_TIME     - Block time interval (overrides --dev-block-time)"
     echo "  DEV_BLOCK_MAX_TXNS - Max transactions per block (overrides --dev-block-max-txns)"
     echo

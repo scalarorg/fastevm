@@ -14796,3 +14796,7 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "reth-db"
+version = "1.8.2"

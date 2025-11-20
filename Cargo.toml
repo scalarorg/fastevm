@@ -110,6 +110,14 @@ reth-network-peers = { git = "https://github.com/Galxe/gravity-reth.git", branch
 # reth-tokio-util = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-tokio-util" }
 reth-transaction-pool = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-transaction-pool" }
 
+# for patch reth-db
+reth-fs-util = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-fs-util" }
+reth-libmdbx = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-libmdbx" }
+reth-metrics = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-metrics" }
+reth-nippy-jar = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-nippy-jar" }
+reth-static-file-types = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-static-file-types" }
+reth-storage-errors = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-storage-errors" }
+reth-prune-types = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-prune-types" }
 # revm
 revm = { package = "revm", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
 revm-bytecode = { package = "revm-bytecode", git = "https://github.com/Galxe/revm", branch = "v29.0.1-gravity", default-features = false }
@@ -132,6 +140,8 @@ bincode = "2.0"
 bytes = { version = "1.5.0", features = ["serde"] }
 
 page_size = "0.6.0"
+proptest = "1.7"
+proptest-derive = "0.5"
 rand = "0.9"
 rand_08 = { package = "rand", version = "0.8" }
 serde = { version = "1.0", features = ["derive"] }
@@ -139,6 +149,7 @@ serde_json = "1.0"
 strum = { version = "0.27", default-features = false }
 strum_macros = "0.27"
 
+tempfile = "3.20"
 thiserror = { version = "2.0.0", default-features = false }
 tokio = { version = "1.44.2", default-features = false }
 eyre = "0.6"
@@ -218,7 +229,7 @@ codegen-units = 1
 [profile.test]
 opt-level = 1
 
-[patch."https://github.com/paradigmxyz/reth.git"]
+# [patch."https://github.com/paradigmxyz/reth.git"]
 # Override upstream reth CLI crates with local copies in `reth/`
 # reth-cli = { path = "reth/cli/cli" }
 # reth-cli-commands = { path = "reth/cli/commands" }
@@ -227,3 +238,7 @@ opt-level = 1
 # reth-ethereum-cli = { path = "reth/ethereum/cli" }
 # reth-trie-db = { path = "reth/trie/db" }
 # reth-trie-parallel = { path = "reth/trie/parallel" }
+
+[patch."https://github.com/Galxe/gravity-reth.git"]
+# Override reth-db with local crate
+reth-db = { path = "crates/storage/db" }

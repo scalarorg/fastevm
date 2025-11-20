@@ -45,12 +45,18 @@ apt-get install -y \
     pkg-config \
     libssl-dev \
     libclang-dev \
+    llvm \
     llvm-dev \
     cmake \
+    clang \
     jq \
     htop \
     vim \
     unzip \
+    protobuf-compiler jq dos2unix \
+    libudev-dev libusb-1.0-0-dev \
+    python3 python-is-python3 python3-pip python3-venv \
+    nodejs npm \
     software-properties-common \
     apt-transport-https \
     ca-certificates \
@@ -212,11 +218,71 @@ if ! command -v cargo &> /dev/null; then
     log "PATH: $PATH"
     exit 1
 fi
+# Ensure default toolchain is set before building
+if command -v rustup &> /dev/null; then
+    log "Ensuring default Rust toolchain is set..."
+    rustup default stable 2>/dev/null || {
+        log "Installing stable toolchain..."
+        rustup toolchain install stable
+        rustup default stable
+    }
+fi
 
 log "Rust installation verified: rustc $(rustc --version), cargo $(cargo --version)"
+# Clone gravity-sdk
+log "Cloning gravity-sdk repository..."
+gravity_sdk_repo=${gravity_sdk_repo}
+gravity_sdk_branch=${gravity_sdk_branch}
+GRAVITY_SDK_DIR="/opt/gravity-sdk"
+if [ -d "$GRAVITY_SDK_DIR" ]; then
+    cd "$GRAVITY_SDK_DIR"
+    git pull --quiet > /dev/null 2>&1
+else
+    git clone -b ${gravity_sdk_branch} ${gravity_sdk_repo} "$GRAVITY_SDK_DIR" --quiet > /dev/null 2>&1
+    cd "$GRAVITY_SDK_DIR"
+fi
+log "Repository ready"
+sudo chown -R ubuntu:ubuntu "$GRAVITY_SDK_DIR"
+sudo chmod -R 755 "$GRAVITY_SDK_DIR"
+# Build gravity-sdk
+log "Building gravity-sdk ..."
+cd "$GRAVITY_SDK_DIR"
+git checkout dev-1114-bugfix
+make gravity_node
+
+cat > start_dev_node.sh <<'EOF'
+#!/bin/bash
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
+log_info(){ echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn(){ echo -e "${YELLOW}[WARN]${NC} $1"; }
+
+NODE="node1"
+INSTALL_DIR="/tmp"
+
+export MOCK_CONSENSUS=true
+export RETH_TXPOOL_BATCH_INSERT=1
+export BATCH_INSERT_TIME=50
+export USE_PARALLEL_STATE_ROOT=1
+export USE_STORAGE_CACHE=1
+
+log_info "Killing old gravity_node..."
+pkill -9 gravity_node 2>/dev/null || log_warn "No running gravity_node found"
+
+log_info "Deploying $NODE..."
+bash ./deploy_utils/deploy.sh --mode single --install_dir "$INSTALL_DIR" --node "$NODE" -v release
+
+log_info "Starting $NODE..."
+bash "$INSTALL_DIR/$NODE/script/start.sh" --bin_name gravity_node
+
+log_info "Node started"
+EOF
 
 # Clone gravity-reth repository
 log "Cloning gravity-reth repository..."
+
+gravity_reth_repo=${gravity_reth_repo}
+gravity_reth_branch=${gravity_reth_branch}
+
 GRAVITY_RETH_DIR="/opt/gravity-reth"
 if [ -d "$GRAVITY_RETH_DIR" ]; then
     cd "$GRAVITY_RETH_DIR"
@@ -228,54 +294,52 @@ fi
 log "Repository ready"
 sudo chown -R ubuntu:ubuntu "$GRAVITY_RETH_DIR"
 sudo chmod -R 755 "$GRAVITY_RETH_DIR"
-# Ensure default toolchain is set before building
-if command -v rustup &> /dev/null; then
-    log "Ensuring default Rust toolchain is set..."
-    rustup default stable 2>/dev/null || {
-        log "Installing stable toolchain..."
-        rustup toolchain install stable
-        rustup default stable
-    }
-fi
+
+chmod +x start_dev_node.sh
+./start_dev_node.sh
+
+log "Node started successfully"
+curl -s localhost:8545 -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+# expect 0x539 (i.e., 1337)
 
 # Build gravity-reth
-log "Building gravity-reth (this may take 10-20 minutes)..."
-# Ensure file descriptor limits are set before building
-ulimit -n 65536 2>/dev/null || true
-# Build as ubuntu user to ensure proper limits
-if id ubuntu &>/dev/null 2>&1; then
-    # Determine cargo environment file for ubuntu user
-    UBUNTU_CARGO_ENV="/home/ubuntu/.cargo/env"
-    ROOT_CARGO_ENV="$HOME/.cargo/env"
+# log "Building gravity-reth (this may take 10-20 minutes)..."
+# # Ensure file descriptor limits are set before building
+# ulimit -n 65536 2>/dev/null || true
+# # Build as ubuntu user to ensure proper limits
+# if id ubuntu &>/dev/null 2>&1; then
+#     # Determine cargo environment file for ubuntu user
+#     UBUNTU_CARGO_ENV="/home/ubuntu/.cargo/env"
+#     ROOT_CARGO_ENV="$HOME/.cargo/env"
     
-    # Build the command to source cargo environment
-    if [ -f "$UBUNTU_CARGO_ENV" ]; then
-        # Use ubuntu's cargo env file
-        CARGO_CMD="source $UBUNTU_CARGO_ENV && cargo build --release --bin reth"
-    elif [ -f "$ROOT_CARGO_ENV" ]; then
-        # Use root's cargo env file (if ubuntu's doesn't exist)
-        CARGO_CMD="source $ROOT_CARGO_ENV && cargo build --release --bin reth"
-    elif [ -d "/home/ubuntu/.cargo/bin" ]; then
-        # Fallback: add ubuntu's cargo bin to PATH
-        CARGO_CMD="export PATH=\"/home/ubuntu/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
-    elif [ -d "$HOME/.cargo/bin" ]; then
-        # Fallback: add root's cargo bin to PATH
-        CARGO_CMD="export PATH=\"$HOME/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
-    else
-        # Last resort: try to find cargo in PATH
-        CARGO_CMD="cargo build --release --bin reth"
-    fi
+#     # Build the command to source cargo environment
+#     if [ -f "$UBUNTU_CARGO_ENV" ]; then
+#         # Use ubuntu's cargo env file
+#         CARGO_CMD="source $UBUNTU_CARGO_ENV && cargo build --release --bin reth"
+#     elif [ -f "$ROOT_CARGO_ENV" ]; then
+#         # Use root's cargo env file (if ubuntu's doesn't exist)
+#         CARGO_CMD="source $ROOT_CARGO_ENV && cargo build --release --bin reth"
+#     elif [ -d "/home/ubuntu/.cargo/bin" ]; then
+#         # Fallback: add ubuntu's cargo bin to PATH
+#         CARGO_CMD="export PATH=\"/home/ubuntu/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
+#     elif [ -d "$HOME/.cargo/bin" ]; then
+#         # Fallback: add root's cargo bin to PATH
+#         CARGO_CMD="export PATH=\"$HOME/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
+#     else
+#         # Last resort: try to find cargo in PATH
+#         CARGO_CMD="cargo build --release --bin reth"
+#     fi
     
-    sudo -u ubuntu bash -c "cd $GRAVITY_RETH_DIR && ulimit -n 65536 && $CARGO_CMD" > /var/log/cargo-build.log 2>&1 || {
-        log "ERROR: Build failed. Check /var/log/cargo-build.log"
-        exit 1
-    }
-else
-    cargo build --release --bin reth > /var/log/cargo-build.log 2>&1 || {
-        log "ERROR: Build failed. Check /var/log/cargo-build.log"
-        exit 1
-    }
-fi
+#     sudo -u ubuntu bash -c "cd $GRAVITY_RETH_DIR && ulimit -n 65536 && $CARGO_CMD" > /var/log/cargo-build.log 2>&1 || {
+#         log "ERROR: Build failed. Check /var/log/cargo-build.log"
+#         exit 1
+#     }
+# else
+#     cargo build --release --bin reth > /var/log/cargo-build.log 2>&1 || {
+#         log "ERROR: Build failed. Check /var/log/cargo-build.log"
+#         exit 1
+#     }
+# fi
 
 # Verify binary exists
 RETH_BIN="$GRAVITY_RETH_DIR/target/release/reth"
@@ -292,7 +356,7 @@ chown -R ubuntu:ubuntu "$GRAVITY_RETH_DIR/bench" 2>/dev/null || true
 chmod 755 "$GRAVITY_RETH_DIR/bench" 2>/dev/null || true
 
 # Verify dev-node.sh exists (should have been copied by deploy.sh)
-DEV_NODE_SCRIPT="$GRAVITY_RETH_DIR/bench/dev-node.sh"
+DEV_NODE_SCRIPT="/opt/dev-node.sh"
 if [ ! -f "$DEV_NODE_SCRIPT" ]; then
     log "ERROR: dev-node.sh not found at $DEV_NODE_SCRIPT"
     log "Please ensure deploy.sh has copied the script before running execution-node-setup.sh"

@@ -71,13 +71,13 @@ get_genesis_from_node() {
     
     # Debug: Test SSH connection first
     log_info "Testing file existence..." >&2
-    if ! ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "test -f /data/config/genosis.json"; then
+    if ! ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "test -f /data/config/genesis.json"; then
         log_error "Genesis file does not exist on node $node_index ($node_ip)" >&2
         return 1
     fi
     log_info "File exists, proceeding with copy..." >&2
     
-    if ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "cat /data/config/genosis.json" > "$temp_file"; then
+    if ssh $SSH_OPTS -i "$SSH_KEY_PATH" ubuntu@$node_ip "cat /data/config/genesis.json" > "$temp_file"; then
         log_info "SSH command completed, checking file..." >&2
         if [ -f "$temp_file" ] && [ -s "$temp_file" ]; then
             log_success "Retrieved genesis.json from node $node_index ($(wc -c < "$temp_file") bytes)" >&2

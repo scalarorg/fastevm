@@ -29,6 +29,9 @@ PREFUND_ACCOUNT_COUNT=${PREFUND_ACCOUNT_COUNT:-100000}
 PREFUND_BALANCE=${PREFUND_BALANCE:-"1000000000000000000000"}
 TEST_MNEMONIC=${TEST_MNEMONIC:-"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}
 
+# Data directory configuration
+DATA_DIR=${DATA_DIR:-/data}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -345,6 +348,12 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     done
     
     # Create node-specific .env file
+    # Build DB_SYNC_MODE line if variable is set
+    DB_SYNC_MODE_LINE=""
+    if [ -n "${DB_SYNC_MODE:-}" ]; then
+        DB_SYNC_MODE_LINE="DB_SYNC_MODE=\"${DB_SYNC_MODE}\""
+    fi
+    
     cat > "$CONFIG_DIR/node$i.env" << EOF
 # FastEVM Node $i Environment Configuration
 NODE_INDEX=$i
@@ -352,6 +361,9 @@ NODE_COUNT=$NODE_COUNT
 PROJECT_NAME="$PROJECT_NAME"
 GITHUB_REPO="$GITHUB_REPO"
 GITHUB_BRANCH="$GITHUB_BRANCH"
+
+# Data directory configuration
+DATA_DIR="$DATA_DIR"
 
 # Network configuration
 NODE_IP="$NODE_IP"
@@ -374,6 +386,10 @@ PEER_ADDRESSES="$PEER_ADDRESSES"
 # Blockchain configuration
 GAS_LIMIT="${BLOCK_GAS_LIMIT}"
 SUBDAGS_PER_BLOCK="${SUBDAGS_PER_BLOCK}"
+
+# Database sync mode configuration
+# Options: durable (default, safest), nometasync (better performance), safenosync (higher performance), utterlynosync (maximum performance, risky)
+${DB_SYNC_MODE_LINE}
 
 # Logging configuration
 LOG_LEVEL="${LOG_LEVEL}"
