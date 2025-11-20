@@ -494,7 +494,7 @@ where
     let mut cumulative_gas_used = 0;
     let block_gas_limit: u64 = builder.evm_mut().block().gas_limit;
     let base_fee = builder.evm_mut().block().basefee;
-
+    debug!(target: "mysticeti_ethereum_payload", "block_gas_limit: {:?}, base_fee: {:?}", block_gas_limit, base_fee);
     let mut best_txs = best_txs(BestTransactionsAttributes::new(
         base_fee,
         builder
@@ -619,7 +619,7 @@ where
                     // if the transaction is invalid, we can skip it and all of its
                     // descendants
                     executed_failed_txs += 1;
-                    trace!(target: "payload_builder", %error, ?tx, "skipping invalid transaction and its descendants");
+                    debug!(target: "payload_builder", %error, ?tx, "skipping invalid transaction and its descendants");
                     best_txs.mark_invalid(
                         &pool_tx,
                         InvalidPoolTransactionError::Consensus(
