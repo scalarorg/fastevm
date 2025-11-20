@@ -41,6 +41,12 @@ variable "execution_disk_size" {
   default     = 200
 }
 
+variable "execution_disk_type" {
+  description = "Type of persistent disk for execution node"
+  type        = string
+  default     = "hyperdisk-balanced"
+}
+
 variable "client_disk_size" {
   description = "Size of persistent disk for client node in GB"
   type        = number
@@ -73,6 +79,18 @@ variable "gravity_reth_repo" {
 
 variable "gravity_reth_branch" {
   description = "GitHub branch for gravity-reth"
+  type        = string
+  default     = "main"
+}
+
+variable "gravity_sdk_repo" {
+  description = "GitHub repository URL for gravity-sdk"
+  type        = string
+  default     = "https://github.com/Galxe/gravity-sdk.git"
+}
+
+variable "gravity_sdk_branch" {
+  description = "GitHub branch for gravity-sdk"
   type        = string
   default     = "main"
 }

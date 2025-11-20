@@ -12,6 +12,9 @@ GITHUB_REPO="${github_repo}"
 GITHUB_BRANCH="${github_branch}"
 SUBNET_CIDR="${subnet_cidr}"
 
+# Set data directory - can be overridden via environment variable
+DATA_DIR="$${DATA_DIR:-/data}"
+
 # Logging
 LOG_FILE="/var/log/fastevm-bootstrap.log"
 exec > >(tee -a $LOG_FILE)
@@ -56,6 +59,54 @@ curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 apt-get update -y
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Setup NVMe disk early (before creating data directories)
+echo "Setting up NVMe disk if available..."
+NVME_DEVICE="/dev/nvme0n1"
+MOUNT_POINT="/data"
+
+if [ -b "$NVME_DEVICE" ]; then
+    echo "NVMe device $NVME_DEVICE found, setting up..."
+    
+    # Check if already mounted at /data
+    if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        echo "$MOUNT_POINT is already mounted, skipping setup"
+    else
+        # Check if device is mounted elsewhere
+        if grep -q "^$NVME_DEVICE " /proc/mounts 2>/dev/null; then
+            OTHER_MOUNT=$(grep "^$NVME_DEVICE " /proc/mounts | awk '{print $2}')
+            echo "$NVME_DEVICE is already mounted at $OTHER_MOUNT, skipping"
+        else
+            # Check if device has filesystem
+            if ! blkid "$NVME_DEVICE" >/dev/null 2>&1; then
+                echo "Creating ext4 filesystem on $NVME_DEVICE..."
+                mkfs.ext4 -F "$NVME_DEVICE"
+            fi
+            
+            # Create mount point
+            mkdir -p "$MOUNT_POINT"
+            
+            # Mount the device
+            echo "Mounting $NVME_DEVICE to $MOUNT_POINT..."
+            if mount "$NVME_DEVICE" "$MOUNT_POINT"; then
+                echo "Successfully mounted $NVME_DEVICE to $MOUNT_POINT"
+                
+                # Add to /etc/fstab for persistent mounting
+                if ! grep -q "^$NVME_DEVICE" /etc/fstab 2>/dev/null; then
+                    echo "$NVME_DEVICE $MOUNT_POINT ext4 defaults,nofail 0 2" >> /etc/fstab
+                    echo "Added $NVME_DEVICE to /etc/fstab"
+                fi
+            else
+                echo "Warning: Failed to mount $NVME_DEVICE, will use boot disk for /data"
+            fi
+        fi
+    fi
+    
+    # Set ownership
+    chown ubuntu:ubuntu "$MOUNT_POINT" 2>/dev/null || true
+else
+    echo "No NVMe device found, will use boot disk for /data"
+fi
 
 # Only build on the first node (node 0)
 if [ "$NODE_INDEX" = "0" ]; then
@@ -115,22 +166,22 @@ echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/ubuntu
 chmod 440 /etc/sudoers.d/ubuntu
 
 # Create data directories
-echo "Creating data directories..."
-mkdir -p /data/execution
-mkdir -p /data/consensus
-mkdir -p /data/logs
-mkdir -p /data/config
+echo "Creating data directories at $DATA_DIR..."
+mkdir -p "$DATA_DIR/execution"
+mkdir -p "$DATA_DIR/consensus"
+mkdir -p "$DATA_DIR/logs"
+mkdir -p "$DATA_DIR/config"
 
-# Use boot disk for /data directory (no separate persistent disk)
-echo "Using boot disk for /data directory..."
+# Use boot disk for data directory (no separate persistent disk)
+echo "Using boot disk for $DATA_DIR directory..."
 echo "Available disk space:"
 df -h /
 
-# Ensure /data directory exists on root filesystem
-mkdir -p /data
-if [ -d "/data" ]; then
-    echo "Successfully created /data directory on boot disk"
-    df -h /data
+# Ensure data directory exists on root filesystem
+mkdir -p "$DATA_DIR"
+if [ -d "$DATA_DIR" ]; then
+    echo "Successfully created $DATA_DIR directory on boot disk"
+    df -h "$DATA_DIR"
     
     # Optimize kernel parameters for database workloads
     if ! grep -q "Database optimization settings" /etc/sysctl.conf; then
@@ -147,14 +198,14 @@ EOF
     fi
     echo "Filesystem setup completed"
 else
-    echo "ERROR: Failed to create /data directory"
+    echo "ERROR: Failed to create $DATA_DIR directory"
     exit 1
 fi
 
 # Copy configuration files
 echo "Copying configuration files..."
 if [ -d "/tmp/fastevm-config" ]; then
-    cp -r /tmp/fastevm-config/* /data/config/
+    cp -r /tmp/fastevm-config/* "$DATA_DIR/config/"
     echo "Configuration files copied successfully"
 else
     echo "No configuration files found in /tmp/fastevm-config"
@@ -171,14 +222,14 @@ else
 
     # Generate JWT secret
     JWT_SECRET=$(openssl rand -hex 32)
-    echo "0x$JWT_SECRET" > /data/jwt.hex
+    echo "0x$JWT_SECRET" > "$DATA_DIR/jwt.hex"
 
     # Generate P2P secret key
-    mkdir -p /data/p2p
-    openssl rand -hex 32 > /data/p2p/secret.key
+    mkdir -p "$DATA_DIR/p2p"
+    openssl rand -hex 32 > "$DATA_DIR/p2p/secret.key"
 
     # Create execution client configuration
-    cat > /data/config/execution.toml << EOF
+    cat > "$DATA_DIR/config/execution.toml" << EOF
 [network]
 port = $P2P_PORT
 discovery.port = $P2P_PORT
@@ -202,13 +253,13 @@ origins = "*"
 enabled = true
 port = $ENGINE_PORT
 addr = "0.0.0.0"
-jwtsecret = "/data/jwt.hex"
+jwtsecret = "$DATA_DIR/jwt.hex"
 
 [chain]
-chain = "/data/config/genesis.json"
+chain = "$DATA_DIR/config/genesis.json"
 
 [datadir]
-path = "/data/execution"
+path = "$DATA_DIR/execution"
 
 [txpool]
 enabled = true
@@ -248,13 +299,13 @@ EOF
     PEER_ADDRESSES=$(echo $PEER_ADDRESSES | sed 's/^,//')
 
     # Create consensus client configuration
-    cat > /data/config/node.yml << EOF
+    cat > "$DATA_DIR/config/node.yml" << EOF
 # Node $NODE_INDEX configuration for FastEVM Consensus Client
-chain: "/data/config/genesis.json"
+chain: "$DATA_DIR/config/genesis.json"
 
 # Committee configuration
-committee_path: "/data/config/committees.yml"
-parameters_path: "/data/config/parameters.yml"
+committee_path: "$DATA_DIR/config/committees.yml"
+parameters_path: "$DATA_DIR/config/parameters.yml"
 
 # Execution client configuration
 execution_http_url: "http://127.0.0.1:$HTTP_PORT"
@@ -270,7 +321,7 @@ max_retries: 3
 timeout: 30
 
 # Node configuration
-working_directory: "/data"
+working_directory: "$DATA_DIR"
 node_index: $NODE_INDEX
 log_level: "info"
 
@@ -284,7 +335,7 @@ EOF
     echo "Skipping committees.yml generation - will be provided by deployment package with correct external IP addresses"
 
     # Create parameters configuration
-    cat > /data/config/parameters.yml << EOF
+    cat > "$DATA_DIR/config/parameters.yml" << EOF
 leader_timeout: {
   secs: 0,
   nanos: 200000000
@@ -313,7 +364,7 @@ commit_sync_batches_ahead: 32
 EOF
 fi
 
-# Create systemd service for ensuring /data directory exists
+# Create systemd service for ensuring data directory exists
 cat > /etc/systemd/system/fastevm-data-mount.service << EOF
 [Unit]
 Description=Ensure FastEVM Data Directory Exists
@@ -323,7 +374,8 @@ Before=fastevm-consensus.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/bash -c 'mkdir -p /data/execution /data/consensus /data/logs /data/config && chown -R ubuntu:ubuntu /data'
+Environment=DATA_DIR="$${DATA_DIR:-/data}"
+ExecStart=/bin/bash -c "mkdir -p \"$$DATA_DIR/execution\" \"$$DATA_DIR/consensus\" \"$$DATA_DIR/logs\" \"$$DATA_DIR/config\" && chown -R ubuntu:ubuntu \"$$DATA_DIR\""
 StandardOutput=journal
 StandardError=journal
 
@@ -343,9 +395,10 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/fastevm
+Environment=DATA_DIR="$${DATA_DIR:-/data}"
 ExecStart=/opt/fastevm-binaries/fastevm-execution \\
-    --config /data/config/execution.toml \\
-    --datadir /data/execution \\
+    --config $$DATA_DIR/config/execution.toml \\
+    --datadir $$DATA_DIR/execution \\
     --log-level info
 Restart=always
 RestartSec=10
@@ -368,9 +421,10 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/fastevm
+Environment=DATA_DIR="$${DATA_DIR:-/data}"
 ExecStart=/opt/fastevm-binaries/fastevm-consensus \\
     start \\
-    --config /data/config/node.yml
+    --config $$DATA_DIR/config/node.yml
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -417,7 +471,8 @@ cat > /usr/local/bin/fastevm-monitor.sh << 'EOF'
 # Monitoring script for FastEVM nodes
 
 NODE_INDEX=$${1:-0}
-LOG_FILE="/data/logs/fastevm-monitor.log"
+DATA_DIR="$${DATA_DIR:-/data}"
+LOG_FILE="$$DATA_DIR/logs/fastevm-monitor.log"
 
 echo "$(date): Node $NODE_INDEX status check" >> $LOG_FILE
 
@@ -443,7 +498,7 @@ chmod +x /usr/local/bin/fastevm-monitor.sh
 
 # Create log rotation configuration
 cat > /etc/logrotate.d/fastevm << EOF
-/data/logs/*.log {
+$${DATA_DIR}/logs/*.log {
     daily
     missingok
     rotate 7
@@ -511,9 +566,10 @@ echo "Disabling FastEVM services..."
 systemctl disable fastevm-consensus
 systemctl disable fastevm-execution
 
+DATA_DIR="$${DATA_DIR:-/data}"
 echo "Cleaning up data directories..."
-rm -rf /data/execution/*
-rm -rf /data/consensus/*
+rm -rf "$$DATA_DIR/execution"/*
+rm -rf "$$DATA_DIR/consensus"/*
 
 echo "Cleanup completed"
 EOF
@@ -521,7 +577,7 @@ EOF
 chmod +x /usr/local/bin/fastevm-cleanup.sh
 
 # Set proper permissions
-chown -R ubuntu:ubuntu /data
+chown -R ubuntu:ubuntu "$DATA_DIR"
 chown -R ubuntu:ubuntu $FASTEVM_DIR
 
 # No separate startup script needed - using boot disk directly

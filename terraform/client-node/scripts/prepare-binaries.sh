@@ -133,14 +133,6 @@ build_binaries() {
         
         log \"Starting FastEVM client binary build process...\"
         
-        # Wait for startup script to complete (package installation)
-        log \"Waiting for startup script to complete package installation...\"
-        while [ ! -f \"/var/log/client-startup-complete\" ]; do
-            log \"Startup script still running, waiting...\"
-            sleep 10
-        done
-        log \"Startup script completed, proceeding with build...\"
-        
         # Refresh environment to ensure compilers are available
         log \"Refreshing environment...\"
         export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"

@@ -19,9 +19,16 @@ log_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
 
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
+
+# Set data directory - can be overridden via environment variable
+DATA_DIR="${DATA_DIR:-/data}"
 
 # Check if running as root or with sudo
 check_root() {
@@ -39,39 +46,39 @@ install_services() {
     log_info "Preparing all required directories and files..."
     
     # Create all data directories
-    mkdir -p /data/execution
-    mkdir -p /data/consensus
-    mkdir -p /data/logs
-    mkdir -p /data/config
+    mkdir -p "$DATA_DIR/execution"
+    mkdir -p "$DATA_DIR/consensus"
+    mkdir -p "$DATA_DIR/logs"
+    mkdir -p "$DATA_DIR/config"
     
     # Create execution subdirectories
-    mkdir -p /data/execution/db
-    mkdir -p /data/execution/p2p
+    mkdir -p "$DATA_DIR/execution/db"
+    mkdir -p "$DATA_DIR/execution/p2p"
     
     # Set ownership for all directories
-    chown -R ubuntu:ubuntu /data/execution
-    chown -R ubuntu:ubuntu /data/consensus
-    chown -R ubuntu:ubuntu /data/logs
-    chown -R ubuntu:ubuntu /data/config
+    chown -R ubuntu:ubuntu "$DATA_DIR/execution"
+    chown -R ubuntu:ubuntu "$DATA_DIR/consensus"
+    chown -R ubuntu:ubuntu "$DATA_DIR/logs"
+    chown -R ubuntu:ubuntu "$DATA_DIR/config"
     
     # Create log files with proper permissions
-    touch /data/logs/fastevm-execution.log
-    touch /data/logs/fastevm-consensus.log
-    chown ubuntu:ubuntu /data/logs/*.log
-    chmod 664 /data/logs/*.log
+    touch "$DATA_DIR/logs/fastevm-execution.log"
+    touch "$DATA_DIR/logs/fastevm-consensus.log"
+    chown ubuntu:ubuntu "$DATA_DIR/logs"/*.log
+    chmod 664 "$DATA_DIR/logs"/*.log
     
     # Ensure JWT secret exists if not already present
-    if [ ! -f /data/execution/jwt.hex ]; then
-        openssl rand -hex 32 > /data/execution/jwt.hex
-        chown ubuntu:ubuntu /data/execution/jwt.hex
-        chmod 644 /data/execution/jwt.hex
+    if [ ! -f "$DATA_DIR/execution/jwt.hex" ]; then
+        openssl rand -hex 32 > "$DATA_DIR/execution/jwt.hex"
+        chown ubuntu:ubuntu "$DATA_DIR/execution/jwt.hex"
+        chmod 644 "$DATA_DIR/execution/jwt.hex"
     fi
     
     # Ensure P2P secret key exists if not already present
-    if [ ! -f /data/execution/p2p/secret.key ]; then
-        openssl rand -hex 32 > /data/execution/p2p/secret.key
-        chown ubuntu:ubuntu /data/execution/p2p/secret.key
-        chmod 600 /data/execution/p2p/secret.key
+    if [ ! -f "$DATA_DIR/execution/p2p/secret.key" ]; then
+        openssl rand -hex 32 > "$DATA_DIR/execution/p2p/secret.key"
+        chown ubuntu:ubuntu "$DATA_DIR/execution/p2p/secret.key"
+        chmod 600 "$DATA_DIR/execution/p2p/secret.key"
     fi
     
     log_success "All directories and files prepared with proper permissions"
@@ -81,14 +88,16 @@ install_services() {
     
     # Create database initialization script
     log_info "Creating database initialization script..."
-    tee /usr/local/bin/fastevm-init-db.sh > /dev/null << 'INITSCRIPT'
+    tee /usr/local/bin/fastevm-init-db.sh > /dev/null << INITSCRIPT
 #!/bin/bash
 # FastEVM Database Initialization Script
 # This script ensures the database is initialized before starting the service
 
-if [ ! -d /data/execution/db ] || [ -z "$(ls -A /data/execution/db 2>/dev/null)" ]; then
-    if [ -f /data/config/genesis.json ] && [ -f /usr/local/bin/fastevm-execution ]; then
-        /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json || true
+DATA_DIR="\${DATA_DIR:-/data}"
+
+if [ ! -d "\$DATA_DIR/execution/db" ] || [ -z "\$(ls -A \$DATA_DIR/execution/db 2>/dev/null)" ]; then
+    if [ -f "\$DATA_DIR/config/genesis.json" ] && [ -f /usr/local/bin/fastevm-execution ]; then
+        /usr/local/bin/fastevm-execution init --datadir "\$DATA_DIR/execution" --chain "\$DATA_DIR/config/genesis.json" || true
     fi
 fi
 INITSCRIPT
@@ -99,52 +108,52 @@ INITSCRIPT
     log_info "Preparing all required directories and files..."
     
     # Create all data directories
-    mkdir -p /data/logs
-    mkdir -p /data/config
+    mkdir -p "$DATA_DIR/logs"
+    mkdir -p "$DATA_DIR/config"
     
     # Create execution subdirectories
-    mkdir -p /data/execution/db
-    mkdir -p /data/execution/p2p
+    mkdir -p "$DATA_DIR/execution/db"
+    mkdir -p "$DATA_DIR/execution/p2p"
     
     # Set ownership for all directories
-    chown -R ubuntu:ubuntu /data
+    chown -R ubuntu:ubuntu "$DATA_DIR"
     
     # Create log files with proper permissions
-    touch /data/logs/fastevm-execution.log
-    touch /data/logs/fastevm-consensus.log
-    chown ubuntu:ubuntu /data/logs/*.log
-    chmod 664 /data/logs/*.log
+    touch "$DATA_DIR/logs/fastevm-execution.log"
+    touch "$DATA_DIR/logs/fastevm-consensus.log"
+    chown ubuntu:ubuntu "$DATA_DIR/logs"/*.log
+    chmod 664 "$DATA_DIR/logs"/*.log
     
     # Ensure JWT secret exists if not already present
-    if [ ! -f /data/execution/jwt.hex ]; then
-        openssl rand -hex 32 > /data/execution/jwt.hex
-        chown ubuntu:ubuntu /data/execution/jwt.hex
-        chmod 644 /data/execution/jwt.hex
+    if [ ! -f "$DATA_DIR/execution/jwt.hex" ]; then
+        openssl rand -hex 32 > "$DATA_DIR/execution/jwt.hex"
+        chown ubuntu:ubuntu "$DATA_DIR/execution/jwt.hex"
+        chmod 644 "$DATA_DIR/execution/jwt.hex"
     fi
     
     # Ensure P2P secret key exists if not already present
-    if [ ! -f /data/execution/p2p/secret.key ]; then
-        openssl rand -hex 32 > /data/execution/p2p/secret.key
-        chown ubuntu:ubuntu /data/execution/p2p/secret.key
-        chmod 600 /data/execution/p2p/secret.key
+    if [ ! -f "$DATA_DIR/execution/p2p/secret.key" ]; then
+        openssl rand -hex 32 > "$DATA_DIR/execution/p2p/secret.key"
+        chown ubuntu:ubuntu "$DATA_DIR/execution/p2p/secret.key"
+        chmod 600 "$DATA_DIR/execution/p2p/secret.key"
     fi
     
     log_success "All directories and files prepared with proper permissions"
     
     # Load environment variables from node.env file
     log_info "Loading environment variables from node.env file..."
-    if [ -f "/data/node.env" ]; then
-        source /data/node.env
+    if [ -f "$DATA_DIR/node.env" ]; then
+        source "$DATA_DIR/node.env"
         # Remove quotes from BOOTNODES if present
         log_success "Environment variables loaded from node.env"
         log_info "Node index: $NODE_INDEX"
     else
-        log_warning "node.env file not found at /data/node.env"
+        echo -e "${YELLOW}[WARNING]${NC} node.env file not found at $DATA_DIR/node.env"
         # Set default values
         NODE_INDEX="0"
     fi
     
-    tee /etc/systemd/system/fastevm-execution.service > /dev/null << EOF
+    if ! tee /etc/systemd/system/fastevm-execution.service > /dev/null << EOF
 [Unit]
 Description=FastEVM Execution Client
 After=network.target
@@ -153,17 +162,18 @@ After=network.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/data
-EnvironmentFile=/data/node.env
+WorkingDirectory=$DATA_DIR
+EnvironmentFile=$DATA_DIR/node.env
 Environment=HTTP_PORT=8545
 Environment=WS_PORT=8546
 Environment=ENGINE_PORT=8551
 Environment=P2P_PORT=30303
+Environment=DATA_DIR=$DATA_DIR
 # Ensure database is initialized before starting
 ExecStartPre=/usr/local/bin/fastevm-init-db.sh
 ExecStart=/usr/local/bin/fastevm-execution node \
-    --chain /data/config/genesis.json \
-    --datadir /data/execution \
+    --chain $DATA_DIR/config/genesis.json \
+    --datadir $DATA_DIR/execution \
     --engine.always-process-payload-attributes-on-canonical-head \
     --http \
     --http.api eth,net,web3,admin,debug \
@@ -184,15 +194,16 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --txpool.max-new-pending-txs-notifications 102400 \
     --txpool.queued-max-count 102400 \
     --txpool.queued-max-size 128 \
+    --db.sync-mode safe-no-sync \
     --gravity.disable-pipe-execution \
     --authrpc.addr 0.0.0.0 \
     --authrpc.port ${ENGINE_PORT} \
-    --authrpc.jwtsecret /data/execution/jwt.hex \
+    --authrpc.jwtsecret $DATA_DIR/execution/jwt.hex \
     --addr 0.0.0.0 \
     --port ${P2P_PORT} \
     --discovery.addr 0.0.0.0 \
     --discovery.port ${P2P_PORT} \
-    --p2p-secret-key /data/execution/p2p/secret.key \
+    --p2p-secret-key $DATA_DIR/execution/p2p/secret.key \
     --bootnodes ${BOOTNODES} \
     --enable-tx-subscription \
     --committed-subdags-per-block ${SUBDAGS_PER_BLOCK:-30} \
@@ -200,17 +211,27 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     -$LOG_LEVEL
 Restart=always
 RestartSec=10
-StandardOutput=append:/data/logs/fastevm-execution.log
-StandardError=append:/data/logs/fastevm-execution.log
+StandardOutput=append:$DATA_DIR/logs/fastevm-execution.log
+StandardError=append:$DATA_DIR/logs/fastevm-execution.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    then
+        log_error "Failed to create fastevm-execution.service file"
+        exit 1
+    fi
+    
+    # Verify service file was created
+    if [ ! -f "/etc/systemd/system/fastevm-execution.service" ]; then
+        log_error "Service file was not created: /etc/systemd/system/fastevm-execution.service"
+        exit 1
+    fi
 
     # Create systemd service for consensus client
     log_info "Creating fastevm-consensus.service..."
     
-    tee /etc/systemd/system/fastevm-consensus.service > /dev/null << 'EOF'
+    if ! tee /etc/systemd/system/fastevm-consensus.service > /dev/null << EOF
 [Unit]
 Description=FastEVM Consensus Client
 After=network.target fastevm-execution.service
@@ -219,16 +240,27 @@ After=network.target fastevm-execution.service
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/data
-ExecStart=/usr/local/bin/fastevm-consensus start --config /data/config/node.yml
+WorkingDirectory=$DATA_DIR
+Environment=DATA_DIR=$DATA_DIR
+ExecStart=/usr/local/bin/fastevm-consensus start --config $DATA_DIR/config/node.yml
 Restart=always
 RestartSec=10
-StandardOutput=append:/data/logs/fastevm-consensus.log
-StandardError=append:/data/logs/fastevm-consensus.log
+StandardOutput=append:$DATA_DIR/logs/fastevm-consensus.log
+StandardError=append:$DATA_DIR/logs/fastevm-consensus.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    then
+        log_error "Failed to create fastevm-consensus.service file"
+        exit 1
+    fi
+    
+    # Verify service file was created
+    if [ ! -f "/etc/systemd/system/fastevm-consensus.service" ]; then
+        log_error "Service file was not created: /etc/systemd/system/fastevm-consensus.service"
+        exit 1
+    fi
 
     # Create health check script
     log_info "Creating fastevm-health-check.sh..."
@@ -283,31 +315,32 @@ echo "=== Network Ports ==="
 netstat -tlnp | grep -E "(8545|8546|8551|30303|26657)"
 echo ""
 
+DATA_DIR="\${DATA_DIR:-/data}"
 echo "=== Log Files ==="
-if [ -f "/data/logs/fastevm-execution.log" ]; then
-    echo "Execution log: /data/logs/fastevm-execution.log ($(wc -l < /data/logs/fastevm-execution.log) lines, $(du -h /data/logs/fastevm-execution.log | cut -f1))"
+if [ -f "\$DATA_DIR/logs/fastevm-execution.log" ]; then
+    echo "Execution log: \$DATA_DIR/logs/fastevm-execution.log (\$(wc -l < \$DATA_DIR/logs/fastevm-execution.log) lines, \$(du -h \$DATA_DIR/logs/fastevm-execution.log | cut -f1))"
 else
     echo "Execution log: Not found"
 fi
 
-if [ -f "/data/logs/fastevm-consensus.log" ]; then
-    echo "Consensus log: /data/logs/fastevm-consensus.log ($(wc -l < /data/logs/fastevm-consensus.log) lines, $(du -h /data/logs/fastevm-consensus.log | cut -f1))"
+if [ -f "\$DATA_DIR/logs/fastevm-consensus.log" ]; then
+    echo "Consensus log: \$DATA_DIR/logs/fastevm-consensus.log (\$(wc -l < \$DATA_DIR/logs/fastevm-consensus.log) lines, \$(du -h \$DATA_DIR/logs/fastevm-consensus.log | cut -f1))"
 else
     echo "Consensus log: Not found"
 fi
 echo ""
 
 echo "=== Recent Execution Logs ==="
-if [ -f "/data/logs/fastevm-execution.log" ]; then
-    tail -n 5 /data/logs/fastevm-execution.log
+if [ -f "\$DATA_DIR/logs/fastevm-execution.log" ]; then
+    tail -n 5 "\$DATA_DIR/logs/fastevm-execution.log"
 else
     echo "Execution log file not found"
 fi
 echo ""
 
 echo "=== Recent Consensus Logs ==="
-if [ -f "/data/logs/fastevm-consensus.log" ]; then
-    tail -n 5 /data/logs/fastevm-consensus.log
+if [ -f "\$DATA_DIR/logs/fastevm-consensus.log" ]; then
+    tail -n 5 "\$DATA_DIR/logs/fastevm-consensus.log"
 else
     echo "Consensus log file not found"
 fi
@@ -317,12 +350,22 @@ EOL
 
     # Reload systemd daemon
     log_info "Reloading systemd daemon..."
-    systemctl daemon-reload
+    if ! systemctl daemon-reload; then
+        log_error "Failed to reload systemd daemon"
+        exit 1
+    fi
 
     # Enable services
     log_info "Enabling services..."
-    systemctl enable fastevm-execution
-    systemctl enable fastevm-consensus
+    if ! systemctl enable fastevm-execution; then
+        log_error "Failed to enable fastevm-execution service"
+        exit 1
+    fi
+    
+    if ! systemctl enable fastevm-consensus; then
+        log_error "Failed to enable fastevm-consensus service"
+        exit 1
+    fi
 
     log_success "FastEVM services installed successfully!"
 }
@@ -400,32 +443,32 @@ view_logs() {
     case "$service" in
         "execution"|"exec")
             log_info "Showing execution client logs (last $lines lines)..."
-            if [ -f "/data/logs/fastevm-execution.log" ]; then
-                tail -n "$lines" /data/logs/fastevm-execution.log
+            if [ -f "$DATA_DIR/logs/fastevm-execution.log" ]; then
+                tail -n "$lines" "$DATA_DIR/logs/fastevm-execution.log"
             else
-                log_error "Execution log file not found: /data/logs/fastevm-execution.log"
+                log_error "Execution log file not found: $DATA_DIR/logs/fastevm-execution.log"
             fi
             ;;
         "consensus"|"cons")
             log_info "Showing consensus client logs (last $lines lines)..."
-            if [ -f "/data/logs/fastevm-consensus.log" ]; then
-                tail -n "$lines" /data/logs/fastevm-consensus.log
+            if [ -f "$DATA_DIR/logs/fastevm-consensus.log" ]; then
+                tail -n "$lines" "$DATA_DIR/logs/fastevm-consensus.log"
             else
-                log_error "Consensus log file not found: /data/logs/fastevm-consensus.log"
+                log_error "Consensus log file not found: $DATA_DIR/logs/fastevm-consensus.log"
             fi
             ;;
         "all")
             log_info "Showing all logs (last $lines lines)..."
             echo "=== Execution Client Logs ==="
-            if [ -f "/data/logs/fastevm-execution.log" ]; then
-                tail -n "$lines" /data/logs/fastevm-execution.log
+            if [ -f "$DATA_DIR/logs/fastevm-execution.log" ]; then
+                tail -n "$lines" "$DATA_DIR/logs/fastevm-execution.log"
             else
                 echo "Execution log file not found"
             fi
             echo ""
             echo "=== Consensus Client Logs ==="
-            if [ -f "/data/logs/fastevm-consensus.log" ]; then
-                tail -n "$lines" /data/logs/fastevm-consensus.log
+            if [ -f "$DATA_DIR/logs/fastevm-consensus.log" ]; then
+                tail -n "$lines" "$DATA_DIR/logs/fastevm-consensus.log"
             else
                 echo "Consensus log file not found"
             fi
@@ -445,24 +488,24 @@ follow_logs() {
     case "$service" in
         "execution"|"exec")
             log_info "Following execution client logs..."
-            if [ -f "/data/logs/fastevm-execution.log" ]; then
-                tail -f /data/logs/fastevm-execution.log
+            if [ -f "$DATA_DIR/logs/fastevm-execution.log" ]; then
+                tail -f "$DATA_DIR/logs/fastevm-execution.log"
             else
-                log_error "Execution log file not found: /data/logs/fastevm-execution.log"
+                log_error "Execution log file not found: $DATA_DIR/logs/fastevm-execution.log"
             fi
             ;;
         "consensus"|"cons")
             log_info "Following consensus client logs..."
-            if [ -f "/data/logs/fastevm-consensus.log" ]; then
-                tail -f /data/logs/fastevm-consensus.log
+            if [ -f "$DATA_DIR/logs/fastevm-consensus.log" ]; then
+                tail -f "$DATA_DIR/logs/fastevm-consensus.log"
             else
-                log_error "Consensus log file not found: /data/logs/fastevm-consensus.log"
+                log_error "Consensus log file not found: $DATA_DIR/logs/fastevm-consensus.log"
             fi
             ;;
         "all")
             log_info "Following all logs..."
-            if [ -f "/data/logs/fastevm-execution.log" ] && [ -f "/data/logs/fastevm-consensus.log" ]; then
-                tail -f /data/logs/fastevm-execution.log /data/logs/fastevm-consensus.log
+            if [ -f "$DATA_DIR/logs/fastevm-execution.log" ] && [ -f "$DATA_DIR/logs/fastevm-consensus.log" ]; then
+                tail -f "$DATA_DIR/logs/fastevm-execution.log" "$DATA_DIR/logs/fastevm-consensus.log"
             else
                 log_error "One or more log files not found"
             fi
@@ -526,11 +569,11 @@ rotate_logs() {
     
     case "$service" in
         "execution"|"exec")
-            if [ -f "/data/logs/fastevm-execution.log" ]; then
+            if [ -f "$DATA_DIR/logs/fastevm-execution.log" ]; then
                 log_info "Rotating execution client logs..."
-                mv /data/logs/fastevm-execution.log /data/logs/fastevm-execution.log.$(date +%Y%m%d_%H%M%S)
-                touch /data/logs/fastevm-execution.log
-                chown ubuntu:ubuntu /data/logs/fastevm-execution.log
+                mv "$DATA_DIR/logs/fastevm-execution.log" "$DATA_DIR/logs/fastevm-execution.log.$(date +%Y%m%d_%H%M%S)"
+                touch "$DATA_DIR/logs/fastevm-execution.log"
+                chown ubuntu:ubuntu "$DATA_DIR/logs/fastevm-execution.log"
                 systemctl reload fastevm-execution
                 log_success "Execution logs rotated"
             else
@@ -538,11 +581,11 @@ rotate_logs() {
             fi
             ;;
         "consensus"|"cons")
-            if [ -f "/data/logs/fastevm-consensus.log" ]; then
+            if [ -f "$DATA_DIR/logs/fastevm-consensus.log" ]; then
                 log_info "Rotating consensus client logs..."
-                mv /data/logs/fastevm-consensus.log /data/logs/fastevm-consensus.log.$(date +%Y%m%d_%H%M%S)
-                touch /data/logs/fastevm-consensus.log
-                chown ubuntu:ubuntu /data/logs/fastevm-consensus.log
+                mv "$DATA_DIR/logs/fastevm-consensus.log" "$DATA_DIR/logs/fastevm-consensus.log.$(date +%Y%m%d_%H%M%S)"
+                touch "$DATA_DIR/logs/fastevm-consensus.log"
+                chown ubuntu:ubuntu "$DATA_DIR/logs/fastevm-consensus.log"
                 systemctl reload fastevm-consensus
                 log_success "Consensus logs rotated"
             else

@@ -27,17 +27,33 @@ log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
+# Verify NVMe disk is mounted (mounted in bootstrap.sh)
+# This is just a check to ensure /data is available
+if mountpoint -q "/data" 2>/dev/null; then
+    log_info "/data is mounted and ready"
+    # Ensure ownership is correct
+    sudo chown ubuntu:ubuntu /data 2>/dev/null || true
+else
+    log_info "/data is not a mountpoint (using boot disk or not mounted)"
+    # Ensure /data directory exists
+    sudo mkdir -p /data
+    sudo chown ubuntu:ubuntu /data 2>/dev/null || true
+fi
+
+# Set data directory - can be overridden via environment variable
+DATA_DIR="${DATA_DIR:-/data}"
+
 # Load environment variables from node.env file
 if [ -f "/tmp/fastevm-config/node.env" ]; then
     log_info "Loading environment variables from node.env file..."
     source /tmp/fastevm-config/node.env
-    cp /tmp/fastevm-config/node.env /data/node.env
+    cp /tmp/fastevm-config/node.env "$DATA_DIR/node.env"
     log_success "Environment variables loaded successfully"
 else
     log_error "node.env file not found at /tmp/fastevm-config/node.env"
     exit 1
 fi
-ls -la /data
+ls -la "$DATA_DIR"
 log_info "Starting FastEVM node $NODE_INDEX setup..."
 
 # Step 1: Initialize chain with prefunded accounts
@@ -56,37 +72,76 @@ if [ ! -f "/tmp/fastevm-config/genesis.json" ]; then
     exit 1
 fi
 
-# Generate prefunded accounts
+# Generate prefunded accounts (check if already generated with correct count)
 log_info "Generating prefunded accounts..."
-if sudo /usr/local/bin/cli allocate-funds \
-    --input "/tmp/fastevm-config/genesis.json" \
-    --count "${PREFUND_ACCOUNT_COUNT:-100000}" \
-    --mnemonic "${TEST_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}" \
-    --amount "${PREFUND_BALANCE:-1000000000000000000000}" \
-    --output "/data/config"; then
-    sudo chown -R ubuntu:ubuntu /data/config
-    log_success "Generated prefunded accounts successfully"
-else
-    log_error "Failed to generate prefunded accounts"
-    exit 1
+PREFUND_ACCOUNT_COUNT="${PREFUND_ACCOUNT_COUNT:-100000}"
+PREFUND_BALANCE="${PREFUND_BALANCE:-1000000000000000000000}"
+TEST_MNEMONIC="${TEST_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}"
+
+# Check if genesis.json exists and has the expected number of prefunded accounts
+SHOULD_GENERATE=true
+if [ -f "$DATA_DIR/config/genesis.json" ] && [ -s "$DATA_DIR/config/genesis.json" ]; then
+    # Check if jq is available to count accounts
+    if command -v jq &> /dev/null; then
+        CURRENT_ACCOUNT_COUNT=$(jq '.alloc | length' "$DATA_DIR/config/genesis.json" 2>/dev/null || echo "0")
+        log_info "Current genesis.json has $CURRENT_ACCOUNT_COUNT accounts in alloc section"
+        # Check if we have at least the expected number of prefunded accounts
+        # We allow some margin (at least 90% of expected) to account for base accounts
+        if [ "$CURRENT_ACCOUNT_COUNT" -ge "$PREFUND_ACCOUNT_COUNT" ]; then
+            log_info "Genesis file already has sufficient prefunded accounts ($CURRENT_ACCOUNT_COUNT >= $PREFUND_ACCOUNT_COUNT), skipping regeneration"
+            SHOULD_GENERATE=false
+        else
+            log_warning "Genesis file exists but has insufficient accounts ($CURRENT_ACCOUNT_COUNT < $PREFUND_ACCOUNT_COUNT), regenerating..."
+        fi
+    else
+        log_warning "jq not available, cannot verify account count. Regenerating to be safe..."
+    fi
+fi
+
+if [ "$SHOULD_GENERATE" = true ]; then
+    log_info "Generating $PREFUND_ACCOUNT_COUNT prefunded accounts with balance $PREFUND_BALANCE wei..."
+    if sudo /usr/local/bin/cli allocate-funds \
+        --input "/tmp/fastevm-config/genesis.json" \
+        --count "$PREFUND_ACCOUNT_COUNT" \
+        --mnemonic "$TEST_MNEMONIC" \
+        --amount "$PREFUND_BALANCE" \
+        --output "$DATA_DIR/config"; then
+        sudo chown -R ubuntu:ubuntu "$DATA_DIR/config"
+        
+        # Verify the generated file
+        if [ -f "$DATA_DIR/config/genesis.json" ]; then
+            if command -v jq &> /dev/null; then
+                FINAL_ACCOUNT_COUNT=$(jq '.alloc | length' "$DATA_DIR/config/genesis.json" 2>/dev/null || echo "0")
+                log_success "Generated prefunded accounts successfully (total accounts: $FINAL_ACCOUNT_COUNT)"
+            else
+                log_success "Generated prefunded accounts successfully"
+            fi
+        else
+            log_error "Genesis file was not created at $DATA_DIR/config/genesis.json"
+            exit 1
+        fi
+    else
+        log_error "Failed to generate prefunded accounts"
+        exit 1
+    fi
 fi
 
 # Step 2: Generate peer IDs using CLI
 log_info "Step 2: Generating peer IDs using CLI..."
 
 # Create P2P directory if it doesn't exist
-sudo mkdir -p /data/execution/p2p
+sudo mkdir -p "$DATA_DIR/execution/p2p"
 
 # Generate peer ID for this node
 log_info "Generating peer ID for node $NODE_INDEX..."
-echo -n "$P2P_SECRET_KEY" | sudo tee /data/execution/p2p/secret.key > /dev/null
-sudo chmod 600 /data/execution/p2p/secret.key
-sudo chown ubuntu:ubuntu -R /data/execution
+echo -n "$P2P_SECRET_KEY" | sudo tee "$DATA_DIR/execution/p2p/secret.key" > /dev/null
+sudo chmod 600 "$DATA_DIR/execution/p2p/secret.key"
+sudo chown ubuntu:ubuntu -R "$DATA_DIR/execution"
 
-if /usr/local/bin/cli show-peer-id --file /data/execution/p2p/secret.key --output /data/execution/p2p/secret.hex; then
+if /usr/local/bin/cli show-peer-id --file "$DATA_DIR/execution/p2p/secret.key" --output "$DATA_DIR/execution/p2p/secret.hex"; then
     # Remove 0x prefix if present
-    sed -i 's/^0x//' /data/execution/p2p/secret.hex
-    PEER_ID=$(cat /data/execution/p2p/secret.hex)
+    sed -i 's/^0x//' "$DATA_DIR/execution/p2p/secret.hex"
+    PEER_ID=$(cat "$DATA_DIR/execution/p2p/secret.hex")
     log_success "Generated peer ID for node $NODE_INDEX: $PEER_ID"
 else
     log_error "Failed to generate peer ID for node $NODE_INDEX"
@@ -138,58 +193,76 @@ done
 BOOTNODES=$(echo "$BOOTNODES" | sed 's/^,//')
 log_info "Generated bootnodes: $BOOTNODES"
 
-# Append bootnodes to node.env file
+# Append bootnodes to node.env file (only if not already present)
 log_info "Appending bootnodes to node.env file..."
-if [ -f "/data/node.env" ]; then
-    echo "" >> /data/node.env
-    echo "# Generated bootnodes" >> /data/node.env
-    echo "BOOTNODES=\"$BOOTNODES\"" >> /data/node.env
-    log_success "Bootnodes appended to node.env"
+if [ -f "$DATA_DIR/node.env" ]; then
+    # Check if bootnodes already exist
+    if grep -q "^BOOTNODES=" "$DATA_DIR/node.env" 2>/dev/null; then
+        log_info "Bootnodes already exist in node.env, updating..."
+        # Remove old bootnodes line and add new one
+        sed -i '/^BOOTNODES=/d' "$DATA_DIR/node.env"
+        # Remove the comment if it exists
+        sed -i '/^# Generated bootnodes$/d' "$DATA_DIR/node.env"
+    fi
+    echo "" >> "$DATA_DIR/node.env"
+    echo "# Generated bootnodes" >> "$DATA_DIR/node.env"
+    echo "BOOTNODES=\"$BOOTNODES\"" >> "$DATA_DIR/node.env"
+    log_success "Bootnodes updated in node.env"
 else
-    log_warning "node.env file not found at /data/node.env"
+    log_warning "node.env file not found at $DATA_DIR/node.env"
 fi
 
 # Replace placeholders in execution.toml
-if [ -f "/data/config/execution.toml" ]; then
+if [ -f "$DATA_DIR/config/execution.toml" ]; then
     log_info "Replacing placeholders in execution.toml..."
-    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" /data/config/execution.toml
-    sed -i "s|{{BOOTNODES}}|$BOOTNODES|g" /data/config/execution.toml
+    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" "$DATA_DIR/config/execution.toml"
+    sed -i "s|{{BOOTNODES}}|$BOOTNODES|g" "$DATA_DIR/config/execution.toml"
     
     # Replace placeholders for other nodes' peer IDs using stored values
     for j in $(seq 0 $((NODE_COUNT - 1))); do
         if [ $j -ne $NODE_INDEX ] && [ -n "${OTHER_PEER_IDS[$j]}" ]; then
-            sed -i "s|{{PEER_ID_$j}}|${OTHER_PEER_IDS[$j]}|g" /data/config/execution.toml
+            sed -i "s|{{PEER_ID_$j}}|${OTHER_PEER_IDS[$j]}|g" "$DATA_DIR/config/execution.toml"
         fi
     done
     log_success "Replaced placeholders in execution.toml"
-    cat /data/config/execution.toml
+    cat "$DATA_DIR/config/execution.toml"
 else
     log_warning "execution.toml not found, skipping placeholder replacement"
 fi
 
 # Replace placeholders in node.yml
-if [ -f "/data/config/node.yml" ]; then
+if [ -f "$DATA_DIR/config/node.yml" ]; then
     log_info "Replacing placeholders in node.yml..."
-    sed -i "s|{{NODE_INDEX}}|$NODE_INDEX|g" /data/config/node.yml
-    sed -i "s|{{HTTP_PORT}}|$HTTP_PORT|g" /data/config/node.yml
-    sed -i "s|{{WS_PORT}}|$WS_PORT|g" /data/config/node.yml
-    sed -i "s|{{JWT_SECRET}}|$JWT_SECRET|g" /data/config/node.yml
-    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" /data/config/node.yml
+    sed -i "s|{{NODE_INDEX}}|$NODE_INDEX|g" "$DATA_DIR/config/node.yml"
+    sed -i "s|{{HTTP_PORT}}|$HTTP_PORT|g" "$DATA_DIR/config/node.yml"
+    sed -i "s|{{WS_PORT}}|$WS_PORT|g" "$DATA_DIR/config/node.yml"
+    sed -i "s|{{JWT_SECRET}}|$JWT_SECRET|g" "$DATA_DIR/config/node.yml"
+    sed -i "s|{{PEER_ID_$NODE_INDEX}}|$PEER_ID|g" "$DATA_DIR/config/node.yml"
     log_success "Replaced placeholders in config/node.yml"
-    cat /data/config/node.yml
+    cat "$DATA_DIR/config/node.yml"
 else
     log_warning "config/node.yml not found, skipping placeholder replacement"
 fi
 
 # Step 4: Initialize execution node with genesis
 log_info "Step 4: Initializing execution node with genesis..."
-if [ -f "/data/config/genesis.json" ] && [ -f "/usr/local/bin/fastevm-execution" ]; then
-    log_info "Initializing execution node with genesis..."
-    if /usr/local/bin/fastevm-execution init --datadir /data/execution --chain /data/config/genesis.json; then
-        log_success "Execution node initialized successfully"
-        cat /data/config/execution.toml
+if [ -f "$DATA_DIR/config/genesis.json" ] && [ -f "/usr/local/bin/fastevm-execution" ]; then
+    # Check if already initialized (look for chaindata directory)
+    if [ -d "$DATA_DIR/execution/chaindata" ] && [ "$(ls -A $DATA_DIR/execution/chaindata 2>/dev/null)" ]; then
+        log_info "Execution node appears to be already initialized, skipping init"
     else
-        log_warning "Execution node initialization completed with warnings"
+        log_info "Initializing execution node with genesis..."
+        if /usr/local/bin/fastevm-execution init --datadir "$DATA_DIR/execution" --chain "$DATA_DIR/config/genesis.json" 2>&1; then
+            log_success "Execution node initialized successfully"
+            cat "$DATA_DIR/config/execution.toml"
+        else
+            # Check if it failed because it's already initialized
+            if [ -d "$DATA_DIR/execution/chaindata" ]; then
+                log_info "Execution node was already initialized, continuing..."
+            else
+                log_warning "Execution node initialization completed with warnings"
+            fi
+        fi
     fi
 else
     log_warning "Skipping execution node initialization (genesis or binary not available)"
@@ -228,6 +301,40 @@ echo ""
 
 # Install systemd services
 log_info "Installing systemd services..."
-sudo bash /tmp/fastevm-config/service.sh install
+
+# Check if service.sh exists
+if [ ! -f "/tmp/fastevm-config/service.sh" ]; then
+    log_error "service.sh not found at /tmp/fastevm-config/service.sh"
+    log_error "Service installation cannot proceed"
+    exit 1
+fi
+
+# Install services and check for errors
+if ! sudo bash /tmp/fastevm-config/service.sh install; then
+    log_error "Failed to install systemd services"
+    exit 1
+fi
+
+# Verify service files were created
+if [ ! -f "/etc/systemd/system/fastevm-execution.service" ]; then
+    log_error "Service file not created: /etc/systemd/system/fastevm-execution.service"
+    exit 1
+fi
+
+if [ ! -f "/etc/systemd/system/fastevm-consensus.service" ]; then
+    log_error "Service file not created: /etc/systemd/system/fastevm-consensus.service"
+    exit 1
+fi
+
+# Verify services are enabled
+if ! systemctl is-enabled fastevm-execution >/dev/null 2>&1; then
+    log_error "fastevm-execution service is not enabled"
+    exit 1
+fi
+
+if ! systemctl is-enabled fastevm-consensus >/dev/null 2>&1; then
+    log_error "fastevm-consensus service is not enabled"
+    exit 1
+fi
 
 log_success "Node $NODE_INDEX is ready for service startup!"

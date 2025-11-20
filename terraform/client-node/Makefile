@@ -75,7 +75,7 @@ destroy: ## Destroy client node
 	@echo "⚠️  Destroying client node..."
 	@read -p "Are you sure? This will delete the client node and all data. (y/N): " confirm; \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
-		terraform destroy -auto-approve; \
+		terraform destroy -auto-approve -refresh=false; \
 		echo "✅ Client node destroyed"; \
 	else \
 		echo "❌ Operation cancelled"; \

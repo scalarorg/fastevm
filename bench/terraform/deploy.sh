@@ -52,8 +52,10 @@ Commands:
   ssh-client        SSH to client node
   logs-execution    Show execution node logs (last 100 lines)
   logs-client       Show client node logs (last 100 lines)
+  copy-logs         Copy gravity-bench.log from client node to local machine
   rerun-execution   Re-run execution node setup and restart (cleanup + start)
   rerun-client      Re-run client node setup script
+  start-benchmark   Start benchmark on client node
   all               Run: init, plan, apply, output (default)
 
 Note: For full debugging capabilities, use ./debug.sh instead
@@ -77,6 +79,8 @@ Examples:
   $0 ssh-client         # SSH to client node
   $0 rerun-execution    # Re-run execution node setup and restart (cleanup + start)
   $0 rerun-client       # Re-run client node setup script
+  $0 start-benchmark    # Start benchmark on client node
+  $0 copy-logs          # Copy gravity-bench.log from client node to local machine
 
 EOF
 }
@@ -340,7 +344,6 @@ cmd_deploy_client() {
     cmd_init
     
     # Resources needed for client node (includes shared resources)
-    # Note: execution node script resources removed - handled by deploy.sh now
     local targets=(
         "tls_private_key.gravity_ssh"
         "local_file.gravity_private_key"
@@ -355,8 +358,7 @@ cmd_deploy_client() {
         "null_resource.wait_for_execution_ssh"
         "google_compute_instance.client_node"
         "null_resource.wait_for_client_ssh"
-        "null_resource.copy_client_setup_script"
-        "null_resource.execute_client_setup"
+        "null_resource.copy_client_scripts"
     )
     
     # Build target flags
@@ -376,7 +378,47 @@ cmd_deploy_client() {
         terraform apply tfplan-client
     fi
     
-    log_success "Client node deployment completed!"
+    log_success "Client node infrastructure created!"
+    
+    # Get client node info for SSH
+    get_client_node_info || return 1
+    
+    # Execute client scripts in sequence
+    log_info "Executing client scripts in sequence..."
+    
+    # Step 1: Run client-setup.sh
+    if cmd_run_client_setup; then
+        log_success "Client setup completed"
+    else
+        log_error "Client setup failed"
+        return 1
+    fi
+    
+    # Step 2: Run client-build.sh
+    if cmd_run_client_build; then
+        log_success "Client build completed"
+    else
+        log_error "Client build failed"
+        return 1
+    fi
+    
+    # Create and copy bench_config.toml after build completes
+    log_info "Creating and copying bench_config.toml..."
+    if cmd_create_and_copy_bench_config; then
+        log_success "bench_config.toml created and deployed"
+    else
+        log_warning "Failed to create bench_config.toml, but continuing..."
+        log_info "You can create it manually using the template at /tmp/bench_config.template"
+    fi
+    
+    # Step 3: Run client-benchmark.sh
+    if cmd_run_client_benchmark; then
+        log_success "Client benchmark started"
+    else
+        log_warning "Client benchmark failed or skipped"
+        log_info "You can run it manually: ssh to client node and run: sudo bash /opt/client-benchmark.sh"
+    fi
+    
     log_info "Client node information:"
     terraform output -json client_node_info 2>/dev/null || echo "  Run 'terraform output' to see details"
 }
@@ -474,11 +516,20 @@ cmd_rerun_execution() {
 # Re-run client setup
 cmd_rerun_client() {
     log_info "Re-running client node setup..."
+    
+    # Create and copy bench_config.toml first
+    if cmd_create_and_copy_bench_config; then
+        log_success "bench_config.toml updated"
+    else
+        log_warning "Failed to update bench_config.toml"
+    fi
+    
+    # Re-run setup script if it exists
     if [ -f "run-setup.sh" ]; then
         bash run-setup.sh client
     else
-        log_error "run-setup.sh not found"
-        exit 1
+        log_info "run-setup.sh not found, skipping script re-run"
+        log_info "bench_config.toml has been updated on the client node"
     fi
 }
 
@@ -490,10 +541,12 @@ get_execution_node_info() {
     [ -z "$output" ] || [ "$output" = "null" ] && { log_error "Execution node not found. Run 'terraform apply' first."; return 1; }
     
     EXECUTION_NODE_IP=$(echo "$output" | grep -o '"external_ip":"[^"]*"' | cut -d'"' -f4)
+    EXECUTION_NODE_INTERNAL_IP=$(echo "$output" | grep -o '"internal_ip":"[^"]*"' | cut -d'"' -f4)
     EXECUTION_NODE_USER="ubuntu"
     EXECUTION_NODE_SSH_KEY="$ssh_key"
     
     [ -z "$EXECUTION_NODE_IP" ] && { log_error "Could not extract execution node IP"; return 1; }
+    [ -z "$EXECUTION_NODE_INTERNAL_IP" ] && { log_error "Could not extract execution node internal IP"; return 1; }
     [ ! -f "$ssh_key" ] && { log_error "SSH key not found: $ssh_key"; return 1; }
     
     return 0
@@ -514,6 +567,205 @@ scp_execution() {
     scp -i "$EXECUTION_NODE_SSH_KEY" -o StrictHostKeyChecking=no "$local_file" "$EXECUTION_NODE_USER@$EXECUTION_NODE_IP:$remote_path" >/dev/null 2>&1
 }
 
+# Get client node connection info (returns via global variables)
+get_client_node_info() {
+    local ssh_key="gravity-deploy-key"
+    local output=$(terraform output -json client_node_info 2>/dev/null || echo "")
+    
+    [ -z "$output" ] || [ "$output" = "null" ] && { log_error "Client node not found. Run 'terraform apply' first."; return 1; }
+    
+    CLIENT_NODE_IP=$(echo "$output" | grep -o '"external_ip":"[^"]*"' | cut -d'"' -f4)
+    CLIENT_NODE_USER="ubuntu"
+    CLIENT_NODE_SSH_KEY="$ssh_key"
+    
+    [ -z "$CLIENT_NODE_IP" ] && { log_error "Could not extract client node IP"; return 1; }
+    [ ! -f "$ssh_key" ] && { log_error "SSH key not found: $ssh_key"; return 1; }
+    
+    return 0
+}
+
+# Create bench_config.toml locally from template and copy to client node
+cmd_create_and_copy_bench_config() {
+    log_info "Creating bench_config.toml from template..."
+    
+    # Get execution node internal IP from Terraform
+    local execution_output=$(terraform output -json execution_node_info 2>/dev/null || echo "")
+    local execution_internal_ip=$(echo "$execution_output" | grep -o '"internal_ip":"[^"]*"' | cut -d'"' -f4)
+    local http_port=$(terraform output -raw http_port 2>/dev/null || echo "8545")
+    
+    [ -z "$execution_internal_ip" ] && { log_error "Could not get execution node internal IP from Terraform"; return 1; }
+    
+    local template_file="$SCRIPT_DIR/templates/bench_config.template"
+    [ ! -f "$template_file" ] && { log_error "Template file not found: $template_file"; return 1; }
+    
+    # Create bench_config.toml locally
+    local local_config="/tmp/bench_config.toml"
+    local execution_url="http://${execution_internal_ip}:${http_port}"
+    
+    log_info "Execution node URL: $execution_url"
+    sed "s|EXECUTION_NODE|${execution_url}|g" "$template_file" > "$local_config" || {
+        log_error "Failed to create bench_config.toml from template"
+        return 1
+    }
+    
+    # Verify the replacement worked
+    if grep -q "EXECUTION_NODE" "$local_config"; then
+        log_error "Template replacement failed - EXECUTION_NODE still present in config"
+        return 1
+    fi
+    
+    # Copy to client node
+    get_client_node_info || return 1
+    log_info "Copying bench_config.toml to client node..."
+    scp_client "$local_config" "/tmp/bench_config.toml" || {
+        log_error "Failed to copy bench_config.toml to client node"
+        return 1
+    }
+    
+    # Move to final location on client node (ensure directory exists first)
+    ssh_client "sudo mkdir -p /opt/gravity_bench && sudo mv /tmp/bench_config.toml /opt/gravity_bench/bench_config.toml && sudo chown ubuntu:ubuntu /opt/gravity_bench/bench_config.toml" || {
+        log_error "Failed to install bench_config.toml on client node"
+        return 1
+    }
+    
+    log_success "bench_config.toml created and copied to client node"
+    rm -f "$local_config" 2>/dev/null || true
+    return 0
+}
+
+# Helper: Execute SSH command on client node
+ssh_client() {
+    local cmd="$1"
+    get_client_node_info || return 1
+    ssh -i "$CLIENT_NODE_SSH_KEY" -o StrictHostKeyChecking=no "$CLIENT_NODE_USER@$CLIENT_NODE_IP" "$cmd"
+}
+
+# Helper: Copy file to client node
+scp_client() {
+    local local_file="$1"
+    local remote_path="$2"
+    get_client_node_info || return 1
+    scp -i "$CLIENT_NODE_SSH_KEY" -o StrictHostKeyChecking=no "$local_file" "$CLIENT_NODE_USER@$CLIENT_NODE_IP:$remote_path" >/dev/null 2>&1
+}
+
+# Run client-setup.sh script
+cmd_run_client_setup() {
+    log_info "Running client-setup.sh (installing system packages and Rust)..."
+    get_client_node_info || return 1
+    
+    # Check if script exists
+    if ! ssh_client "test -f /opt/client-setup.sh"; then
+        log_error "Script /opt/client-setup.sh not found. Copy step may have failed."
+        return 1
+    fi
+    
+    # Run the script and capture output
+    log_info "Executing /opt/client-setup.sh..."
+    if ssh_client "sudo bash /opt/client-setup.sh 2>&1 | sudo tee -a /var/log/client-setup.log"; then
+        # Check for completion marker
+        if ssh_client "test -f /var/log/client-setup-complete"; then
+            log_success "Client setup completed successfully"
+            return 0
+        else
+            log_error "Client setup script completed but marker file not found"
+            log_info "Last 50 lines of log:"
+            ssh_client "sudo tail -50 /var/log/client-setup.log" || true
+            return 1
+        fi
+    else
+        log_error "Client setup script failed"
+        log_info "Last 50 lines of log:"
+        ssh_client "sudo tail -50 /var/log/client-setup.log" || true
+        return 1
+    fi
+}
+
+# Run client-build.sh script
+cmd_run_client_build() {
+    log_info "Running client-build.sh (building client code and preparing config)..."
+    get_client_node_info || return 1
+    
+    # Check if setup is complete
+    if ! ssh_client "test -f /var/log/client-setup-complete"; then
+        log_error "Client setup not completed. Please run client-setup.sh first."
+        return 1
+    fi
+    
+    # Check if script exists
+    if ! ssh_client "test -f /opt/client-build.sh"; then
+        log_error "Script /opt/client-build.sh not found. Copy step may have failed."
+        return 1
+    fi
+    
+    # Run the script and capture output
+    log_info "Executing /opt/client-build.sh..."
+    if ssh_client "sudo bash /opt/client-build.sh 2>&1 | sudo tee -a /var/log/client-build.log"; then
+        # Check for completion marker
+        if ssh_client "test -f /var/log/client-build-complete"; then
+            log_success "Client build completed successfully"
+            return 0
+        else
+            log_error "Client build script completed but marker file not found"
+            log_info "Last 50 lines of log:"
+            ssh_client "sudo tail -50 /var/log/client-build.log" || true
+            return 1
+        fi
+    else
+        log_error "Client build script failed"
+        log_info "Last 50 lines of log:"
+        ssh_client "sudo tail -50 /var/log/client-build.log" || true
+        log_info "Checking related logs..."
+        ssh_client "sudo tail -50 /var/log/gravity-bench-build.log 2>/dev/null || echo 'Build log not found'" || true
+        return 1
+    fi
+}
+
+# Run client-benchmark.sh script
+cmd_run_client_benchmark() {
+    log_info "Running client-benchmark.sh (starting benchmark)..."
+    get_client_node_info || return 1
+    
+    # Check if build is complete
+    if ! ssh_client "test -f /var/log/client-build-complete"; then
+        log_error "Client build not completed. Please run client-build.sh first."
+        return 1
+    fi
+    
+    # Check if script exists
+    if ! ssh_client "test -f /opt/client-benchmark.sh"; then
+        log_error "Script /opt/client-benchmark.sh not found. Copy step may have failed."
+        return 1
+    fi
+    
+    # Run the script and capture output
+    log_info "Executing /opt/client-benchmark.sh..."
+    if ssh_client "sudo bash /opt/client-benchmark.sh 2>&1 | sudo tee -a /var/log/client-benchmark.log"; then
+        # Check for completion marker
+        if ssh_client "test -f /var/log/client-benchmark-complete"; then
+            log_success "Client benchmark started successfully"
+            log_info "Benchmark logs: /opt/gravity_bench/logs/gravity-bench.log"
+            log_info "To view logs: ssh to client node and run: tail -f /opt/gravity_bench/logs/gravity-bench.log"
+            return 0
+        else
+            log_warning "Client benchmark script completed but marker file not found"
+            log_info "Last 50 lines of log:"
+            ssh_client "sudo tail -50 /var/log/client-benchmark.log" || true
+            return 1
+        fi
+    else
+        log_warning "Client benchmark script failed"
+        log_info "Last 50 lines of log:"
+        ssh_client "sudo tail -50 /var/log/client-benchmark.log" || true
+        return 1
+    fi
+}
+
+# Start benchmark on client node (legacy function, kept for compatibility)
+cmd_start_benchmark() {
+    log_warning "cmd_start_benchmark is deprecated. Use cmd_run_client_benchmark instead."
+    cmd_run_client_benchmark
+}
+
 # Run steps 2-4: Copy scripts, execute setup, start dev node
 cmd_run_execution_steps() {
     log_info "Running execution node steps 2-4..."
@@ -524,19 +776,76 @@ cmd_run_execution_steps() {
     
     local dev_node_script="$SCRIPT_DIR/scripts/dev-node.sh"
     local execution_setup_script="$SCRIPT_DIR/scripts/execution-node-setup.sh"
+    local client_setup_script="$SCRIPT_DIR/scripts/client-setup.sh"
+    local client_build_script="$SCRIPT_DIR/scripts/client-build.sh"
+    local client_benchmark_script="$SCRIPT_DIR/scripts/client-benchmark.sh"
     
     [ ! -f "$dev_node_script" ] && { log_error "dev-node.sh not found"; return 1; }
     [ ! -f "$execution_setup_script" ] && { log_error "execution-node-setup.sh not found"; return 1; }
-    
+    [ ! -f "$client_setup_script" ] && { log_error "client-setup.sh not found"; return 1; }
+    [ ! -f "$client_build_script" ] && { log_error "client-build.sh not found"; return 1; }
+    [ ! -f "$client_benchmark_script" ] && { log_error "client-benchmark.sh not found"; return 1; }
+
     scp_execution "$dev_node_script" "/tmp/dev-node.sh" || { log_error "Failed to copy dev-node.sh"; return 1; }
-    scp_execution "$execution_setup_script" "/tmp/setup-execution-node.sh" || { log_error "Failed to copy execution-node-setup.sh"; return 1; }
     
+    # Process execution-node-setup.sh template variables before copying
+    log_info "Processing execution-node-setup.sh template variables..."
+    local temp_setup_script="/tmp/execution-node-setup-processed.sh"
+    
+    # Get template variables from Terraform outputs (with fallbacks)
+    cd "$SCRIPT_DIR" || { log_error "Failed to change to script directory"; return 1; }
+    local gravity_reth_repo=$(terraform output -raw gravity_reth_repo 2>/dev/null || echo "https://github.com/Galxe/gravity-reth.git")
+    local gravity_reth_branch=$(terraform output -raw gravity_reth_branch 2>/dev/null || echo "main")
+    local gravity_sdk_repo=$(terraform output -raw gravity_sdk_repo 2>/dev/null || echo "https://github.com/Galxe/gravity-sdk.git")
+    local gravity_sdk_branch=$(terraform output -raw gravity_sdk_branch 2>/dev/null || echo "main")
+    local http_port=$(terraform output -raw http_port 2>/dev/null || echo "8545")
+    local ws_port=$(terraform output -raw ws_port 2>/dev/null || echo "8546")
+    local engine_port=$(terraform output -raw engine_port 2>/dev/null || echo "8551")
+    local p2p_port=$(terraform output -raw p2p_port 2>/dev/null || echo "30303")
+    
+    # Substitute template variables in the script
+    sed -e "s|\${gravity_reth_repo}|${gravity_reth_repo}|g" \
+        -e "s|\${gravity_reth_branch}|${gravity_reth_branch}|g" \
+        -e "s|\${gravity_sdk_repo}|${gravity_sdk_repo}|g" \
+        -e "s|\${gravity_sdk_branch}|${gravity_sdk_branch}|g" \
+        -e "s|\${http_port}|${http_port}|g" \
+        -e "s|\${ws_port}|${ws_port}|g" \
+        -e "s|\${engine_port}|${engine_port}|g" \
+        -e "s|\${p2p_port}|${p2p_port}|g" \
+        "$execution_setup_script" > "$temp_setup_script" || {
+        log_error "Failed to process execution-node-setup.sh template"
+        return 1
+    }
+    
+    scp_execution "$temp_setup_script" "/tmp/setup-execution-node.sh" || { log_error "Failed to copy execution-node-setup.sh"; return 1; }
+    rm -f "$temp_setup_script" 2>/dev/null || true
+    
+    scp_execution "$client_setup_script" "/tmp/client-setup.sh" || { log_error "Failed to copy client-setup.sh"; return 1; }
+    scp_execution "$client_build_script" "/tmp/client-build.sh" || { log_error "Failed to copy client-build.sh"; return 1; }
+    scp_execution "$client_benchmark_script" "/tmp/client-benchmark.sh" || { log_error "Failed to copy client-benchmark.sh"; return 1; }
     # Install scripts step by step
-    ssh_execution "mkdir -p /opt/gravity-reth/bench" || { log_error "Failed to create bench directory"; return 1; }
-    ssh_execution "cp /tmp/dev-node.sh /opt/gravity-reth/bench/dev-node.sh" || { log_error "Failed to copy dev-node.sh"; return 1; }
-    ssh_execution "chmod +x /opt/gravity-reth/bench/dev-node.sh /tmp/setup-execution-node.sh" || { log_error "Failed to set permissions"; return 1; }
+    # ssh_execution "sudo mkdir -p /opt/gravity-reth/bench && sudo chown -R ubuntu:ubuntu /opt/gravity-reth/bench" || { log_error "Failed to create bench directory"; return 1; }
+    #ssh_execution "cp /tmp/dev-node.sh /opt/gravity-reth/bench/dev-node.sh" || { log_error "Failed to copy dev-node.sh"; return 1; }
+    ssh_execution "chmod +x /tmp/dev-node.sh /tmp/setup-execution-node.sh /tmp/client-build.sh /tmp/client-benchmark.sh" || { log_error "Failed to set permissions"; return 1; }
     ssh_execution "sudo mv /tmp/setup-execution-node.sh /opt/setup-execution-node.sh" || { log_error "Failed to move setup script"; return 1; }
+    ssh_execution "sudo mv /tmp/dev-node.sh /opt/dev-node.sh" || { log_error "Failed to move setup script"; return 1; }
+    ssh_execution "sudo mv /tmp/client-setup.sh /opt/client-setup.sh" || { log_error "Failed to move client-setup.sh"; return 1; }
+    ssh_execution "sudo mv /tmp/client-build.sh /opt/client-build.sh" || { log_error "Failed to move client-build.sh"; return 1; }
+    ssh_execution "sudo mv /tmp/client-benchmark.sh /opt/client-benchmark.sh" || { log_error "Failed to move client-benchmark.sh"; return 1; }
+    
     log_success "Scripts copied"
+    
+    local bench_config_template="$SCRIPT_DIR/templates/bench_config.template"
+    [ ! -f "$bench_config_template" ] && { log_error "bench_config.template not found"; return 1; }
+    local http_port=$(terraform output -raw http_port 2>/dev/null || echo "8545")
+    local temp_bench_config="/tmp/bench_config.toml"
+    sed "s|EXECUTION_NODE|http://localhost:${http_port}|g" "$bench_config_template" > "$temp_bench_config" || {
+        log_error "Failed to process bench_config.template"
+        return 1
+    }
+    scp_execution "$temp_bench_config" "/tmp/bench_config.toml" || { log_error "Failed to copy bench_config.toml"; return 1; }
+    rm -f "$temp_bench_config" 2>/dev/null || true
+    ssh_execution "sudo mv /tmp/bench_config.toml /opt/bench_config.toml" || { log_error "Failed to move bench_config.toml"; return 1; }
     
     # Step 3: Execute setup
     log_info "Step 3: Executing execution-node-setup.sh..."
@@ -546,9 +855,18 @@ cmd_run_execution_steps() {
     
     # Step 4: Start dev node
     log_info "Step 4: Starting dev node..."
-    ssh_execution "bash -c 'cd /opt/gravity-reth && bash bench/dev-node.sh start'" || { log_error "Failed to start dev node"; return 1; }
+    ssh_execution "bash -c '/opt/dev-node.sh start'" || { log_error "Failed to start dev node"; return 1; }
     log_success "Dev node started"
-    
+    # Step 5: Prepare client benchmark
+    log_info "Step 5: Prepare client benchmark"
+    ssh_execution "sudo bash /opt/client-setup.sh 2>&1 | sudo tee -a /var/log/client-setup.log" || { log_error "Setup script failed. Check /var/log/client-setup.log"; return 1; }
+    log_success "Client setup completed"
+    ssh_execution "sudo bash /opt/client-build.sh 2>&1 | sudo tee -a /var/log/client-build.log" || { log_error "Setup script failed. Check /var/log/client-build.log"; return 1; }
+    log_success "Client build completed"
+    # Step 6: Run client benchmark
+    log_info "Step 6: Run client benchmark"
+    ssh_execution "sudo bash /opt/client-benchmark.sh 2>&1 | sudo tee -a /var/log/client-benchmark.log" || { log_error "Setup script failed. Check /var/log/client-benchmark.log"; return 1; }
+    log_success "Client benchmark started"
     return 0
 }
 
@@ -615,7 +933,45 @@ cmd_logs_client() {
     log_warning "For full logs and better debugging, use: ./debug.sh logs-client"
     echo
     ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$ssh_user@$external_ip" \
-        "tail -100 /var/log/client-node-setup.log 2>/dev/null || echo 'Setup log not found'; echo; tail -100 /var/log/gravity-bench.log 2>/dev/null || echo 'Bench log not found'"
+        "tail -100 /var/log/client-setup.log 2>/dev/null || echo 'Setup log not found'; echo; tail -100 /var/log/client-build.log 2>/dev/null || echo 'Build log not found'; echo; tail -100 /opt/gravity_bench/logs/gravity-bench.log 2>/dev/null || echo 'Bench log not found'"
+}
+
+# Copy gravity-bench.log from client node to local machine
+cmd_copy_client_logs() {
+    log_info "Copying gravity-bench.log from client node..."
+    
+    get_client_node_info || return 1
+    
+    # Create local logs directory if it doesn't exist
+    local local_logs_dir="logs"
+    mkdir -p "$local_logs_dir"
+    
+    # Generate timestamp for log file
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local local_log_file="$local_logs_dir/gravity-bench-${timestamp}.log"
+    
+    # Check if log file exists on remote node
+    if ! ssh_client "test -f /opt/gravity_bench/logs/gravity-bench.log"; then
+        log_error "Log file not found on client node: /opt/gravity_bench/logs/gravity-bench.log"
+        log_info "The benchmark may not have started yet, or the log file is in a different location"
+        return 1
+    fi
+    
+    # Copy the log file
+    log_info "Copying /opt/gravity_bench/logs/gravity-bench.log to $local_log_file..."
+    scp -i "$CLIENT_NODE_SSH_KEY" -o StrictHostKeyChecking=no \
+        "$CLIENT_NODE_USER@$CLIENT_NODE_IP:/opt/gravity_bench/logs/gravity-bench.log" \
+        "$local_log_file" || {
+        log_error "Failed to copy log file from client node"
+        return 1
+    }
+    
+    log_success "Log file copied successfully to: $local_log_file"
+    log_info "File size: $(du -h "$local_log_file" | cut -f1)"
+    log_info "Last 10 lines:"
+    tail -10 "$local_log_file"
+    
+    return 0
 }
 
 # Parse arguments
@@ -637,7 +993,7 @@ while [[ $# -gt 0 ]]; do
             VERBOSE="true"
             shift
             ;;
-        init|plan|apply|destroy|output|deploy|execution|client|status|ssh-execution|ssh-client|logs-execution|logs-client|rerun-execution|rerun-client|all)
+        init|plan|apply|destroy|output|deploy|execution|client|status|ssh-execution|ssh-client|logs-execution|logs-client|copy-logs|rerun-execution|rerun-client|start-benchmark|all)
             COMMAND="$1"
             shift
             ;;
@@ -655,7 +1011,7 @@ if [ "$VERBOSE" = "true" ]; then
 fi
 
 # Check for terraform.tfvars (except for destroy and help)
-if [ "$COMMAND" != "destroy" ] && [ "$COMMAND" != "ssh-execution" ] && [ "$COMMAND" != "ssh-client" ] && [ "$COMMAND" != "logs-execution" ] && [ "$COMMAND" != "logs-client" ] && [ "$COMMAND" != "rerun-execution" ] && [ "$COMMAND" != "rerun-client" ] && [ "$COMMAND" != "restart-execution" ]; then
+if [ "$COMMAND" != "destroy" ] && [ "$COMMAND" != "ssh-execution" ] && [ "$COMMAND" != "ssh-client" ] && [ "$COMMAND" != "logs-execution" ] && [ "$COMMAND" != "logs-client" ] && [ "$COMMAND" != "copy-logs" ] && [ "$COMMAND" != "rerun-execution" ] && [ "$COMMAND" != "rerun-client" ] && [ "$COMMAND" != "restart-execution" ] && [ "$COMMAND" != "start-benchmark" ]; then
     check_tfvars
 fi
 
@@ -700,11 +1056,17 @@ case "$COMMAND" in
     logs-client)
         cmd_logs_client
         ;;
+    copy-logs)
+        cmd_copy_client_logs
+        ;;
     rerun-execution|restart-execution)
         cmd_rerun_execution
         ;;
     rerun-client)
         cmd_rerun_client
+        ;;
+    start-benchmark)
+        cmd_start_benchmark
         ;;
     all|*)
         cmd_deploy "$AUTO_APPROVE"

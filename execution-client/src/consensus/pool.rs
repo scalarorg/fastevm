@@ -1,16 +1,31 @@
 //! This module contains the implementation of the block creation from committed subdag.
 //! Transactions in the subdag may are not ordered by nonce.
 //! Or is not cons
+//!
+//! # Memory Optimizations
+//!
+//! This module includes several memory optimizations to reduce memory usage:
+//! 1. **Reduced Cloning**: Minimizes unnecessary cloning of transactions and subdags
+//! 2. **Pre-allocated Vectors**: Reduces memory reallocations during transaction processing
+//! 3. **Efficient Memory Usage**: Uses references and slices where possible to avoid copying data
+//!
+//! Note: All committed subdags and pending transactions are kept to ensure correct
+//! transaction ordering. The memory optimizations focus on reducing unnecessary data copying
+//! and improving memory efficiency rather than limiting the number of stored transactions.
 
 use alloy_consensus::Transaction;
 use alloy_primitives::TxHash;
 use reth_extension::MysticetiCommittedSubdag;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex, RwLock},
 };
-use tracing::{debug, info};
+use tracing::debug;
+
+// Memory optimization constants
+// Note: We don't limit pending transactions or committed subdags as all transactions
+// need to be processed in sequence to maintain correct ordering
 
 /// Struct to store committed transactions and pooled transactions
 /// Pooled transactions are transactions from committed transactions that are added to the reth pool
@@ -49,6 +64,7 @@ where
             lock: Mutex::new(()),
         }
     }
+
     pub fn next_committed_subdag_batch(
         &self,
     ) -> Option<(
@@ -65,11 +81,12 @@ where
             if committed_transactions.is_none() {
                 return None;
             }
+            // Only clone when needed (first and last), avoid unnecessary clones
             if i == next_committed_index {
-                first_committed_transactions = committed_transactions.map(|inner| inner.clone());
+                first_committed_transactions = committed_transactions.cloned();
             }
             if i == last_index {
-                last_committed_transactions = committed_transactions.map(|inner| inner.clone());
+                last_committed_transactions = committed_transactions.cloned();
             }
         }
         first_committed_transactions.zip(last_committed_transactions)
@@ -87,6 +104,42 @@ where
     /// Get queue size
     pub fn queue_size(&self) -> usize {
         self.commited_queue.read().unwrap().len()
+    }
+
+    /// Get memory statistics for monitoring
+    pub fn memory_stats(&self) -> (usize, usize, u64) {
+        let committed_queue = self.commited_queue.read().unwrap();
+        let pending_transactions = self.pending_transactions.read().unwrap();
+        let next_index = *self.next_committed_index.read().unwrap();
+        
+        (
+            committed_queue.len(),           // Number of committed subdags
+            pending_transactions.len(),      // Number of pending transactions
+            next_index,                      // Next committed index
+        )
+    }
+
+    /// Estimate memory usage in bytes
+    /// This is a rough estimate based on typical transaction sizes
+    pub fn estimate_memory_usage(&self) -> (u64, u64) {
+        let committed_queue = self.commited_queue.read().unwrap();
+        let pending_transactions = self.pending_transactions.read().unwrap();
+        
+        // Estimate: ~120 bytes per transaction + overhead
+        // Subdag overhead: ~200 bytes per subdag
+        let avg_tx_size = 200u64; // Conservative estimate with overhead
+        let subdag_overhead = 200u64;
+        
+        let committed_tx_count: usize = committed_queue
+            .values()
+            .map(|subdag| subdag.transactions.len())
+            .sum();
+        
+        let committed_memory = (committed_tx_count as u64 * avg_tx_size) + 
+                              (committed_queue.len() as u64 * subdag_overhead);
+        let pending_memory = pending_transactions.len() as u64 * avg_tx_size;
+        
+        (committed_memory, pending_memory)
     }
 }
 
@@ -113,7 +166,7 @@ where
     /// Sort transactions by nonce-based ordering
     pub fn create_proposal_transactions(
         &self,
-        pending_transactions: &Vec<Arc<Pool::Transaction>>,
+        pending_transactions: &[Arc<Pool::Transaction>],
         next_committed_subdags_batch: Vec<MysticetiCommittedSubdag<Pool::Transaction>>,
     ) -> Vec<Arc<Pool::Transaction>> {
         if !next_committed_subdags_batch.is_empty() {
@@ -143,8 +196,14 @@ where
             }
         }
 
+        // Pre-allocate capacity to reduce reallocations
+        let estimated_size = pending_transactions.len() + 
+            next_committed_subdags_batch.iter()
+                .map(|subdag| subdag.transactions.len())
+                .sum::<usize>();
+        let mut sorted_transactions = Vec::with_capacity(estimated_size);
+        
         // Get all transaction by order of nonce
-        let mut sorted_transactions = Vec::new();
         for tx in pending_transactions.iter() {
             let sender_txs = map_sender_txs.get_mut(&tx.sender()).unwrap();
             if let Some((_, tx)) = sender_txs.pop_first() {
@@ -174,25 +233,20 @@ where
         if committed_queue.len() < self.committed_subdags_per_block {
             return Vec::new();
         }
-        let mut next_committed_subdags_batch = Vec::new();
+        let mut next_committed_subdags_batch = Vec::with_capacity(self.committed_subdags_per_block);
         //Pop enough committed transactions to fill the block
         let next_committed_index = *self.next_committed_index.read().unwrap();
         for i in 0..self.committed_subdags_per_block {
             let index = next_committed_index + i as u64;
-            let next_committed_transactions = committed_queue.get(&index).map(|tx| tx.clone());
+            let next_committed_transactions = committed_queue.get(&index).cloned();
             //This next_committed_transactions should be some
             assert!(next_committed_transactions.is_some());
             let next_committed_transactions = next_committed_transactions.unwrap();
             next_committed_subdags_batch.push(next_committed_transactions);
         }
-        let last_committed_index = next_committed_subdags_batch
-            .last()
-            .unwrap()
-            .commit_ref
-            .index;
-        let pending_transactions = self.pending_transactions.read().unwrap().clone();
+        let pending_transactions = self.pending_transactions.read().unwrap();
         let sorted_transactions =
-            self.create_proposal_transactions(&pending_transactions, next_committed_subdags_batch);
+            self.create_proposal_transactions(&pending_transactions[..], next_committed_subdags_batch);
         //Clone pending transactions for building a BestTransactions iterator
         return sorted_transactions;
     }
@@ -202,7 +256,7 @@ where
         //make sure committed queue is not modified while removing mined transactions
         let _lock = self.lock.lock().unwrap();
         // Lock both collections to ensure thread safety
-        let pending_transactions = self.pending_transactions.read().unwrap().clone();
+        let pending_transactions = self.pending_transactions.read().unwrap();
         let mut committed_queue = self.commited_queue.write().unwrap();
         let mut next_committed_index = self.next_committed_index.write().unwrap();
         let mut next_committed_subdags_batch = Vec::new();
@@ -212,23 +266,42 @@ where
             assert!(committed_transactions.is_some());
             next_committed_subdags_batch.push(committed_transactions.unwrap());
         }
+        
+        // Use reference to avoid cloning the entire pending_transactions vector
         let mut sorted_transactions =
-            self.create_proposal_transactions(&pending_transactions, next_committed_subdags_batch);
+            self.create_proposal_transactions(&pending_transactions[..], next_committed_subdags_batch);
         let initial_pending_len = pending_transactions.len();
         // Remove mined transactions from pending transactions
         sorted_transactions.retain(|tx| !tx_hashes.contains(tx.hash()));
+        
         let mut pending_transactions = self.pending_transactions.write().unwrap();
         *pending_transactions = sorted_transactions;
         //Increase next committed index for next batch
         *next_committed_index += self.committed_subdags_per_block as u64;
 
+        // Calculate estimated memory usage
+        let (committed_mem, pending_mem) = {
+            let committed_tx_count: usize = committed_queue
+                .values()
+                .map(|subdag| subdag.transactions.len())
+                .sum();
+            let avg_tx_size = 200u64; // Conservative estimate with overhead
+            let subdag_overhead = 200u64;
+            let committed_mem = (committed_tx_count as u64 * avg_tx_size) + 
+                              (committed_queue.len() as u64 * subdag_overhead);
+            let pending_mem = pending_transactions.len() as u64 * avg_tx_size;
+            (committed_mem, pending_mem)
+        };
+        
         debug!(
-            "Removed mined transactions in block number {:?} with {:?} mined txs. Pending txs reduced from {} to {}. Remain committed subdags len: {}",
+            "Removed mined transactions in block number {:?} with {:?} mined txs. Pending txs reduced from {} to {}. Remain committed subdags len: {}. Estimated memory: committed={:.2}MB, pending={:.2}MB",
             block_number,
             tx_hashes.len(),
             initial_pending_len,
             pending_transactions.len(),
-            committed_queue.len()
+            committed_queue.len(),
+            committed_mem as f64 / 1_000_000.0,
+            pending_mem as f64 / 1_000_000.0
         );
     }
 }

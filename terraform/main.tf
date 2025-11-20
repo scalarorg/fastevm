@@ -128,13 +128,22 @@ resource "google_compute_instance" "fastevm_nodes" {
   # Allow stopping instances for updates (required for machine type changes)
   allow_stopping_for_update = true
 
+  # Lifecycle rules to handle existing instances
+  lifecycle {
+    create_before_destroy = false
+    ignore_changes = [
+      # Ignore changes to metadata that might be updated externally
+      metadata["ssh-keys"],
+    ]
+  }
+
   tags = ["fastevm-node"]
 
   boot_disk {
     initialize_params {
       image = var.image
-      size  = 40
-      type  = "pd-standard"
+      size  = var.disk_size
+      type  = var.disk_type
     }
   }
 

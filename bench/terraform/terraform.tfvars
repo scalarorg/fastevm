@@ -12,12 +12,13 @@ region = "us-central1"
 zone   = "us-central1-a"
 
 # Optional: Machine types
-execution_machine_type = "e2-standard-8"
-client_machine_type    = "e2-standard-4"
+execution_machine_type = "c4-highcpu-16"
+client_machine_type    = "e2-standard-8"
 
 # Optional: Disk sizes (in GB)
-execution_disk_size = 200
-client_disk_size    = 100
+execution_disk_size = 100
+execution_disk_type = "hyperdisk-balanced"
+client_disk_size    = 40
 
 # Optional: Boot disk image
 image = "ubuntu-os-cloud/ubuntu-2204-lts"

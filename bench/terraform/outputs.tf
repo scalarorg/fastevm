@@ -40,3 +40,44 @@ output "network_info" {
   description = "Network information"
 }
 
+# Outputs for script template variables
+output "gravity_reth_repo" {
+  value       = var.gravity_reth_repo
+  description = "Gravity Reth repository URL"
+}
+
+output "gravity_reth_branch" {
+  value       = var.gravity_reth_branch
+  description = "Gravity Reth branch"
+}
+
+output "gravity_sdk_repo" {
+  value       = var.gravity_sdk_repo
+  description = "Gravity SDK repository URL"
+}
+
+output "gravity_sdk_branch" {
+  value       = var.gravity_sdk_branch
+  description = "Gravity SDK branch"
+}
+
+output "http_port" {
+  value       = var.http_port
+  description = "HTTP RPC port"
+}
+
+output "ws_port" {
+  value       = var.ws_port
+  description = "WebSocket RPC port"
+}
+
+output "engine_port" {
+  value       = var.engine_port
+  description = "Engine API port"
+}
+
+output "p2p_port" {
+  value       = var.p2p_port
+  description = "P2P port"
+}
+

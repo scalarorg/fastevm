@@ -99,7 +99,7 @@ services:
     #entrypoint: ["sleep", "infinity"]
     command: [
       "node",
-      "--chain", "/data/config/genosis.json",
+      "--chain", "/data/config/genesis.json",
       "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3,admin,debug",
@@ -155,7 +155,7 @@ services:
       - ./scripts:/scripts:ro
     command: [
       "node",
-      "--chain", "/data/config/genosis.json",
+      "--chain", "/data/config/genesis.json",
       "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3,admin",
@@ -211,7 +211,7 @@ services:
       - ./scripts:/scripts:ro
     command: [
       "node",
-      "--chain", "/data/config/genosis.json",
+      "--chain", "/data/config/genesis.json",
       "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3,admin",
@@ -267,7 +267,7 @@ services:
       - ./scripts:/scripts:ro
     command: [
       "node",
-      "--chain", "/data/config/genosis.json",
+      "--chain", "/data/config/genesis.json",
       "--datadir", "/data",
       "--http",
       "--http.api", "eth,net,web3,admin",

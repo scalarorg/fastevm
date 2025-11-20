@@ -327,8 +327,9 @@ where
             };
 
             // Transaction buffer for batching
+            // Pre-allocate with batch threshold to reduce reallocations
             let mut buffer: Vec<Arc<ValidPoolTransaction<<Pool as TransactionPool>::Transaction>>> =
-                Vec::new();
+                Vec::with_capacity(BATCH_SIZE_THRESHOLD);
 
             // Create a periodic timer for batch timeout
             let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
@@ -386,8 +387,9 @@ where
             };
 
             // Transaction buffer for batching
+            // Pre-allocate with batch threshold to reduce reallocations
             let mut buffer: Vec<Arc<ValidPoolTransaction<<Pool as TransactionPool>::Transaction>>> =
-                Vec::new();
+                Vec::with_capacity(BATCH_SIZE_THRESHOLD);
 
             // Create a periodic timer for batch timeout
             let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
@@ -447,7 +449,8 @@ where
             };
 
             // Transaction buffer for batching - now stores validated transactions
-            let mut buffer: Vec<Bytes> = Vec::new();
+            // Pre-allocate with batch threshold to reduce reallocations
+            let mut buffer: Vec<Bytes> = Vec::with_capacity(BATCH_SIZE_THRESHOLD);
 
             // Create a periodic timer for batch timeout
             let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
@@ -460,6 +463,10 @@ where
                     Ok(raw_txs) = receiver.recv() => {
                         // Validate the raw transaction before adding to buffer
                         // let start_time = Instant::now();
+                        // Reserve capacity if needed to avoid multiple reallocations
+                        if buffer.len() + raw_txs.len() > buffer.capacity() {
+                            buffer.reserve(BATCH_SIZE_THRESHOLD);
+                        }
                         buffer.extend(raw_txs);
                         if buffer.len() >= BATCH_SIZE_THRESHOLD {
                             total_send_txs += buffer.len() as u64;
