@@ -239,6 +239,6 @@ opt-level = 1
 # reth-trie-db = { path = "reth/trie/db" }
 # reth-trie-parallel = { path = "reth/trie/parallel" }
 
-[patch."https://github.com/Galxe/gravity-reth.git"]
+# [patch."https://github.com/Galxe/gravity-reth.git"]
 # Override reth-db with local crate
-reth-db = { path = "crates/storage/db" }
+# reth-db = { path = "crates/storage/db" }
