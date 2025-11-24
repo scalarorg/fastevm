@@ -33,15 +33,15 @@ resource "tls_private_key" "fastevm_ssh" {
 
 # Save private key to local file
 resource "local_file" "fastevm_private_key" {
-  content  = tls_private_key.fastevm_ssh.private_key_pem
-  filename = "${path.module}/fastevm-deploy-key"
+  content         = tls_private_key.fastevm_ssh.private_key_pem
+  filename        = "${path.module}/fastevm-deploy-key"
   file_permission = "0600"
 }
 
 # Save public key to local file
 resource "local_file" "fastevm_public_key" {
-  content  = tls_private_key.fastevm_ssh.public_key_openssh
-  filename = "${path.module}/fastevm-deploy-key.pub"
+  content         = tls_private_key.fastevm_ssh.public_key_openssh
+  filename        = "${path.module}/fastevm-deploy-key.pub"
   file_permission = "0644"
 }
 
@@ -107,16 +107,8 @@ resource "google_compute_firewall" "fastevm_external" {
   target_tags   = ["fastevm-node"]
 }
 
-# Create startup script
-locals {
-  startup_script = templatefile("${path.module}/scripts/bootstrap.sh", {
-    github_repo     = var.github_repo
-    github_branch   = var.github_branch
-    node_count      = var.node_count
-    project_name    = var.project_name
-    subnet_cidr     = var.subnet_cidr
-  })
-}
+# No startup script - nodes will be initialized via deploy.sh after creation
+# This allows for better control, logging, and error handling during deployment
 
 # Create compute instances
 resource "google_compute_instance" "fastevm_nodes" {
@@ -156,14 +148,11 @@ resource "google_compute_instance" "fastevm_nodes" {
   }
 
   metadata = {
-    startup-script = local.startup_script
-    node-index     = count.index
-    node-count     = var.node_count
-    project-name   = var.project_name
-    ssh-keys       = "ubuntu:${tls_private_key.fastevm_ssh.public_key_openssh}"
+    node-index   = count.index
+    node-count   = var.node_count
+    project-name = var.project_name
+    ssh-keys     = "ubuntu:${tls_private_key.fastevm_ssh.public_key_openssh}"
   }
-
-  metadata_startup_script = local.startup_script
 
   service_account {
     email  = google_service_account.fastevm_sa.email
@@ -194,10 +183,10 @@ resource "google_compute_global_address" "fastevm_ip" {
 }
 
 resource "google_compute_health_check" "fastevm_health_check" {
-  name               = "${var.project_name}-health-check"
-  check_interval_sec = 5
-  timeout_sec        = 5
-  healthy_threshold  = 2
+  name                = "${var.project_name}-health-check"
+  check_interval_sec  = 5
+  timeout_sec         = 5
+  healthy_threshold   = 2
   unhealthy_threshold = 3
 
   http_health_check {

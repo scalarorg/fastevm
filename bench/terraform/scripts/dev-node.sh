@@ -31,16 +31,38 @@ NC='\033[0m' # No Color
 
 # Configuration
 # SCRIPT_DIR will be /opt/dev-node.sh
-# PROJECT_ROOT will be /opt/gravity-reth
-PROJECT_ROOT="/opt/gravity-reth"
+# PROJECT_ROOT will be /opt/gravity-reth or /opt/reth depending on RETH_TYPE
+RETH_TYPE="${RETH_TYPE:-gravity}"  # "gravity" or "reth"
 DATA_DIR="/opt/bench/.dev-node-data"
 LOGS_DIR="/opt/bench/.dev-node-logs"
 PIDS_DIR="/opt/bench/.dev-node-pids"
 sudo mkdir -p "/opt/bench"
 sudo chown -R ubuntu:ubuntu "/opt/bench"
 sudo chmod -R 755 "/opt/bench"
-# Binary paths
-RETH_BIN="$PROJECT_ROOT/target/release/reth"
+
+# Function to update paths based on RETH_TYPE
+update_paths() {
+    if [ "$RETH_TYPE" = "reth" ]; then
+        PROJECT_ROOT="/opt/reth"
+        # Use binary from /usr/local/bin if available, otherwise use build directory
+        if [ -f "/usr/local/bin/reth" ]; then
+            RETH_BIN="/usr/local/bin/reth"
+        else
+            RETH_BIN="$PROJECT_ROOT/target/release/reth"
+        fi
+    else
+        PROJECT_ROOT="/opt/gravity-reth"
+        # Use binary from /usr/local/bin if available, otherwise use build directory
+        if [ -f "/usr/local/bin/gravity-reth" ]; then
+            RETH_BIN="/usr/local/bin/gravity-reth"
+        else
+            RETH_BIN="$PROJECT_ROOT/target/release/reth"
+        fi
+    fi
+}
+
+# Initialize paths
+update_paths
 
 # Command line options (can be overridden by environment variables)
 ENABLE_WS=true
@@ -181,7 +203,11 @@ setup_directories() {
 
 # Build the project
 build_project() {
-    log_info "Building Gravity Reth project..."
+    local node_name="Gravity Reth"
+    if [ "$RETH_TYPE" = "reth" ]; then
+        node_name="Reth"
+    fi
+    log_info "Building $node_name project..."
 
     # Setup cargo environment (handles sudo case)
     setup_cargo_env
@@ -237,15 +263,29 @@ generate_jwt_secret() {
 cleanup_before_start() {
     log_info "Cleaning up data and processes..."
     
-    # Kill all reth processes
-    pkill -9 -f "reth" 2>/dev/null || true
-    fuser -k "$DATA_DIR" 2>/dev/null || true
-    
-    # Kill processes on ports
+    # Kill processes on ports first (more specific)
     for port in "$HTTP_PORT" "$WS_PORT" "$ENGINE_PORT" "$P2P_PORT"; do
         lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
     done
     
+    # Kill reth binary processes (but not scripts containing "reth" in their path)
+    # Use pgrep to find reth processes and kill them specifically
+    pgrep -f "reth.*node" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    pgrep -f "/usr/local/bin/reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    pgrep -f "/usr/local/bin/gravity-reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    pgrep -f "target/release/reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    
+    # Wait a bit for processes to fully terminate
+    sleep 2
+    
+    # Try to kill processes using the data directory (with timeout to prevent hanging)
+    if command -v timeout &> /dev/null; then
+        timeout 5 fuser -k "$DATA_DIR" 2>/dev/null || true
+    else
+        fuser -k "$DATA_DIR" 2>/dev/null || true
+    fi
+    
+    # Additional wait after fuser
     sleep 1
     
     # Remove data directory and logs
@@ -273,7 +313,11 @@ start_execution_node() {
     generate_jwt_secret "$DATA_DIR"
     [ ! -f "$jwt_file" ] && { log_error "JWT secret file not found"; exit 1; }
     
-    log_info "Starting Gravity Reth node in dev mode..."
+    local node_name="Gravity Reth"
+    if [ "$RETH_TYPE" = "reth" ]; then
+        node_name="Reth"
+    fi
+    log_info "Starting $node_name node in dev mode..."
     log_info "HTTP RPC: http://localhost:$HTTP_PORT"
     [ "$ENABLE_WS" = true ] && log_info "WebSocket RPC: ws://localhost:$WS_PORT"
     log_info "Engine API: http://localhost:$ENGINE_PORT"
@@ -300,9 +344,12 @@ start_execution_node() {
         "--txpool.pending-max-size" "128" "--txpool.max-new-pending-txs-notifications" "102400"
         "--txpool.queued-max-count" "102400" "--txpool.queued-max-size" "128"
     )
-    cmd_args+=(
-        "--gravity.disable-pipe-execution"
-    )
+    # Only add gravity-specific flags if using gravity-reth
+    if [ "$RETH_TYPE" = "gravity" ]; then
+        cmd_args+=(
+            "--gravity.disable-pipe-execution"
+        )
+    fi
     # Add log level flag only if not empty
     [ -n "$log_level_flag" ] && cmd_args+=("$log_level_flag")
     
@@ -477,14 +524,22 @@ stop_node_clean() {
     for port in "$HTTP_PORT" "$WS_PORT" "$ENGINE_PORT" "$P2P_PORT"; do
         lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
     done
-    pkill -9 -f "reth" 2>/dev/null || true
+    # Kill reth binary processes specifically (avoid killing scripts)
+    pgrep -f "reth.*node" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    pgrep -f "/usr/local/bin/reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    pgrep -f "/usr/local/bin/gravity-reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    pgrep -f "target/release/reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
     rm -f "$PIDS_DIR/reth-node.pid"
     sleep 1
 }
 
 # Start the dev node
 start_dev_node() {
-    log_info "Starting Gravity Reth dev node..."
+    local node_name="Gravity Reth"
+    if [ "$RETH_TYPE" = "reth" ]; then
+        node_name="Reth"
+    fi
+    log_info "Starting $node_name dev node..."
     log_info "Ensuring clean state (stopping any existing processes)..."
     stop_node_clean
     cleanup_before_start
@@ -502,7 +557,7 @@ start_dev_node() {
     
     fund_deployer_account
     
-    log_success "Gravity Reth dev node started successfully!"
+    log_success "$node_name dev node started successfully!"
     echo
     log_info "Node Information:"
     echo "  HTTP RPC: http://localhost:$HTTP_PORT"
@@ -520,14 +575,22 @@ start_dev_node() {
 
 # Stop the node
 stop_node() {
-    log_info "Stopping Gravity Reth dev node..."
+    local node_name="Gravity Reth"
+    if [ "$RETH_TYPE" = "reth" ]; then
+        node_name="Reth"
+    fi
+    log_info "Stopping $node_name dev node..."
     stop_node_clean
     log_success "Node stopped!"
 }
 
 # Show node status
 show_status() {
-    log_info "Gravity Reth Dev Node Status:"
+    local node_name="Gravity Reth"
+    if [ "$RETH_TYPE" = "reth" ]; then
+        node_name="Reth"
+    fi
+    log_info "$node_name Dev Node Status:"
     echo
 
     local pid_file="$PIDS_DIR/reth-node.pid"
@@ -595,6 +658,16 @@ parse_arguments() {
     # Then parse remaining options
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --reth-type)
+                RETH_TYPE="$2"
+                if [ "$RETH_TYPE" != "gravity" ] && [ "$RETH_TYPE" != "reth" ]; then
+                    log_error "Invalid RETH_TYPE: $RETH_TYPE. Must be 'gravity' or 'reth'"
+                    exit 1
+                fi
+                # Update paths based on RETH_TYPE
+                update_paths
+                shift 2
+                ;;
             --no-ws)
                 ENABLE_WS=false
                 shift
@@ -671,6 +744,7 @@ show_help() {
     echo "  init               - Initialize node data without starting"
     echo
     echo "Options:"
+    echo "  --reth-type TYPE  - Reth type: 'gravity' or 'reth' (default: gravity)"
     echo "  --ws               - Enable WebSocket support (default)"
     echo "  --no-ws            - Disable WebSocket support"
     echo "  --http-port PORT   - HTTP RPC port (default: 8545)"
@@ -686,6 +760,7 @@ show_help() {
     echo "  --help, -h         - Show this help message"
     echo
     echo "Environment Variables:"
+    echo "  RETH_TYPE          - Reth type: 'gravity' or 'reth' (default: gravity)"
     echo "  HTTP_PORT          - HTTP RPC port (overrides --http-port)"
     echo "  WS_PORT            - WebSocket RPC port (overrides --ws-port)"
     echo "  ENGINE_PORT        - Engine API port (overrides --engine-port)"
@@ -696,7 +771,9 @@ show_help() {
     echo "  DEV_BLOCK_MAX_TXNS - Max transactions per block (overrides --dev-block-max-txns)"
     echo
     echo "Examples:"
-    echo "  $0 start                                    # Start with default settings (background)"
+    echo "  $0 start                                    # Start with default settings (background, gravity-reth)"
+    echo "  $0 start --reth-type reth                  # Start reth"
+    echo "  $0 start --reth-type gravity               # Start gravity-reth (default)"
     echo "  $0 start --foreground                      # Start in foreground (logs in terminal)"
     echo "  $0 start --dev-block-time 12s              # Start with 12 second block time"
     echo "  $0 start --dev-block-max-txns 100         # Start with max 100 txns per block"
@@ -710,6 +787,9 @@ show_help() {
 
 # Parse arguments first
 parse_arguments "$@"
+
+# Ensure paths are updated after parsing (in case RETH_TYPE was set via env var)
+update_paths
 
 # Main script logic
 case "$COMMAND" in

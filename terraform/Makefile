@@ -110,18 +110,19 @@ import-existing: init ## Import existing GCP instances into Terraform state
 			continue; \
 		fi; \
 		\
-		echo "  → Attempting to import $$instance_name..."; \
-		if terraform import "$$terraform_resource" "$$instance_path" >/tmp/import-$$i.log 2>&1; then \
-			echo "  ✓ Successfully imported $$instance_name"; \
-			IMPORTED=$$((IMPORTED + 1)); \
-		else \
-			IMPORT_ERR=$$(cat /tmp/import-$$i.log | tail -5); \
-			if echo "$$IMPORT_ERR" | grep -Eiq "not found|was not found|404"; then \
-				echo "  • Instance not found in GCP (yet). It will be created."; \
+		echo "  → Checking if instance exists in GCP..."; \
+		if gcloud compute instances describe "$$instance_name" --zone="$(ZONE)" --project="$(PROJECT_ID)" >/dev/null 2>&1; then \
+			echo "  → Instance found. Attempting to import..."; \
+			if terraform import "$$terraform_resource" "$$instance_path" >/tmp/import-$$i.log 2>&1; then \
+				echo "  ✓ Successfully imported $$instance_name"; \
+				IMPORTED=$$((IMPORTED + 1)); \
 			else \
+				IMPORT_ERR=$$(cat /tmp/import-$$i.log | tail -5); \
 				echo "  ⚠ Failed to import $$instance_name"; \
 				echo "$$IMPORT_ERR"; \
 			fi; \
+		else \
+			echo "  • Instance not found in GCP. It will be created during 'terraform apply'."; \
 		fi; \
 	done; \
 	if [ $$IMPORTED -gt 0 ]; then \

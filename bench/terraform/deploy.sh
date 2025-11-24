@@ -44,7 +44,7 @@ Commands:
   apply             Apply the Terraform configuration
   destroy           Destroy all resources
   output            Show Terraform outputs
-  deploy            Full deployment (init + plan + apply)
+  all               Full deployment (execution + client nodes) (default)
   execution         Deploy execution node only
   client            Deploy client node only
   status            Show current status
@@ -56,7 +56,6 @@ Commands:
   rerun-execution   Re-run execution node setup and restart (cleanup + start)
   rerun-client      Re-run client node setup script
   start-benchmark   Start benchmark on client node
-  all               Run: init, plan, apply, output (default)
 
 Note: For full debugging capabilities, use ./debug.sh instead
 
@@ -64,20 +63,26 @@ Options:
   -h, --help        Show this help message
   -y, --yes         Auto-approve apply/destroy operations
   -v, --verbose     Verbose output
+  --reth-type TYPE  Reth binary type: 'gravity' or 'reth' (default: reth)
+                     Can also be set via RETH_TYPE environment variable
 
 Examples:
-  $0                    # Full deployment (init + plan + apply + output)
+  $0                    # Full deployment (execution + client nodes)
+  $0 all                # Full deployment (execution + client nodes)
   $0 init               # Initialize only
   $0 plan               # Show plan only
   $0 apply              # Apply changes
   $0 apply --yes         # Apply without confirmation
   $0 destroy            # Destroy all resources
   $0 output             # Show outputs
-  $0 execution         # Deploy execution node only
+  $0 execution         # Deploy execution node only (uses reth by default)
+  $0 execution --reth-type reth  # Deploy execution node with reth binary (default)
+  $0 execution --reth-type gravity  # Deploy execution node with gravity-reth binary
   $0 client            # Deploy client node only
   $0 ssh-execution      # SSH to execution node
   $0 ssh-client         # SSH to client node
   $0 rerun-execution    # Re-run execution node setup and restart (cleanup + start)
+  $0 rerun-execution --reth-type reth  # Re-run with reth binary
   $0 rerun-client       # Re-run client node setup script
   $0 start-benchmark    # Start benchmark on client node
   $0 copy-logs          # Copy gravity-bench.log from client node to local machine
@@ -193,12 +198,28 @@ cmd_output() {
 cmd_deploy() {
     local auto_approve="$1"
     
-    log_info "Starting full deployment..."
-    cmd_init
-    cmd_plan
-    cmd_apply "$auto_approve"
-    cmd_output
-    log_success "Deployment completed!"
+    log_info "Starting full deployment (execution + client)..."
+    
+    # Deploy execution node first
+    log_info "=== Deploying Execution Node ==="
+    if ! cmd_deploy_execution "$auto_approve"; then
+        log_error "Execution node deployment failed"
+        exit 1
+    fi
+    
+    log_info ""
+    log_info "=== Deploying Client Node ==="
+    # Deploy client node second
+    if ! cmd_deploy_client "$auto_approve"; then
+        log_error "Client node deployment failed"
+        exit 1
+    fi
+    
+    log_success "Full deployment completed (execution + client)!"
+    log_info ""
+    log_info "Deployment summary:"
+    terraform output -json execution_node_info 2>/dev/null | head -5 || echo "  Execution node: See 'terraform output' for details"
+    terraform output -json client_node_info 2>/dev/null | head -5 || echo "  Client node: See 'terraform output' for details"
 }
 
 # Clean old data on execution node
@@ -324,7 +345,7 @@ cmd_deploy_execution() {
     sleep 5
     
     # Steps 2-4: Copy scripts, execute setup, start dev node
-    if ! cmd_run_execution_steps; then
+    if ! cmd_run_execution; then
         log_error "Failed to complete execution node setup"
         exit 1
     fi
@@ -509,7 +530,7 @@ cmd_ssh_client() {
 # Re-run execution setup and restart (starts from step 2)
 cmd_rerun_execution() {
     log_info "Re-running execution node setup (steps 2-4)..."
-    cmd_run_execution_steps || exit 1
+    cmd_run_execution || exit 1
     log_success "Execution node rerun completed successfully!"
 }
 
@@ -767,7 +788,7 @@ cmd_start_benchmark() {
 }
 
 # Run steps 2-4: Copy scripts, execute setup, start dev node
-cmd_run_execution_steps() {
+cmd_run_execution() {
     log_info "Running execution node steps 2-4..."
     
     # Step 2: Copy scripts
@@ -798,6 +819,8 @@ cmd_run_execution_steps() {
     local gravity_reth_branch=$(terraform output -raw gravity_reth_branch 2>/dev/null || echo "main")
     local gravity_sdk_repo=$(terraform output -raw gravity_sdk_repo 2>/dev/null || echo "https://github.com/Galxe/gravity-sdk.git")
     local gravity_sdk_branch=$(terraform output -raw gravity_sdk_branch 2>/dev/null || echo "main")
+    local reth_repo=$(terraform output -raw reth_repo 2>/dev/null || echo "https://github.com/paradigmxyz/reth.git")
+    local reth_branch_or_tag=$(terraform output -raw reth_branch_or_tag 2>/dev/null || echo "v1.9.3")
     local http_port=$(terraform output -raw http_port 2>/dev/null || echo "8545")
     local ws_port=$(terraform output -raw ws_port 2>/dev/null || echo "8546")
     local engine_port=$(terraform output -raw engine_port 2>/dev/null || echo "8551")
@@ -808,6 +831,8 @@ cmd_run_execution_steps() {
         -e "s|\${gravity_reth_branch}|${gravity_reth_branch}|g" \
         -e "s|\${gravity_sdk_repo}|${gravity_sdk_repo}|g" \
         -e "s|\${gravity_sdk_branch}|${gravity_sdk_branch}|g" \
+        -e "s|\${reth_repo}|${reth_repo}|g" \
+        -e "s|\${reth_branch_or_tag}|${reth_branch_or_tag}|g" \
         -e "s|\${http_port}|${http_port}|g" \
         -e "s|\${ws_port}|${ws_port}|g" \
         -e "s|\${engine_port}|${engine_port}|g" \
@@ -854,9 +879,9 @@ cmd_run_execution_steps() {
     log_success "Setup completed"
     
     # Step 4: Start dev node
-    log_info "Step 4: Starting dev node..."
-    ssh_execution "bash -c '/opt/dev-node.sh start'" || { log_error "Failed to start dev node"; return 1; }
-    log_success "Dev node started"
+    log_info "Step 4: Starting dev node with RETH_TYPE=$RETH_TYPE..."
+    ssh_execution "bash -c 'RETH_TYPE=$RETH_TYPE /opt/dev-node.sh start --reth-type $RETH_TYPE'" || { log_error "Failed to start dev node"; return 1; }
+    log_success "Dev node started with $RETH_TYPE binary"
     # Step 5: Prepare client benchmark
     log_info "Step 5: Prepare client benchmark"
     ssh_execution "sudo bash /opt/client-setup.sh 2>&1 | sudo tee -a /var/log/client-setup.log" || { log_error "Setup script failed. Check /var/log/client-setup.log"; return 1; }
@@ -872,7 +897,7 @@ cmd_run_execution_steps() {
 
 # Internal function to restart execution node (used by cmd_apply)
 cmd_restart_execution_internal() {
-    cmd_run_execution_steps
+    cmd_run_execution
 }
 
 
@@ -978,6 +1003,8 @@ cmd_copy_client_logs() {
 AUTO_APPROVE="false"
 VERBOSE="false"
 COMMAND="all"
+# RETH_TYPE can be set via environment variable or command-line option
+RETH_TYPE="${RETH_TYPE:-reth}"  # Default to "reth"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -993,7 +1020,15 @@ while [[ $# -gt 0 ]]; do
             VERBOSE="true"
             shift
             ;;
-        init|plan|apply|destroy|output|deploy|execution|client|status|ssh-execution|ssh-client|logs-execution|logs-client|copy-logs|rerun-execution|rerun-client|start-benchmark|all)
+        --reth-type)
+            RETH_TYPE="$2"
+            if [ "$RETH_TYPE" != "gravity" ] && [ "$RETH_TYPE" != "reth" ]; then
+                log_error "Invalid RETH_TYPE: $RETH_TYPE. Must be 'gravity' or 'reth'"
+                exit 1
+            fi
+            shift 2
+            ;;
+        init|plan|apply|destroy|output|all|execution|client|status|ssh-execution|ssh-client|logs-execution|logs-client|copy-logs|rerun-execution|rerun-client|start-benchmark)
             COMMAND="$1"
             shift
             ;;
@@ -1031,9 +1066,6 @@ case "$COMMAND" in
         ;;
     output)
         cmd_output
-        ;;
-    deploy)
-        cmd_deploy "$AUTO_APPROVE"
         ;;
     execution)
         cmd_deploy_execution "$AUTO_APPROVE"
