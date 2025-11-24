@@ -236,10 +236,37 @@ gravity_sdk_branch=${gravity_sdk_branch}
 GRAVITY_SDK_DIR="/opt/gravity-sdk"
 if [ -d "$GRAVITY_SDK_DIR" ]; then
     cd "$GRAVITY_SDK_DIR"
-    git pull --quiet > /dev/null 2>&1
+    log "Repository exists, cleaning local changes and updating..."
+    # Discard any local changes and reset to remote state
+    git reset --hard HEAD > /dev/null 2>&1 || true
+    git clean -fd > /dev/null 2>&1 || true
+    git fetch --all --tags --quiet > /dev/null 2>&1 || true
+    # Checkout the specified branch or tag
+    if [ -n "$gravity_sdk_branch" ]; then
+        log "Checking out $gravity_sdk_branch..."
+        git checkout "$gravity_sdk_branch" > /dev/null 2>&1 || {
+            log "Branch/tag $gravity_sdk_branch not found locally, fetching..."
+            git fetch origin "$gravity_sdk_branch" --quiet > /dev/null 2>&1 || true
+            git checkout "$gravity_sdk_branch" > /dev/null 2>&1 || {
+                log_error "Failed to checkout $gravity_sdk_branch"
+                exit 1
+            }
+        }
+    fi
+    git pull --quiet > /dev/null 2>&1 || true
 else
-    git clone -b ${gravity_sdk_branch} ${gravity_sdk_repo} "$GRAVITY_SDK_DIR" --quiet > /dev/null 2>&1
+    if [ -n "$gravity_sdk_branch" ]; then
+        git clone -b ${gravity_sdk_branch} ${gravity_sdk_repo} "$GRAVITY_SDK_DIR" --quiet > /dev/null 2>&1
+    else
+        git clone ${gravity_sdk_repo} "$GRAVITY_SDK_DIR" --quiet > /dev/null 2>&1
+    fi
     cd "$GRAVITY_SDK_DIR"
+    if [ -n "$gravity_sdk_branch" ]; then
+        git checkout "$gravity_sdk_branch" > /dev/null 2>&1 || {
+            log_error "Failed to checkout $gravity_sdk_branch"
+            exit 1
+        }
+    fi
 fi
 log "Repository ready"
 sudo chown -R ubuntu:ubuntu "$GRAVITY_SDK_DIR"
@@ -247,35 +274,8 @@ sudo chmod -R 755 "$GRAVITY_SDK_DIR"
 # Build gravity-sdk
 log "Building gravity-sdk ..."
 cd "$GRAVITY_SDK_DIR"
-git checkout dev-1114-bugfix
+log "Building gravity_node..."
 make gravity_node
-
-cat > start_dev_node.sh <<'EOF'
-#!/bin/bash
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; NC='\033[0m'
-log_info(){ echo -e "${GREEN}[INFO]${NC} $1"; }
-log_warn(){ echo -e "${YELLOW}[WARN]${NC} $1"; }
-
-NODE="node1"
-INSTALL_DIR="/tmp"
-
-export MOCK_CONSENSUS=true
-export RETH_TXPOOL_BATCH_INSERT=1
-export BATCH_INSERT_TIME=50
-export USE_PARALLEL_STATE_ROOT=1
-export USE_STORAGE_CACHE=1
-
-log_info "Killing old gravity_node..."
-pkill -9 gravity_node 2>/dev/null || log_warn "No running gravity_node found"
-
-log_info "Deploying $NODE..."
-bash ./deploy_utils/deploy.sh --mode single --install_dir "$INSTALL_DIR" --node "$NODE" -v release
-
-log_info "Starting $NODE..."
-bash "$INSTALL_DIR/$NODE/script/start.sh" --bin_name gravity_node
-
-log_info "Node started"
-EOF
 
 # Clone gravity-reth repository
 log "Cloning gravity-reth repository..."
@@ -286,68 +286,152 @@ gravity_reth_branch=${gravity_reth_branch}
 GRAVITY_RETH_DIR="/opt/gravity-reth"
 if [ -d "$GRAVITY_RETH_DIR" ]; then
     cd "$GRAVITY_RETH_DIR"
-    git pull --quiet > /dev/null 2>&1
+    log "Repository exists, cleaning local changes and updating..."
+    # Discard any local changes and reset to remote state
+    git reset --hard HEAD > /dev/null 2>&1 || true
+    git clean -fd > /dev/null 2>&1 || true
+    git fetch --all --tags --quiet > /dev/null 2>&1 || true
+    # Checkout the specified branch or tag
+    if [ -n "$gravity_reth_branch" ]; then
+        log "Checking out $gravity_reth_branch..."
+        git checkout "$gravity_reth_branch" > /dev/null 2>&1 || {
+            log "Branch/tag $gravity_reth_branch not found locally, fetching..."
+            git fetch origin "$gravity_reth_branch" --quiet > /dev/null 2>&1 || true
+            git checkout "$gravity_reth_branch" > /dev/null 2>&1 || {
+                log_error "Failed to checkout $gravity_reth_branch"
+                exit 1
+            }
+        }
+    fi
+    git pull --quiet > /dev/null 2>&1 || true
 else
-    git clone -b ${gravity_reth_branch} ${gravity_reth_repo} "$GRAVITY_RETH_DIR" --quiet > /dev/null 2>&1
+    if [ -n "$gravity_reth_branch" ]; then
+        git clone -b ${gravity_reth_branch} ${gravity_reth_repo} "$GRAVITY_RETH_DIR" --quiet > /dev/null 2>&1
+    else
+        git clone ${gravity_reth_repo} "$GRAVITY_RETH_DIR" --quiet > /dev/null 2>&1
+    fi
     cd "$GRAVITY_RETH_DIR"
+    if [ -n "$gravity_reth_branch" ]; then
+        git checkout "$gravity_reth_branch" > /dev/null 2>&1 || {
+            log_error "Failed to checkout $gravity_reth_branch"
+            exit 1
+        }
+    fi
 fi
 log "Repository ready"
 sudo chown -R ubuntu:ubuntu "$GRAVITY_RETH_DIR"
 sudo chmod -R 755 "$GRAVITY_RETH_DIR"
 
-chmod +x start_dev_node.sh
-./start_dev_node.sh
+# Clone origin reth repository
+log "Cloning origin reth repository..."
+reth_repo=${reth_repo:-"https://github.com/paradigmxyz/reth.git"}
+reth_branch_or_tag=${reth_branch_or_tag:-"v1.9.3"}
+RETH_DIR="/opt/reth"
+if [ -d "$RETH_DIR" ]; then
+    cd "$RETH_DIR"
+    log "Repository exists, cleaning local changes and updating..."
+    # Discard any local changes and reset to remote state
+    git reset --hard HEAD > /dev/null 2>&1 || true
+    git clean -fd > /dev/null 2>&1 || true
+    git fetch --all --tags --quiet > /dev/null 2>&1 || true
+    # Checkout the specified branch or tag
+    if [ -n "$reth_branch_or_tag" ]; then
+        log "Checking out $reth_branch_or_tag..."
+        git checkout "$reth_branch_or_tag" > /dev/null 2>&1 || {
+            log "Branch/tag $reth_branch_or_tag not found locally, fetching..."
+            git fetch origin "$reth_branch_or_tag" --quiet > /dev/null 2>&1 || true
+            git checkout "$reth_branch_or_tag" > /dev/null 2>&1 || {
+                log_error "Failed to checkout $reth_branch_or_tag"
+                exit 1
+            }
+        }
+    fi
+    git pull --quiet > /dev/null 2>&1 || true
+else
+    if [ -n "$reth_branch_or_tag" ]; then
+        git clone -b ${reth_branch_or_tag} ${reth_repo} "$RETH_DIR" --quiet > /dev/null 2>&1
+    else
+        git clone ${reth_repo} "$RETH_DIR" --quiet > /dev/null 2>&1
+    fi
+    cd "$RETH_DIR"
+    if [ -n "$reth_branch_or_tag" ]; then
+        git checkout "$reth_branch_or_tag" > /dev/null 2>&1 || {
+            log_error "Failed to checkout $reth_branch_or_tag"
+            exit 1
+        }
+    fi
+fi
+log "Origin reth repository ready"
+sudo chown -R ubuntu:ubuntu "$RETH_DIR"
+sudo chmod -R 755 "$RETH_DIR"
 
-log "Node started successfully"
-curl -s localhost:8545 -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
-# expect 0x539 (i.e., 1337)
-
-# Build gravity-reth
-# log "Building gravity-reth (this may take 10-20 minutes)..."
-# # Ensure file descriptor limits are set before building
-# ulimit -n 65536 2>/dev/null || true
-# # Build as ubuntu user to ensure proper limits
-# if id ubuntu &>/dev/null 2>&1; then
-#     # Determine cargo environment file for ubuntu user
-#     UBUNTU_CARGO_ENV="/home/ubuntu/.cargo/env"
-#     ROOT_CARGO_ENV="$HOME/.cargo/env"
+# Build origin reth
+log "Building origin reth (this may take 10-20 minutes)..."
+# Ensure file descriptor limits are set before building
+ulimit -n 65536 2>/dev/null || true
+# Build as ubuntu user to ensure proper limits
+if id ubuntu &>/dev/null 2>&1; then
+    # Determine cargo environment file for ubuntu user
+    UBUNTU_CARGO_ENV="/home/ubuntu/.cargo/env"
+    ROOT_CARGO_ENV="$HOME/.cargo/env"
     
-#     # Build the command to source cargo environment
-#     if [ -f "$UBUNTU_CARGO_ENV" ]; then
-#         # Use ubuntu's cargo env file
-#         CARGO_CMD="source $UBUNTU_CARGO_ENV && cargo build --release --bin reth"
-#     elif [ -f "$ROOT_CARGO_ENV" ]; then
-#         # Use root's cargo env file (if ubuntu's doesn't exist)
-#         CARGO_CMD="source $ROOT_CARGO_ENV && cargo build --release --bin reth"
-#     elif [ -d "/home/ubuntu/.cargo/bin" ]; then
-#         # Fallback: add ubuntu's cargo bin to PATH
-#         CARGO_CMD="export PATH=\"/home/ubuntu/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
-#     elif [ -d "$HOME/.cargo/bin" ]; then
-#         # Fallback: add root's cargo bin to PATH
-#         CARGO_CMD="export PATH=\"$HOME/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
-#     else
-#         # Last resort: try to find cargo in PATH
-#         CARGO_CMD="cargo build --release --bin reth"
-#     fi
+    # Build the command to source cargo environment
+    if [ -f "$UBUNTU_CARGO_ENV" ]; then
+        # Use ubuntu's cargo env file
+        CARGO_CMD="source $UBUNTU_CARGO_ENV && cargo build --release --bin reth"
+    elif [ -f "$ROOT_CARGO_ENV" ]; then
+        # Use root's cargo env file (if ubuntu's doesn't exist)
+        CARGO_CMD="source $ROOT_CARGO_ENV && cargo build --release --bin reth"
+    elif [ -d "/home/ubuntu/.cargo/bin" ]; then
+        # Fallback: add ubuntu's cargo bin to PATH
+        CARGO_CMD="export PATH=\"/home/ubuntu/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
+    elif [ -d "$HOME/.cargo/bin" ]; then
+        # Fallback: add root's cargo bin to PATH
+        CARGO_CMD="export PATH=\"$HOME/.cargo/bin:\$PATH\" && cargo build --release --bin reth"
+    else
+        # Last resort: try to find cargo in PATH
+        CARGO_CMD="cargo build --release --bin reth"
+    fi
     
-#     sudo -u ubuntu bash -c "cd $GRAVITY_RETH_DIR && ulimit -n 65536 && $CARGO_CMD" > /var/log/cargo-build.log 2>&1 || {
-#         log "ERROR: Build failed. Check /var/log/cargo-build.log"
-#         exit 1
-#     }
-# else
-#     cargo build --release --bin reth > /var/log/cargo-build.log 2>&1 || {
-#         log "ERROR: Build failed. Check /var/log/cargo-build.log"
-#         exit 1
-#     }
-# fi
+    sudo -u ubuntu bash -c "cd $RETH_DIR && ulimit -n 65536 && $CARGO_CMD" > /var/log/reth-build.log 2>&1 || {
+        log "ERROR: Origin reth build failed. Check /var/log/reth-build.log"
+        exit 1
+    }
+else
+    cargo build --release --bin reth > /var/log/reth-build.log 2>&1 || {
+        log "ERROR: Origin reth build failed. Check /var/log/reth-build.log"
+        exit 1
+    }
+fi
 
-# Verify binary exists
-RETH_BIN="$GRAVITY_RETH_DIR/target/release/reth"
-if [ ! -f "$RETH_BIN" ]; then
-    log "ERROR: reth binary not found at $RETH_BIN"
+# Verify origin reth binary exists
+ORIGIN_RETH_BIN="$RETH_DIR/target/release/reth"
+if [ ! -f "$ORIGIN_RETH_BIN" ]; then
+    log "ERROR: Origin reth binary not found at $ORIGIN_RETH_BIN"
     exit 1
 fi
-log "Build completed successfully"
+log "Origin reth build completed successfully"
+
+# Copy origin reth binary to /usr/local/bin/reth
+log "Installing origin reth binary to /usr/local/bin/reth..."
+sudo cp "$ORIGIN_RETH_BIN" /usr/local/bin/reth
+sudo chmod +x /usr/local/bin/reth
+sudo chown root:root /usr/local/bin/reth
+log "Origin reth installed to /usr/local/bin/reth"
+
+# Verify gravity-reth binary exists (if it was built)
+RETH_BIN="$GRAVITY_RETH_DIR/target/release/reth"
+if [ ! -f "$RETH_BIN" ]; then
+    log "WARNING: gravity-reth binary not found at $RETH_BIN (may be built separately)"
+else
+    log "Gravity-reth binary verified"
+    # Copy gravity-reth binary to /usr/local/bin/gravity-reth
+    log "Installing gravity-reth binary to /usr/local/bin/gravity-reth..."
+    sudo cp "$RETH_BIN" /usr/local/bin/gravity-reth
+    sudo chmod +x /usr/local/bin/gravity-reth
+    sudo chown root:root /usr/local/bin/gravity-reth
+    log "Gravity-reth installed to /usr/local/bin/gravity-reth"
+fi
 
 # Ensure bench directory exists with correct ownership
 # Note: dev-node.sh is now copied by deploy.sh before this script runs

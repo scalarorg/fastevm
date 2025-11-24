@@ -30,11 +30,18 @@ echo "GitHub Branch: $GITHUB_BRANCH"
 # Update system packages
 echo "Updating system packages..."
 apt-get update -y
-apt-get upgrade -y
+
+# Fix any broken packages (common issue with google-compute-engine)
+echo "Fixing any broken packages..."
+dpkg --configure -a || true
+apt-get install -f -y || true
+
+apt-get upgrade -y || echo "Package upgrade had some issues, but continuing..."
 
 # Install required packages
 echo "Installing required packages..."
-apt-get install -y \
+# Try to install packages, handling google-compute-engine errors gracefully
+if ! apt-get install -y \
     curl \
     wget \
     git \
@@ -51,7 +58,41 @@ apt-get install -y \
     apt-transport-https \
     ca-certificates \
     gnupg \
-    lsb-release
+    lsb-release 2>&1 | tee /tmp/apt-install.log; then
+    # Check if the error is related to google-compute-engine
+    if grep -q "google-compute-engine" /tmp/apt-install.log; then
+        echo "WARNING: google-compute-engine package had issues, attempting to fix..."
+        # Try to fix the google-compute-engine package
+        dpkg --configure -a || true
+        apt-get install -f -y || true
+        # Try installing packages again
+        apt-get install -y \
+            curl \
+            wget \
+            git \
+            build-essential \
+            pkg-config \
+            libssl-dev \
+            libclang-dev \
+            cmake \
+            jq \
+            htop \
+            vim \
+            unzip \
+            software-properties-common \
+            apt-transport-https \
+            ca-certificates \
+            gnupg \
+            lsb-release || {
+            echo "ERROR: Failed to install required packages even after fixing google-compute-engine"
+            exit 1
+        }
+    else
+        echo "ERROR: Failed to install required packages"
+        exit 1
+    fi
+fi
+echo "Required packages installed successfully"
 
 # Install Docker
 echo "Installing Docker..."

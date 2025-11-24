@@ -27,21 +27,56 @@ log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-# Verify NVMe disk is mounted (mounted in bootstrap.sh)
-# This is just a check to ensure /data is available
-if mountpoint -q "/data" 2>/dev/null; then
-    log_info "/data is mounted and ready"
-    # Ensure ownership is correct
-    sudo chown ubuntu:ubuntu /data 2>/dev/null || true
-else
-    log_info "/data is not a mountpoint (using boot disk or not mounted)"
-    # Ensure /data directory exists
-    sudo mkdir -p /data
-    sudo chown ubuntu:ubuntu /data 2>/dev/null || true
-fi
-
 # Set data directory - can be overridden via environment variable
 DATA_DIR="${DATA_DIR:-/data}"
+
+# Setup NVMe disk early (before creating data directories)
+log_info "Setting up NVMe disk if available..."
+NVME_DEVICE="/dev/nvme0n1"
+MOUNT_POINT="/data"
+
+if [ -b "$NVME_DEVICE" ]; then
+    log_info "NVMe device $NVME_DEVICE found, setting up..."
+    
+    # Check if already mounted at /data
+    if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        log_info "$MOUNT_POINT is already mounted, skipping setup"
+    else
+        # Check if device is mounted elsewhere
+        if grep -q "^$NVME_DEVICE " /proc/mounts 2>/dev/null; then
+            OTHER_MOUNT=$(grep "^$NVME_DEVICE " /proc/mounts | awk '{print $2}')
+            log_info "$NVME_DEVICE is already mounted at $OTHER_MOUNT, skipping"
+        else
+            # Check if device has filesystem
+            if ! blkid "$NVME_DEVICE" >/dev/null 2>&1; then
+                log_info "Creating ext4 filesystem on $NVME_DEVICE..."
+                sudo mkfs.ext4 -F "$NVME_DEVICE"
+            fi
+            
+            # Create mount point
+            sudo mkdir -p "$MOUNT_POINT"
+            
+            # Mount the device
+            log_info "Mounting $NVME_DEVICE to $MOUNT_POINT..."
+            if sudo mount "$NVME_DEVICE" "$MOUNT_POINT"; then
+                log_success "Successfully mounted $NVME_DEVICE to $MOUNT_POINT"
+                
+                # Add to /etc/fstab for persistent mounting
+                if ! grep -q "^$NVME_DEVICE" /etc/fstab 2>/dev/null; then
+                    echo "$NVME_DEVICE $MOUNT_POINT ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab > /dev/null
+                    log_success "Added $NVME_DEVICE to /etc/fstab"
+                fi
+            else
+                log_warning "Failed to mount $NVME_DEVICE, will use boot disk for /data"
+            fi
+        fi
+    fi
+    
+    # Set ownership
+    sudo chown ubuntu:ubuntu "$MOUNT_POINT" 2>/dev/null || true
+else
+    log_info "No NVMe device found, will use boot disk for /data"
+fi
 
 # Load environment variables from node.env file
 if [ -f "/tmp/fastevm-config/node.env" ]; then
@@ -55,6 +90,100 @@ else
 fi
 ls -la "$DATA_DIR"
 log_info "Starting FastEVM node $NODE_INDEX setup..."
+
+# Install required system packages
+log_info "Installing required system packages..."
+REQUIRED_PACKAGES="curl wget git build-essential pkg-config libssl-dev libclang-dev cmake jq htop vim unzip software-properties-common apt-transport-https ca-certificates gnupg lsb-release"
+MISSING_PACKAGES=""
+
+for pkg in $REQUIRED_PACKAGES; do
+    if ! dpkg -l | grep -q "^ii  $pkg "; then
+        MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+    fi
+done
+
+if [ -n "$MISSING_PACKAGES" ]; then
+    log_info "Some packages are missing, installing required packages..."
+    
+    # Set non-interactive mode for package installation
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBIAN_PRIORITY=critical
+    
+    # Update system packages
+    log_info "Updating package lists..."
+    if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y; then
+        log_error "Failed to update package lists"
+        exit 1
+    fi
+
+    # Fix any broken packages (common issue with google-compute-engine)
+    log_info "Fixing any broken packages..."
+    sudo env DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -f -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" || true
+
+    if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"; then
+        log_warning "Package upgrade had some issues, but continuing..."
+    fi
+
+    # Install required packages
+    log_info "Installing missing packages:$MISSING_PACKAGES"
+    # Try to install packages, handling google-compute-engine errors gracefully
+    # Use --force-confdef and --force-confold to automatically handle config file conflicts
+    if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+        curl \
+        wget \
+        git \
+        build-essential \
+        pkg-config \
+        libssl-dev \
+        libclang-dev \
+        cmake \
+        jq \
+        htop \
+        vim \
+        unzip \
+        software-properties-common \
+        apt-transport-https \
+        ca-certificates \
+        gnupg \
+        lsb-release 2>&1 | tee /tmp/apt-install.log; then
+        # Check if the error is related to google-compute-engine
+        if grep -q "google-compute-engine" /tmp/apt-install.log; then
+            log_warning "google-compute-engine package had issues, attempting to fix..."
+            # Try to fix the google-compute-engine package
+            sudo env DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -f -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" || true
+            # Try installing packages again, excluding google-compute-engine if needed
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+                curl \
+                wget \
+                git \
+                build-essential \
+                pkg-config \
+                libssl-dev \
+                libclang-dev \
+                cmake \
+                jq \
+                htop \
+                vim \
+                unzip \
+                software-properties-common \
+                apt-transport-https \
+                ca-certificates \
+                gnupg \
+                lsb-release || {
+                log_error "Failed to install required packages even after fixing google-compute-engine"
+                exit 1
+            }
+        else
+            log_error "Failed to install required packages"
+            exit 1
+        fi
+    fi
+    log_success "Required packages installed successfully"
+else
+    log_info "All required packages are already installed"
+fi
 
 # Step 1: Initialize chain with prefunded accounts
 log_info "Step 1: Initializing chain with prefunded accounts..."

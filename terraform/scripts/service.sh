@@ -194,7 +194,6 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --txpool.max-new-pending-txs-notifications 102400 \
     --txpool.queued-max-count 102400 \
     --txpool.queued-max-size 128 \
-    --db.sync-mode safe-no-sync \
     --gravity.disable-pipe-execution \
     --authrpc.addr 0.0.0.0 \
     --authrpc.port ${ENGINE_PORT} \

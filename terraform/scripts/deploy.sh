@@ -54,65 +54,6 @@ log_info "  DATA_DIR: $DATA_DIR"
 
 log_info "Starting FastEVM node $NODE_INDEX deployment..."
 
-# Update system packages
-log_info "Updating system packages..."
-if ! sudo apt-get update -y; then
-    log_error "Failed to update package lists"
-    exit 1
-fi
-if ! sudo apt-get upgrade -y; then
-    log_warning "Package upgrade had some issues, but continuing..."
-fi
-
-# Install required packages
-log_info "Installing required packages..."
-if ! sudo apt-get install -y \
-    curl \
-    wget \
-    git \
-    build-essential \
-    pkg-config \
-    libssl-dev \
-    libclang-dev \
-    cmake \
-    jq \
-    htop \
-    vim \
-    unzip \
-    software-properties-common \
-    apt-transport-https \
-    ca-certificates \
-    gnupg \
-    lsb-release; then
-    log_error "Failed to install required packages"
-    exit 1
-fi
-
-# Install Docker
-log_info "Installing Docker..."
-# Check if Docker is already installed
-if command -v docker &> /dev/null; then
-    log_info "Docker is already installed, skipping installation"
-else
-    if ! curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg; then
-        log_error "Failed to add Docker GPG key"
-        exit 1
-    fi
-    if ! echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null; then
-        log_error "Failed to add Docker repository"
-        exit 1
-    fi
-    if ! sudo apt-get update -y; then
-        log_error "Failed to update package lists after adding Docker repository"
-        exit 1
-    fi
-    if ! sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin; then
-        log_error "Failed to install Docker packages"
-        exit 1
-    fi
-    log_success "Docker installed successfully"
-fi
-
 # Create FastEVM directory structure
 log_info "Setting up FastEVM directory structure..."
 FASTEVM_DIR="/opt/fastevm"
@@ -123,8 +64,34 @@ sudo chown -R ubuntu:ubuntu /opt/fastevm-binaries
 
 log_info "Directory structure created. Binaries will be prepared by prepare-binaries.sh"
 
-# Add docker group and user
-sudo usermod -aG docker ubuntu
+# Configure passwordless sudo for ubuntu user
+log_info "Configuring passwordless sudo for ubuntu user..."
+if ! grep -q "^ubuntu ALL=(ALL) NOPASSWD:ALL" /etc/sudoers.d/ubuntu 2>/dev/null; then
+    echo "ubuntu ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/ubuntu > /dev/null
+    sudo chmod 440 /etc/sudoers.d/ubuntu
+    log_success "Passwordless sudo configured"
+else
+    log_info "Passwordless sudo already configured"
+fi
+
+# Optimize kernel parameters for database workloads
+log_info "Optimizing kernel parameters for database workloads..."
+if ! grep -q "Database optimization settings" /etc/sysctl.conf; then
+    sudo tee -a /etc/sysctl.conf > /dev/null << EOF
+# Database optimization settings
+vm.swappiness = 1
+vm.dirty_ratio = 15
+vm.dirty_background_ratio = 5
+vm.dirty_expire_centisecs = 3000
+vm.dirty_writeback_centisecs = 500
+kernel.sched_rt_runtime_us = -1
+EOF
+    log_success "Added database optimization settings to /etc/sysctl.conf"
+    # Apply settings immediately
+    sudo sysctl -p > /dev/null 2>&1 || true
+else
+    log_info "Database optimization settings already configured"
+fi
 
 # Stop services before updating binaries
 log_info "Stopping services before updating binaries..."
@@ -253,6 +220,44 @@ if [ -f "/tmp/fastevm-config/node.env" ]; then
 else
     log_warning "node.env not found in deployment package"
 fi
+
+# Install systemd services
+log_info "Installing systemd services..."
+if [ ! -f "/tmp/fastevm-config/service.sh" ]; then
+    log_error "service.sh not found at /tmp/fastevm-config/service.sh"
+    log_error "Service installation cannot proceed"
+    exit 1
+fi
+
+# Install services and check for errors
+if ! sudo bash /tmp/fastevm-config/service.sh install; then
+    log_error "Failed to install systemd services"
+    exit 1
+fi
+
+# Verify service files were created
+if [ ! -f "/etc/systemd/system/fastevm-execution.service" ]; then
+    log_error "Service file not created: /etc/systemd/system/fastevm-execution.service"
+    exit 1
+fi
+
+if [ ! -f "/etc/systemd/system/fastevm-consensus.service" ]; then
+    log_error "Service file not created: /etc/systemd/system/fastevm-consensus.service"
+    exit 1
+fi
+
+# Verify services are enabled
+if ! systemctl is-enabled fastevm-execution >/dev/null 2>&1; then
+    log_error "fastevm-execution service is not enabled"
+    exit 1
+fi
+
+if ! systemctl is-enabled fastevm-consensus >/dev/null 2>&1; then
+    log_error "fastevm-consensus service is not enabled"
+    exit 1
+fi
+
+log_success "Systemd services installed and enabled successfully"
 
 # Create completion marker
 echo "FastEVM node $NODE_INDEX deployment completed successfully at $(date)" | sudo tee /var/log/fastevm-deployment-complete
