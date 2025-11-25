@@ -33,6 +33,54 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Load .env file if it exists
+load_env_file() {
+    local env_file="$SCRIPT_DIR/.env"
+    if [ -f "$env_file" ]; then
+        log_info "Loading environment variables from .env file..."
+        # Export variables from .env file, ignoring comments and empty lines
+        set -a
+        source "$env_file"
+        set +a
+        log_success "Environment variables loaded from .env"
+    else
+        log_info ".env file not found (using defaults or command-line options)"
+    fi
+}
+
+# Build environment variable string for SSH commands
+build_env_string() {
+    local env_vars=""
+    
+    # List of environment variables to pass to remote dev-node.sh
+    local vars_to_pass=(
+        "RETH_TYPE"
+        "DB_SYNC_MODE"
+        "HTTP_PORT"
+        "WS_PORT"
+        "ENGINE_PORT"
+        "P2P_PORT"
+        "DEV_BLOCK_TIME"
+        "DEV_BLOCK_MAX_TXNS"
+        "BUILDER_GAS_LIMIT"
+        "LOG_LEVEL"
+    )
+    
+    for var in "${vars_to_pass[@]}"; do
+        local value="${!var}"
+        if [ -n "$value" ]; then
+            # Escape single quotes in the value for bash -c
+            local escaped_value=$(echo "$value" | sed "s/'/'\"'\"'/g")
+            env_vars="${env_vars}export ${var}='${escaped_value}' && "
+        fi
+    done
+    
+    echo "$env_vars"
+}
+
+# Load .env file early (after logging functions are defined)
+load_env_file
+
 # Show help
 show_help() {
     cat << EOF
@@ -54,6 +102,7 @@ Commands:
   logs-client       Show client node logs (last 100 lines)
   copy-logs         Copy gravity-bench.log from client node to local machine
   rerun-execution   Re-run execution node setup and restart (cleanup + start)
+  restart-execution Reset execution node (clean all data and start fresh)
   rerun-client      Re-run client node setup script
   start-benchmark   Start benchmark on client node
 
@@ -64,7 +113,19 @@ Options:
   -y, --yes         Auto-approve apply/destroy operations
   -v, --verbose     Verbose output
   --reth-type TYPE  Reth binary type: 'gravity' or 'reth' (default: reth)
-                     Can also be set via RETH_TYPE environment variable
+                     Can also be set via RETH_TYPE environment variable or .env file
+
+Environment Configuration:
+  The script automatically loads variables from .env file if it exists in the same
+  directory as deploy.sh. Copy .env.example to .env and modify as needed.
+  
+  Supported variables in .env:
+    - RETH_TYPE: 'gravity' or 'reth' (default: reth)
+    - DB_SYNC_MODE: durable, nometasync, safenosync, utterlynosync
+    - HTTP_PORT, WS_PORT, ENGINE_PORT, P2P_PORT: Port numbers
+    - DEV_BLOCK_TIME, DEV_BLOCK_MAX_TXNS: Dev mode settings
+    - BUILDER_GAS_LIMIT: Block gas limit
+    - LOG_LEVEL: trace, debug, info, warn, error
 
 Examples:
   $0                    # Full deployment (execution + client nodes)
@@ -83,8 +144,11 @@ Examples:
   $0 ssh-client         # SSH to client node
   $0 rerun-execution    # Re-run execution node setup and restart (cleanup + start)
   $0 rerun-execution --reth-type reth  # Re-run with reth binary
+  $0 restart-execution  # Reset execution node (clean all data and start fresh)
+  $0 restart-execution --reth-type reth  # Reset with reth binary
   $0 rerun-client       # Re-run client node setup script
   $0 start-benchmark    # Start benchmark on client node
+  $0 flood-benchmark    # Run flood load testing benchmark on client node
   $0 copy-logs          # Copy gravity-bench.log from client node to local machine
 
 EOF
@@ -534,6 +598,34 @@ cmd_rerun_execution() {
     log_success "Execution node rerun completed successfully!"
 }
 
+# Restart execution node (clean all data and start fresh)
+cmd_restart_execution() {
+    log_info "Restarting execution node (cleaning all data and starting fresh)..."
+    get_execution_node_info || return 1
+    
+    # Copy the latest dev-node.sh script to ensure it has the reset command
+    local dev_node_script="$SCRIPT_DIR/scripts/dev-node.sh"
+    [ ! -f "$dev_node_script" ] && { log_error "dev-node.sh not found"; return 1; }
+    
+    log_info "Updating dev-node.sh script on execution node..."
+    scp_execution "$dev_node_script" "/tmp/dev-node.sh" || {
+        log_error "Failed to copy dev-node.sh"
+        return 1
+    }
+    ssh_execution "chmod +x /tmp/dev-node.sh && sudo mv /tmp/dev-node.sh /opt/dev-node.sh" || {
+        log_error "Failed to update dev-node.sh on execution node"
+        return 1
+    }
+    
+    log_info "Calling reset command on execution node with RETH_TYPE=$RETH_TYPE..."
+    local env_string=$(build_env_string)
+    ssh_execution "bash -c '${env_string}/opt/dev-node.sh reset'" || {
+        log_error "Failed to restart execution node"
+        return 1
+    }
+    log_success "Execution node restart completed successfully!"
+}
+
 # Re-run client setup
 cmd_rerun_client() {
     log_info "Re-running client node setup..."
@@ -643,8 +735,8 @@ cmd_create_and_copy_bench_config() {
         return 1
     }
     
-    # Move to final location on client node (ensure directory exists first)
-    ssh_client "sudo mkdir -p /opt/gravity_bench && sudo mv /tmp/bench_config.toml /opt/gravity_bench/bench_config.toml && sudo chown ubuntu:ubuntu /opt/gravity_bench/bench_config.toml" || {
+    # Move to final location on client node
+    ssh_client "sudo mv /tmp/bench_config.toml /opt/bench_config.toml && sudo chown ubuntu:ubuntu /opt/bench_config.toml" || {
         log_error "Failed to install bench_config.toml on client node"
         return 1
     }
@@ -787,6 +879,74 @@ cmd_start_benchmark() {
     cmd_run_client_benchmark
 }
 
+# Run flood benchmark on client node
+cmd_run_flood_benchmark() {
+    log_info "Running flood benchmark on client node..."
+    get_client_node_info || return 1
+    
+    # Check if setup is complete
+    if ! ssh_client "test -f /var/log/client-setup-complete"; then
+        log_error "Client setup not completed. Please run client setup first."
+        return 1
+    fi
+    
+    # Copy flood-benchmark.sh to client node if not already there
+    local flood_script="$SCRIPT_DIR/scripts/flood-benchmark.sh"
+    if [ ! -f "$flood_script" ]; then
+        log_error "flood-benchmark.sh not found at $flood_script"
+        return 1
+    fi
+    
+    log_info "Copying flood-benchmark.sh to client node..."
+    scp_client "$flood_script" "/tmp/flood-benchmark.sh" || {
+        log_error "Failed to copy flood-benchmark.sh to client node"
+        return 1
+    }
+    
+    ssh_client "chmod +x /tmp/flood-benchmark.sh && sudo mv /tmp/flood-benchmark.sh /opt/flood-benchmark.sh" || {
+        log_error "Failed to install flood-benchmark.sh on client node"
+        return 1
+    }
+    
+    # Get execution node RPC endpoint from terraform
+    local execution_output=$(terraform output -json execution_node_info 2>/dev/null || echo "")
+    local execution_internal_ip=$(echo "$execution_output" | grep -o '"internal_ip":"[^"]*"' | cut -d'"' -f4)
+    local http_port=$(terraform output -raw http_port 2>/dev/null || echo "8545")
+    
+    if [ -z "$execution_internal_ip" ]; then
+        log_error "Could not get execution node internal IP from Terraform"
+        return 1
+    fi
+    
+    local rpc_endpoint="http://${execution_internal_ip}:${http_port}"
+    log_info "Execution node RPC endpoint: $rpc_endpoint"
+    
+    # Run flood benchmark
+    log_info "Executing flood benchmark..."
+    log_info "Command: /opt/flood-benchmark.sh --rpc $rpc_endpoint --rate ${FLOOD_RATE:-12000} --senders ${FLOOD_SENDERS:-10000}"
+    
+    # Properly escape variables for SSH command
+    local flood_rate="${FLOOD_RATE:-12000}"
+    local flood_senders="${FLOOD_SENDERS:-10000}"
+    
+    # Build the command with proper quoting for SSH
+    # Use printf to safely construct the command string
+    local flood_cmd=$(printf 'sudo bash /opt/flood-benchmark.sh --rpc %s --rate %s --senders %s 2>&1 | sudo tee -a /var/log/flood-benchmark.log' \
+        "$rpc_endpoint" "$flood_rate" "$flood_senders")
+    
+    if ssh_client "$flood_cmd"; then
+        log_success "Flood benchmark completed successfully"
+        log_info "Flood benchmark logs: /var/log/flood-benchmark.log"
+        log_info "Results directory: /opt/flood_results"
+        return 0
+    else
+        log_error "Flood benchmark failed"
+        log_info "Last 50 lines of log:"
+        ssh_client "sudo tail -50 /var/log/flood-benchmark.log" || true
+        return 1
+    fi
+}
+
 # Run steps 2-4: Copy scripts, execute setup, start dev node
 cmd_run_execution() {
     log_info "Running execution node steps 2-4..."
@@ -800,12 +960,14 @@ cmd_run_execution() {
     local client_setup_script="$SCRIPT_DIR/scripts/client-setup.sh"
     local client_build_script="$SCRIPT_DIR/scripts/client-build.sh"
     local client_benchmark_script="$SCRIPT_DIR/scripts/client-benchmark.sh"
+    local flood_benchmark_script="$SCRIPT_DIR/scripts/flood-benchmark.sh"
     
     [ ! -f "$dev_node_script" ] && { log_error "dev-node.sh not found"; return 1; }
     [ ! -f "$execution_setup_script" ] && { log_error "execution-node-setup.sh not found"; return 1; }
     [ ! -f "$client_setup_script" ] && { log_error "client-setup.sh not found"; return 1; }
     [ ! -f "$client_build_script" ] && { log_error "client-build.sh not found"; return 1; }
     [ ! -f "$client_benchmark_script" ] && { log_error "client-benchmark.sh not found"; return 1; }
+    [ ! -f "$flood_benchmark_script" ] && { log_error "flood-benchmark.sh not found"; return 1; }
 
     scp_execution "$dev_node_script" "/tmp/dev-node.sh" || { log_error "Failed to copy dev-node.sh"; return 1; }
     
@@ -848,15 +1010,17 @@ cmd_run_execution() {
     scp_execution "$client_setup_script" "/tmp/client-setup.sh" || { log_error "Failed to copy client-setup.sh"; return 1; }
     scp_execution "$client_build_script" "/tmp/client-build.sh" || { log_error "Failed to copy client-build.sh"; return 1; }
     scp_execution "$client_benchmark_script" "/tmp/client-benchmark.sh" || { log_error "Failed to copy client-benchmark.sh"; return 1; }
+    scp_execution "$flood_benchmark_script" "/tmp/flood-benchmark.sh" || { log_error "Failed to copy flood-benchmark.sh"; return 1; }
     # Install scripts step by step
     # ssh_execution "sudo mkdir -p /opt/gravity-reth/bench && sudo chown -R ubuntu:ubuntu /opt/gravity-reth/bench" || { log_error "Failed to create bench directory"; return 1; }
     #ssh_execution "cp /tmp/dev-node.sh /opt/gravity-reth/bench/dev-node.sh" || { log_error "Failed to copy dev-node.sh"; return 1; }
-    ssh_execution "chmod +x /tmp/dev-node.sh /tmp/setup-execution-node.sh /tmp/client-build.sh /tmp/client-benchmark.sh" || { log_error "Failed to set permissions"; return 1; }
+    ssh_execution "chmod +x /tmp/dev-node.sh /tmp/setup-execution-node.sh /tmp/client-build.sh /tmp/client-benchmark.sh /tmp/flood-benchmark.sh" || { log_error "Failed to set permissions"; return 1; }
     ssh_execution "sudo mv /tmp/setup-execution-node.sh /opt/setup-execution-node.sh" || { log_error "Failed to move setup script"; return 1; }
     ssh_execution "sudo mv /tmp/dev-node.sh /opt/dev-node.sh" || { log_error "Failed to move setup script"; return 1; }
     ssh_execution "sudo mv /tmp/client-setup.sh /opt/client-setup.sh" || { log_error "Failed to move client-setup.sh"; return 1; }
     ssh_execution "sudo mv /tmp/client-build.sh /opt/client-build.sh" || { log_error "Failed to move client-build.sh"; return 1; }
     ssh_execution "sudo mv /tmp/client-benchmark.sh /opt/client-benchmark.sh" || { log_error "Failed to move client-benchmark.sh"; return 1; }
+    ssh_execution "sudo mv /tmp/flood-benchmark.sh /opt/flood-benchmark.sh" || { log_error "Failed to move flood-benchmark.sh"; return 1; }
     
     log_success "Scripts copied"
     
@@ -880,7 +1044,20 @@ cmd_run_execution() {
     
     # Step 4: Start dev node
     log_info "Step 4: Starting dev node with RETH_TYPE=$RETH_TYPE..."
-    ssh_execution "bash -c 'RETH_TYPE=$RETH_TYPE /opt/dev-node.sh start --reth-type $RETH_TYPE'" || { log_error "Failed to start dev node"; return 1; }
+    local env_string=$(build_env_string)
+    # Build command arguments for dev-node.sh
+    local dev_node_args="--reth-type $RETH_TYPE"
+    [ -n "$DB_SYNC_MODE" ] && dev_node_args="$dev_node_args --db-sync-mode $DB_SYNC_MODE"
+    [ -n "$HTTP_PORT" ] && dev_node_args="$dev_node_args --http-port $HTTP_PORT"
+    [ -n "$WS_PORT" ] && dev_node_args="$dev_node_args --ws-port $WS_PORT"
+    [ -n "$ENGINE_PORT" ] && dev_node_args="$dev_node_args --engine-port $ENGINE_PORT"
+    [ -n "$P2P_PORT" ] && dev_node_args="$dev_node_args --p2p-port $P2P_PORT"
+    [ -n "$DEV_BLOCK_TIME" ] && dev_node_args="$dev_node_args --dev-block-time $DEV_BLOCK_TIME"
+    [ -n "$DEV_BLOCK_MAX_TXNS" ] && dev_node_args="$dev_node_args --dev-block-max-txns $DEV_BLOCK_MAX_TXNS"
+    [ -n "$BUILDER_GAS_LIMIT" ] && dev_node_args="$dev_node_args --builder-gas-limit $BUILDER_GAS_LIMIT"
+    [ -n "$LOG_LEVEL" ] && dev_node_args="$dev_node_args --log-level $LOG_LEVEL"
+    
+    ssh_execution "bash -c '${env_string}/opt/dev-node.sh start $dev_node_args'" || { log_error "Failed to start dev node"; return 1; }
     log_success "Dev node started with $RETH_TYPE binary"
     # Step 5: Prepare client benchmark
     log_info "Step 5: Prepare client benchmark"
@@ -1028,7 +1205,7 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
-        init|plan|apply|destroy|output|all|execution|client|status|ssh-execution|ssh-client|logs-execution|logs-client|copy-logs|rerun-execution|rerun-client|start-benchmark)
+        init|plan|apply|destroy|output|all|execution|client|status|ssh-execution|ssh-client|logs-execution|logs-client|copy-logs|rerun-execution|restart-execution|rerun-client|start-benchmark|flood-benchmark)
             COMMAND="$1"
             shift
             ;;
@@ -1046,7 +1223,7 @@ if [ "$VERBOSE" = "true" ]; then
 fi
 
 # Check for terraform.tfvars (except for destroy and help)
-if [ "$COMMAND" != "destroy" ] && [ "$COMMAND" != "ssh-execution" ] && [ "$COMMAND" != "ssh-client" ] && [ "$COMMAND" != "logs-execution" ] && [ "$COMMAND" != "logs-client" ] && [ "$COMMAND" != "copy-logs" ] && [ "$COMMAND" != "rerun-execution" ] && [ "$COMMAND" != "rerun-client" ] && [ "$COMMAND" != "restart-execution" ] && [ "$COMMAND" != "start-benchmark" ]; then
+if [ "$COMMAND" != "destroy" ] && [ "$COMMAND" != "ssh-execution" ] && [ "$COMMAND" != "ssh-client" ] && [ "$COMMAND" != "logs-execution" ] && [ "$COMMAND" != "logs-client" ] && [ "$COMMAND" != "copy-logs" ] && [ "$COMMAND" != "rerun-execution" ] && [ "$COMMAND" != "restart-execution" ] && [ "$COMMAND" != "rerun-client" ] && [ "$COMMAND" != "start-benchmark" ] && [ "$COMMAND" != "flood-benchmark" ]; then
     check_tfvars
 fi
 
@@ -1091,14 +1268,20 @@ case "$COMMAND" in
     copy-logs)
         cmd_copy_client_logs
         ;;
-    rerun-execution|restart-execution)
+    rerun-execution)
         cmd_rerun_execution
+        ;;
+    restart-execution)
+        cmd_restart_execution
         ;;
     rerun-client)
         cmd_rerun_client
         ;;
     start-benchmark)
         cmd_start_benchmark
+        ;;
+    flood-benchmark)
+        cmd_run_flood_benchmark
         ;;
     all|*)
         cmd_deploy "$AUTO_APPROVE"
