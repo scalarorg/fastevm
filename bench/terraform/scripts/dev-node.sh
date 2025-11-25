@@ -76,6 +76,7 @@ DEV_BLOCK_TIME="${DEV_BLOCK_TIME:-}"
 DEV_BLOCK_MAX_TXNS="${DEV_BLOCK_MAX_TXNS:-}"
 BUILDER_GAS_LIMIT="${BUILDER_GAS_LIMIT:-240000000}"
 LOG_LEVEL="${LOG_LEVEL:-debug}"
+DB_SYNC_MODE="${DB_SYNC_MODE:-}"
 
 # Convert log level string to -v format
 # trace = -vvvv, debug = -vvv, info = -vv, warn = -v, error = (no flag)
@@ -332,6 +333,7 @@ start_execution_node() {
     [ "$ENABLE_WS" = true ] && cmd_args+=("--ws" "--ws.api" "eth,net,web3,admin,debug,txpool" "--ws.addr" "0.0.0.0" "--ws.port" "$WS_PORT" "--ws.origins" "*")
     [ -n "$DEV_BLOCK_TIME" ] && cmd_args+=("--dev.block-time" "$DEV_BLOCK_TIME")
     [ -n "$DEV_BLOCK_MAX_TXNS" ] && cmd_args+=("--dev.block-max-transactions" "$DEV_BLOCK_MAX_TXNS")
+    [ -n "$DB_SYNC_MODE" ] && cmd_args+=("--db.sync-mode" "$DB_SYNC_MODE")
     
     # Convert log level to -v format
     local log_level_flag=$(convert_log_level "$LOG_LEVEL")
@@ -650,7 +652,7 @@ parse_arguments() {
     COMMAND="start"  # Default command
 
     # First, check if first argument is a command
-    if [[ $# -gt 0 ]] && [[ "$1" =~ ^(start|stop|restart|status|logs|cleanup|init)$ ]]; then
+    if [[ $# -gt 0 ]] && [[ "$1" =~ ^(start|stop|restart|reset|status|logs|cleanup|init)$ ]]; then
         COMMAND="$1"
         shift  # Remove the command from arguments
     fi
@@ -708,6 +710,10 @@ parse_arguments() {
                 LOG_LEVEL="$2"
                 shift 2
                 ;;
+            --db-sync-mode)
+                DB_SYNC_MODE="$2"
+                shift 2
+                ;;
             --foreground|--fg)
                 FOREGROUND=true
                 shift
@@ -738,6 +744,7 @@ show_help() {
     echo "  start              - Start the dev node (default)"
     echo "  stop               - Stop the dev node"
     echo "  restart            - Restart the dev node"
+    echo "  reset              - Clean all data and start fresh dev node"
     echo "  status             - Show node status"
     echo "  logs               - Show logs (follow mode)"
     echo "  cleanup            - Clean up all data and stop node"
@@ -755,6 +762,7 @@ show_help() {
     echo "  --dev-block-max-txns N    - Max transactions per block"
     echo "  --builder-gas-limit N    - Block gas limit (default: 240000000)"
     echo "  --log-level LEVEL        - Log level: trace (-vvvv), debug (-vvv), info (-vv), warn (-v), error (default: debug)"
+    echo "  --db-sync-mode MODE      - Database sync mode: durable, nometasync, safenosync, utterlynosync"
     echo "  --foreground, --fg - Run node in foreground (logs in terminal, blocks)"
     echo "  --no-build         - Skip building the project"
     echo "  --help, -h         - Show this help message"
@@ -769,11 +777,14 @@ show_help() {
     echo "  LOG_LEVEL          - Log level: trace (-vvvvv), debug (-vvvv), info (-vvv), warn (-vv), error (-v), ( default: debug)"
     echo "  DEV_BLOCK_TIME     - Block time interval (overrides --dev-block-time)"
     echo "  DEV_BLOCK_MAX_TXNS - Max transactions per block (overrides --dev-block-max-txns)"
+    echo "  DB_SYNC_MODE       - Database sync mode: durable, nometasync, safenosync, utterlynosync (overrides --db-sync-mode)"
     echo
     echo "Examples:"
     echo "  $0 start                                    # Start with default settings (background, gravity-reth)"
     echo "  $0 start --reth-type reth                  # Start reth"
     echo "  $0 start --reth-type gravity               # Start gravity-reth (default)"
+    echo "  $0 reset                                    # Clean all data and start fresh node"
+    echo "  $0 reset --reth-type reth                  # Clean all data and start fresh reth node"
     echo "  $0 start --foreground                      # Start in foreground (logs in terminal)"
     echo "  $0 start --dev-block-time 12s              # Start with 12 second block time"
     echo "  $0 start --dev-block-max-txns 100         # Start with max 100 txns per block"
@@ -809,6 +820,20 @@ case "$COMMAND" in
         ;;
     "restart")
         stop_node
+        sleep 2
+        check_prerequisites
+        setup_directories
+        if [ "$BUILD_PROJECT" = true ]; then
+            build_project
+        fi
+        start_dev_node
+        if [ "$FOREGROUND" != true ]; then
+            show_status
+        fi
+        ;;
+    "reset")
+        log_info "Resetting dev node (cleaning all data and starting fresh)..."
+        cleanup
         sleep 2
         check_prerequisites
         setup_directories

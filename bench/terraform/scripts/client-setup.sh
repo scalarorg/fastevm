@@ -14,6 +14,53 @@ log() {
 
 log "Starting client setup: VM and Rust installation..."
 
+# Configure file descriptor limits to prevent "too many files open" errors
+# Use higher limits for benchmarking workloads that create many concurrent connections
+log "Configuring file descriptor limits..."
+# Set limits for current session
+ulimit -n 1048576 2>/dev/null || true
+
+# Configure system-wide limits
+LIMITS_FILE="/etc/security/limits.conf"
+if ! grep -q "ubuntu.*nofile" "$LIMITS_FILE" 2>/dev/null; then
+    log "Adding file descriptor limits to $LIMITS_FILE..."
+    cat >> "$LIMITS_FILE" << 'EOF'
+# File descriptor limits for ubuntu user (added by client-setup.sh)
+ubuntu soft nofile 1048576
+ubuntu hard nofile 1048576
+root soft nofile 1048576
+root hard nofile 1048576
+* soft nofile 1048576
+* hard nofile 1048576
+EOF
+    log "File descriptor limits configured in $LIMITS_FILE"
+fi
+
+# Configure systemd limits if systemd is available
+if command -v systemctl &> /dev/null; then
+    SYSTEMD_LIMITS_DIR="/etc/systemd/system.conf.d"
+    mkdir -p "$SYSTEMD_LIMITS_DIR"
+    
+    if [ ! -f "$SYSTEMD_LIMITS_DIR/limits.conf" ]; then
+        log "Configuring systemd file descriptor limits..."
+        cat > "$SYSTEMD_LIMITS_DIR/limits.conf" << 'EOF'
+[Manager]
+DefaultLimitNOFILE=1048576
+EOF
+        log "Systemd limits configured"
+    fi
+fi
+
+# Set limits for ubuntu user's current session (if running as ubuntu)
+if id ubuntu &>/dev/null 2>&1; then
+    sudo -u ubuntu bash -c "ulimit -n 1048576" 2>/dev/null || true
+fi
+
+# Also set for root user
+ulimit -n 1048576 2>/dev/null || true
+
+log "File descriptor limits configured: soft/hard = 1048576 (1M)"
+
 # Update system packages
 log "Updating system packages..."
 export DEBIAN_FRONTEND=noninteractive
@@ -49,6 +96,7 @@ apt-get install -y \
     make \
     cmake \
     libboost-all-dev \
+    golang-go \
     > /dev/null 2>&1
 
 # Install Rust toolchain (version 1.90 as per Dockerfile)
@@ -102,6 +150,67 @@ log "Rust: $RUST_VERSION"
 CARGO_VERSION=$("$CARGO_BIN" --version 2>/dev/null || echo "unknown")
 log "Cargo: $CARGO_VERSION"
 
+# Install vegeta (required for flood)
+log "Installing vegeta (required for flood load testing)..."
+if ! command -v vegeta &> /dev/null; then
+    # Install vegeta using go install
+    export PATH="$PATH:/usr/local/go/bin:$(go env GOPATH)/bin"
+    go install github.com/tsenart/vegeta/v12@v12.8.4 > /dev/null 2>&1 || {
+        log "Warning: Failed to install vegeta via go install, trying alternative method..."
+        # Alternative: download pre-built binary
+        VEGETA_VERSION="v12.8.4"
+        VEGETA_ARCH="amd64"
+        VEGETA_OS="linux"
+        VEGETA_URL="https://github.com/tsenart/vegeta/releases/download/${VEGETA_VERSION}/vegeta-${VEGETA_VERSION}-${VEGETA_OS}-${VEGETA_ARCH}.tar.gz"
+        
+        cd /tmp
+        wget -q "$VEGETA_URL" -O vegeta.tar.gz || curl -L "$VEGETA_URL" -o vegeta.tar.gz
+        tar -xzf vegeta.tar.gz vegeta
+        mv vegeta /usr/local/bin/vegeta
+        chmod +x /usr/local/bin/vegeta
+        rm -f vegeta.tar.gz
+        cd - > /dev/null
+    }
+    
+    # Verify vegeta installation
+    if command -v vegeta &> /dev/null; then
+        VEGETA_VERSION=$(vegeta -version 2>&1 | head -n1 || echo "unknown")
+        log "Vegeta installed: $VEGETA_VERSION"
+    else
+        log "Warning: vegeta installation may have failed, but continuing..."
+    fi
+else
+    VEGETA_VERSION=$(vegeta -version 2>&1 | head -n1 || echo "unknown")
+    log "Vegeta already installed: $VEGETA_VERSION"
+fi
+
+# Install flood (Python package)
+log "Installing flood (paradigm-flood)..."
+if ! command -v flood &> /dev/null; then
+    # Install flood using pip
+    pip3 install --upgrade pip > /dev/null 2>&1
+    pip3 install paradigm-flood > /dev/null 2>&1 || {
+        log "Warning: Failed to install flood via pip3, trying with --user flag..."
+        pip3 install --user paradigm-flood > /dev/null 2>&1
+        # Add user bin to PATH if needed
+        if [ -d "$HOME/.local/bin" ]; then
+            export PATH="$PATH:$HOME/.local/bin"
+        fi
+    }
+    
+    # Verify flood installation
+    if command -v flood &> /dev/null || python3 -m flood --help &> /dev/null; then
+        FLOOD_VERSION=$(flood --version 2>&1 || python3 -m flood --version 2>&1 || echo "installed")
+        log "Flood installed: $FLOOD_VERSION"
+    else
+        log "Warning: flood installation may have failed, but continuing..."
+        log "You can try running: pip3 install paradigm-flood"
+    fi
+else
+    FLOOD_VERSION=$(flood --version 2>&1 || echo "installed")
+    log "Flood already installed: $FLOOD_VERSION"
+fi
+
 # Create a marker file to indicate setup is complete
 touch /var/log/client-setup-complete || true
 
@@ -109,6 +218,7 @@ log "Client setup completed successfully!"
 log "Rust toolchain installed and verified"
 log "Rust user: $RUST_USER"
 log "Rust home: $RUST_HOME"
+log "Vegeta and Flood load testing tools installed"
 
 # Explicitly exit with success status
 exit 0

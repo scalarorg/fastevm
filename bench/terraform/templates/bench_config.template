@@ -2,7 +2,7 @@
 
 # Uniswap configuration file path
 contract_config_path = "deploy.json"
-target_tps = 40000
+target_tps = 10000
 nodes = [
     { rpc_url = "EXECUTION_NODE", chain_id = 1337 },
 ]
@@ -17,7 +17,7 @@ fauce_eth_balance = "1000000000000000000000"  # 1000 ETH in wei
 # Faucet Level: Controls the depth of cascading faucet levels
 # Value 10: Enables cascade mode with progression 1 -> 10 -> 100 (amplification chain)
 # Value 0: Disables cascading, processes data directly
-faucet_level = 0
+faucet_level = 10
 # Wait duration in seconds between faucet distribution levels
 # If you encounter 'insufficient funds' errors, try increasing this value
 wait_duration_secs = 1
