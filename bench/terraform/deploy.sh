@@ -42,6 +42,21 @@ load_env_file() {
         set -a
         source "$env_file"
         set +a
+        
+        # Export machine-type variables as Terraform variables (TF_VAR_ prefix)
+        if [ -n "$EXECUTION_MACHINE_TYPE" ]; then
+            export TF_VAR_execution_machine_type="$EXECUTION_MACHINE_TYPE"
+            log_info "Using EXECUTION_MACHINE_TYPE from .env: $EXECUTION_MACHINE_TYPE"
+        fi
+        if [ -n "$CLIENT_MACHINE_TYPE" ]; then
+            export TF_VAR_client_machine_type="$CLIENT_MACHINE_TYPE"
+            log_info "Using CLIENT_MACHINE_TYPE from .env: $CLIENT_MACHINE_TYPE"
+        fi
+        if [ -n "$EXECUTION_LOCAL_SSD_COUNT" ]; then
+            export TF_VAR_execution_local_ssd_count="$EXECUTION_LOCAL_SSD_COUNT"
+            log_info "Using EXECUTION_LOCAL_SSD_COUNT from .env: $EXECUTION_LOCAL_SSD_COUNT"
+        fi
+        
         log_success "Environment variables loaded from .env"
     else
         log_info ".env file not found (using defaults or command-line options)"
@@ -120,10 +135,14 @@ Environment Configuration:
   directory as deploy.sh. Copy .env.example to .env and modify as needed.
   
   Supported variables in .env:
+    - EXECUTION_MACHINE_TYPE: GCP machine type for execution node (e.g., c4-highcpu-16, e2-standard-8)
+    - CLIENT_MACHINE_TYPE: GCP machine type for client node (e.g., e2-standard-8, e2-standard-4)
+    - EXECUTION_LOCAL_SSD_COUNT: Number of local SSD (NVMe) disks for execution node (default: 0). Note: Not all machine types support local SSDs (e.g., c4-highcpu-16 does not support them)
     - RETH_TYPE: 'gravity' or 'reth' (default: reth)
     - DB_SYNC_MODE: durable, nometasync, safenosync, utterlynosync
     - HTTP_PORT, WS_PORT, ENGINE_PORT, P2P_PORT: Port numbers
-    - DEV_BLOCK_TIME, DEV_BLOCK_MAX_TXNS: Dev mode settings
+    - DEV_BLOCK_TIME: Block time interval (default: 1s)
+    - DEV_BLOCK_MAX_TXNS: Max transactions per block
     - BUILDER_GAS_LIMIT: Block gas limit
     - LOG_LEVEL: trace, debug, info, warn, error
 
@@ -238,11 +257,9 @@ cmd_apply() {
 cmd_destroy() {
     local auto_approve="${1:-true}"  # Default to auto-approve
     
-    # Ensure terraform is initialized
-    if [ ! -d ".terraform" ]; then
-        log_info "Terraform not initialized, running init..."
-        terraform init
-    fi
+    # Ensure terraform is initialized (always run init to handle lock file inconsistencies)
+    log_info "Initializing Terraform (ensuring providers are up to date)..."
+    terraform init
     
     log_warning "This will destroy all resources!"
     log_info "Destroying resources (auto-approve)..."
@@ -321,12 +338,27 @@ cmd_clean_execution_data() {
         sleep 2
         
         echo "[INFO] Cleaning old data directories..."
-        # Clean gravity-reth data
-        if [ -d "/opt/gravity-reth" ]; then
+        # Clean gravity-reth data from both possible locations (NVMe /data/bench or boot disk /opt/bench)
+        # Check NVMe location first
+        if [ -d "/data/bench" ]; then
+            rm -rf /data/bench/.dev-node-data 2>/dev/null || true
+            rm -rf /data/bench/.dev-node-logs 2>/dev/null || true
+            rm -rf /data/bench/.dev-node-pids 2>/dev/null || true
+            echo "[INFO] Cleaned /data/bench data directories"
+        fi
+        # Also clean old /opt/bench location (fallback or legacy)
+        if [ -d "/opt/gravity-reth/bench" ]; then
             rm -rf /opt/gravity-reth/bench/.dev-node-data 2>/dev/null || true
             rm -rf /opt/gravity-reth/bench/.dev-node-logs 2>/dev/null || true
             rm -rf /opt/gravity-reth/bench/.dev-node-pids 2>/dev/null || true
             echo "[INFO] Cleaned /opt/gravity-reth/bench data directories"
+        fi
+        # Clean /opt/bench if it exists (legacy location)
+        if [ -d "/opt/bench" ]; then
+            rm -rf /opt/bench/.dev-node-data 2>/dev/null || true
+            rm -rf /opt/bench/.dev-node-logs 2>/dev/null || true
+            rm -rf /opt/bench/.dev-node-pids 2>/dev/null || true
+            echo "[INFO] Cleaned /opt/bench data directories"
         fi
         
         # Clean build artifacts (optional - comment out if you want to keep builds)
@@ -1105,7 +1137,7 @@ cmd_logs_execution() {
     log_warning "For full logs and better debugging, use: ./debug.sh logs-execution"
     echo
     ssh -i "$ssh_key" -o StrictHostKeyChecking=no "$ssh_user@$external_ip" \
-        "tail -100 /var/log/execution-node-setup.log 2>/dev/null || echo 'Setup log not found'; echo; tail -100 /var/log/gravity-reth-startup.log 2>/dev/null || echo 'Startup log not found'; echo; tail -100 /opt/gravity-reth/bench/.dev-node-logs/reth-node.log 2>/dev/null || echo 'Reth log not found'"
+        "tail -100 /var/log/execution-node-setup.log 2>/dev/null || echo 'Setup log not found'; echo; tail -100 /var/log/gravity-reth-startup.log 2>/dev/null || echo 'Startup log not found'; echo; (tail -100 /data/bench/.dev-node-logs/reth-node.log 2>/dev/null || tail -100 /opt/bench/.dev-node-logs/reth-node.log 2>/dev/null || tail -100 /opt/gravity-reth/bench/.dev-node-logs/reth-node.log 2>/dev/null || echo 'Reth log not found')"
 }
 
 # Show client node logs

@@ -33,12 +33,35 @@ NC='\033[0m' # No Color
 # SCRIPT_DIR will be /opt/dev-node.sh
 # PROJECT_ROOT will be /opt/gravity-reth or /opt/reth depending on RETH_TYPE
 RETH_TYPE="${RETH_TYPE:-gravity}"  # "gravity" or "reth"
-DATA_DIR="/opt/bench/.dev-node-data"
-LOGS_DIR="/opt/bench/.dev-node-logs"
-PIDS_DIR="/opt/bench/.dev-node-pids"
-sudo mkdir -p "/opt/bench"
-sudo chown -R ubuntu:ubuntu "/opt/bench"
-sudo chmod -R 755 "/opt/bench"
+
+# Runtime base directory: always use /data/bench for consistency
+# The execution-node-setup.sh script mounts NVMe to /data if available, otherwise /data is on boot disk
+# This ensures the same location is used regardless of NVMe availability
+RUNTIME_BASE="/data/bench"
+
+# Runtime data directories (all use RUNTIME_BASE for consistency)
+DATA_DIR="$RUNTIME_BASE/.dev-node-data"
+LOGS_DIR="$RUNTIME_BASE/.dev-node-logs"
+PIDS_DIR="$RUNTIME_BASE/.dev-node-pids"
+
+# Log and PID file names based on RETH_TYPE
+if [ "$RETH_TYPE" = "reth" ]; then
+    LOG_FILE_NAME="reth-node.log"
+    PID_FILE_NAME="reth-node.pid"
+else
+    LOG_FILE_NAME="gravity-node.log"
+    PID_FILE_NAME="gravity-node.pid"
+fi
+
+# Ensure /data exists (created by execution-node-setup.sh, but ensure it exists here too)
+mkdir -p "/data"
+chown -R ubuntu:ubuntu "/data" 2>/dev/null || sudo chown -R ubuntu:ubuntu "/data" 2>/dev/null || true
+chmod -R 755 "/data" 2>/dev/null || sudo chmod -R 755 "/data" 2>/dev/null || true
+
+# Ensure runtime base directory exists with correct permissions
+mkdir -p "$RUNTIME_BASE"
+chown -R ubuntu:ubuntu "$RUNTIME_BASE" 2>/dev/null || sudo chown -R ubuntu:ubuntu "$RUNTIME_BASE" 2>/dev/null || true
+chmod -R 755 "$RUNTIME_BASE" 2>/dev/null || sudo chmod -R 755 "$RUNTIME_BASE" 2>/dev/null || true
 
 # Function to update paths based on RETH_TYPE
 update_paths() {
@@ -180,6 +203,13 @@ check_prerequisites() {
 # Create necessary directories
 setup_directories() {
     log_info "Setting up directories..."
+    
+    # Log which storage location is being used
+    if mountpoint -q "/data" 2>/dev/null; then
+        log_info "Using NVMe device for runtime data at $RUNTIME_BASE"
+    else
+        log_info "Using boot disk for runtime data at $RUNTIME_BASE (NVMe not available)"
+    fi
 
     # Ensure the bench directory exists with correct permissions
     local bench_dir="$PROJECT_ROOT/bench"
@@ -199,7 +229,7 @@ setup_directories() {
     mkdir -p "$LOGS_DIR"
     mkdir -p "$PIDS_DIR"
 
-    log_success "Directories created!"
+    log_success "Directories created at $RUNTIME_BASE!"
 }
 
 # Build the project
@@ -290,7 +320,7 @@ cleanup_before_start() {
     sleep 1
     
     # Remove data directory and logs
-    rm -rf "$DATA_DIR" "$LOGS_DIR/reth-node.log" 2>/dev/null || true
+    rm -rf "$DATA_DIR" "$LOGS_DIR/$LOG_FILE_NAME" 2>/dev/null || true
     
     # Recreate directories
     mkdir -p "$LOGS_DIR" "$PIDS_DIR"
@@ -333,7 +363,8 @@ start_execution_node() {
     [ "$ENABLE_WS" = true ] && cmd_args+=("--ws" "--ws.api" "eth,net,web3,admin,debug,txpool" "--ws.addr" "0.0.0.0" "--ws.port" "$WS_PORT" "--ws.origins" "*")
     [ -n "$DEV_BLOCK_TIME" ] && cmd_args+=("--dev.block-time" "$DEV_BLOCK_TIME")
     [ -n "$DEV_BLOCK_MAX_TXNS" ] && cmd_args+=("--dev.block-max-transactions" "$DEV_BLOCK_MAX_TXNS")
-    [ -n "$DB_SYNC_MODE" ] && cmd_args+=("--db.sync-mode" "$DB_SYNC_MODE")
+    # Only add --db.sync-mode for reth, not for gravity-reth (gravity-reth doesn't support this flag)
+    [ -n "$DB_SYNC_MODE" ] && [ "$RETH_TYPE" = "reth" ] && cmd_args+=("--db.sync-mode" "$DB_SYNC_MODE")
     
     # Convert log level to -v format
     local log_level_flag=$(convert_log_level "$LOG_LEVEL")
@@ -359,9 +390,9 @@ start_execution_node() {
         log_info "Running in foreground mode (Ctrl+C to stop)"
         "$RETH_BIN" "${cmd_args[@]}"
     else
-        nohup "$RETH_BIN" "${cmd_args[@]}" > "$LOGS_DIR/reth-node.log" 2>&1 &
-        echo $! > "$PIDS_DIR/reth-node.pid"
-        log_info "Node started (PID: $(cat "$PIDS_DIR/reth-node.pid"), Log: $LOGS_DIR/reth-node.log)"
+        nohup "$RETH_BIN" "${cmd_args[@]}" > "$LOGS_DIR/$LOG_FILE_NAME" 2>&1 &
+        echo $! > "$PIDS_DIR/$PID_FILE_NAME"
+        log_info "Node started (PID: $(cat "$PIDS_DIR/$PID_FILE_NAME"), Log: $LOGS_DIR/$LOG_FILE_NAME)"
     fi
 }
 
@@ -522,7 +553,7 @@ PYTHON_EOF
 
 # Stop the node (used before starting to ensure clean state)
 stop_node_clean() {
-    [ -f "$PIDS_DIR/reth-node.pid" ] && kill "$(cat "$PIDS_DIR/reth-node.pid")" 2>/dev/null || true
+    [ -f "$PIDS_DIR/$PID_FILE_NAME" ] && kill "$(cat "$PIDS_DIR/$PID_FILE_NAME")" 2>/dev/null || true
     for port in "$HTTP_PORT" "$WS_PORT" "$ENGINE_PORT" "$P2P_PORT"; do
         lsof -ti :$port 2>/dev/null | xargs kill -9 2>/dev/null || true
     done
@@ -531,7 +562,7 @@ stop_node_clean() {
     pgrep -f "/usr/local/bin/reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
     pgrep -f "/usr/local/bin/gravity-reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
     pgrep -f "target/release/reth" 2>/dev/null | xargs kill -9 2>/dev/null || true
-    rm -f "$PIDS_DIR/reth-node.pid"
+    rm -f "$PIDS_DIR/$PID_FILE_NAME"
     sleep 1
 }
 
@@ -567,7 +598,7 @@ start_dev_node() {
     echo "  Engine API: http://localhost:$ENGINE_PORT"
     echo "  P2P Port: $P2P_PORT"
     echo "  Data Directory: $DATA_DIR"
-    echo "  Logs: $LOGS_DIR/reth-node.log"
+    echo "  Logs: $LOGS_DIR/$LOG_FILE_NAME"
     echo
     log_info "Dev Mode: 20 accounts prefunded with 10,000 ETH each"
     log_info "Deployer: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
@@ -595,7 +626,7 @@ show_status() {
     log_info "$node_name Dev Node Status:"
     echo
 
-    local pid_file="$PIDS_DIR/reth-node.pid"
+    local pid_file="$PIDS_DIR/$PID_FILE_NAME"
 
     if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
         local status_info="http://localhost:$HTTP_PORT (RPC)"
@@ -605,7 +636,7 @@ show_status() {
         status_info="$status_info, http://localhost:$ENGINE_PORT (Engine API)"
         echo "  ✅ Node: $status_info"
         echo "  Data: $DATA_DIR"
-        echo "  Logs: $LOGS_DIR/reth-node.log"
+        echo "  Logs: $LOGS_DIR/$LOG_FILE_NAME"
     else
         echo "  ❌ Node: Not running"
     fi
@@ -613,7 +644,7 @@ show_status() {
 
 # Show logs
 show_logs() {
-    local log_file="$LOGS_DIR/reth-node.log"
+    local log_file="$LOGS_DIR/$LOG_FILE_NAME"
     if [ -f "$log_file" ]; then
         log_info "Showing logs (Ctrl+C to exit):"
         tail -f "$log_file"

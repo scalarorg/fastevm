@@ -34,4 +34,4 @@ num_senders = 1000
 # Maximum capacity of the transaction pool inside Consumer
 max_pool_size = 100000
 # Duration of the benchmark in seconds. Set to 0 to run indefinitely.
-duration_secs = 3600
+duration_secs = 300

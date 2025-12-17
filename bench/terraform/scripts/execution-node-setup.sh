@@ -65,6 +65,56 @@ apt-get install -y \
     openssh-client \
     openssl > /dev/null 2>&1
 
+# Setup NVMe disk early (before creating data directories)
+log "Setting up NVMe disk if available..."
+NVME_DEVICE="/dev/nvme0n1"
+MOUNT_POINT="/data"
+
+if [ -b "$NVME_DEVICE" ]; then
+    log "NVMe device $NVME_DEVICE found, setting up..."
+    
+    # Check if already mounted at /data
+    if mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        log "$MOUNT_POINT is already mounted, skipping setup"
+    else
+        # Check if device is mounted elsewhere
+        if grep -q "^$NVME_DEVICE " /proc/mounts 2>/dev/null; then
+            OTHER_MOUNT=$(grep "^$NVME_DEVICE " /proc/mounts | awk '{print $2}')
+            log "$NVME_DEVICE is already mounted at $OTHER_MOUNT, skipping"
+        else
+            # Check if device has filesystem
+            if ! blkid "$NVME_DEVICE" >/dev/null 2>&1; then
+                log "Creating ext4 filesystem on $NVME_DEVICE..."
+                mkfs.ext4 -F "$NVME_DEVICE"
+            fi
+            
+            # Create mount point
+            mkdir -p "$MOUNT_POINT"
+            
+            # Mount the device
+            log "Mounting $NVME_DEVICE to $MOUNT_POINT..."
+            if mount "$NVME_DEVICE" "$MOUNT_POINT"; then
+                log "Successfully mounted $NVME_DEVICE to $MOUNT_POINT"
+                
+                # Add to /etc/fstab for persistent mounting
+                if ! grep -q "^$NVME_DEVICE" /etc/fstab 2>/dev/null; then
+                    echo "$NVME_DEVICE $MOUNT_POINT ext4 defaults,nofail 0 2" | tee -a /etc/fstab > /dev/null
+                    log "Added $NVME_DEVICE to /etc/fstab"
+                fi
+            else
+                log "WARNING: Failed to mount $NVME_DEVICE, will use boot disk for /data"
+            fi
+        fi
+    fi
+    
+    # Set ownership
+    chown ubuntu:ubuntu "$MOUNT_POINT" 2>/dev/null || true
+    log "NVMe disk setup complete. Runtime data will be stored at $MOUNT_POINT"
+else
+    log "No NVMe device found, will use boot disk for /data"
+fi
+
+
 # Configure file descriptor limits to prevent "too many files open" errors
 log "Configuring file descriptor limits..."
 # Set limits for current session

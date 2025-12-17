@@ -141,6 +141,15 @@ resource "google_compute_instance" "execution_node" {
     }
   }
 
+  # Local SSD disks (NVMe) - only add if count > 0
+  # Note: Not all machine types support local SSDs. Check GCP documentation for compatibility.
+  dynamic "scratch_disk" {
+    for_each = var.execution_local_ssd_count > 0 ? range(var.execution_local_ssd_count) : []
+    content {
+      interface = "NVME"
+    }
+  }
+
   network_interface {
     network    = google_compute_network.gravity_network.id
     subnetwork = google_compute_subnetwork.gravity_subnet.id

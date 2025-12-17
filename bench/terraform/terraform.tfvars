@@ -12,8 +12,10 @@ region = "us-central1"
 zone   = "us-central1-a"
 
 # Optional: Machine types
-execution_machine_type = "c4-highcpu-16"
-client_machine_type    = "e2-standard-8"
+# These can be set via .env file (EXECUTION_MACHINE_TYPE, CLIENT_MACHINE_TYPE)
+# or uncomment and set here. .env file takes precedence if both are set.
+# execution_machine_type = "c4-highcpu-16"
+# client_machine_type    = "e2-standard-8"
 
 # Optional: Disk sizes (in GB)
 execution_disk_size = 100

@@ -41,6 +41,11 @@ gravity_bench_branch = "main"
 # Optional: Disk type
 execution_disk_type = "hyperdisk-balanced"
 
+# Optional: Local SSD count (NVMe disks)
+# Note: Not all machine types support local SSDs (e.g., c4-highcpu-16 does not support them)
+# Set to 0 to disable local SSDs
+execution_local_ssd_count = 0
+
 # Optional: Port configuration
 http_port   = 8545
 ws_port     = 8546

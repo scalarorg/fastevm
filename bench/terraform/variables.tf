@@ -47,6 +47,12 @@ variable "execution_disk_type" {
   default     = "hyperdisk-balanced"
 }
 
+variable "execution_local_ssd_count" {
+  description = "Number of local SSD disks to attach to execution node. Note: Not all machine types support local SSDs (e.g., c4-highcpu-16 does not support them). Set to 0 to disable."
+  type        = number
+  default     = 0
+}
+
 variable "client_disk_size" {
   description = "Size of persistent disk for client node in GB"
   type        = number
