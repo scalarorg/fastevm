@@ -269,3 +269,132 @@ impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> Mystice
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::{Address, U256};
+    use reth_chainspec::MAINNET;
+    use reth_ethereum::pool::noop::NoopTransactionPool;
+    use rpc_shared_api::{BlockRef, CommitRef};
+
+    type TestPool = NoopTransactionPool;
+
+    fn create_test_handler() -> MysticetiConsensusHandler<TestPool, reth_chainspec::ChainSpec> {
+        let consensus_pool = Arc::new(ConsensusPool::<TestPool>::new(1));
+        let tx_pool = TestPool::default();
+        let chain_spec = MAINNET.clone();
+
+        MysticetiConsensusHandler::new(consensus_pool, tx_pool, chain_spec)
+    }
+
+    fn create_empty_subdag(round: u64) -> CommittedSubDag {
+        CommittedSubDag {
+            leader: BlockRef::default(),
+            blocks: Vec::new(),
+            timestamp_ms: 0,
+            commit_ref: CommitRef {
+                round,
+                digest: [0u8; 32],
+            },
+            reputation_scores_desc: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_mysticeti_consensus_handler_new() {
+        let handler = create_test_handler();
+
+        // Verify handler is created successfully
+        assert_eq!(*handler.total_txs.read(), 0);
+    }
+
+    #[test]
+    fn test_mysticeti_consensus_handler_clone() {
+        let handler = create_test_handler();
+        let cloned = handler.clone();
+
+        // Both should share the same Arc for total_txs
+        assert_eq!(*handler.total_txs.read(), *cloned.total_txs.read());
+    }
+
+    #[test]
+    fn test_submit_committed_subdag_empty() {
+        let handler = create_test_handler();
+        let subdag = create_empty_subdag(1);
+
+        let result = MysticetiConsensusApiServer::submit_committed_subdag(&handler, subdag);
+
+        assert!(result.is_ok());
+        assert_eq!(*handler.total_txs.read(), 0);
+    }
+
+    #[test]
+    fn test_submit_committed_subdags_empty() {
+        let handler = create_test_handler();
+        let subdags = vec![
+            create_empty_subdag(1),
+            create_empty_subdag(2),
+            create_empty_subdag(3),
+        ];
+
+        let result = MysticetiConsensusApiServer::submit_committed_subdags(&handler, subdags);
+
+        assert!(result.is_ok());
+        assert_eq!(*handler.total_txs.read(), 0);
+    }
+
+    #[test]
+    fn test_submit_committed_subdags_multiple() {
+        let handler = create_test_handler();
+
+        // Submit multiple empty subdags
+        for i in 1..=5 {
+            let subdag = create_empty_subdag(i);
+            let result = MysticetiConsensusApiServer::submit_committed_subdag(&handler, subdag);
+            assert!(result.is_ok());
+        }
+
+        // Verify all subdags were added to consensus pool
+        assert_eq!(handler.consensus_pool.queue_size(), 5);
+    }
+
+    #[test]
+    fn test_consensus_pool_integration() {
+        let handler = create_test_handler();
+
+        // Submit a batch of subdags
+        let subdags = vec![create_empty_subdag(1), create_empty_subdag(2)];
+
+        let result = MysticetiConsensusApiServer::submit_committed_subdags(&handler, subdags);
+        assert!(result.is_ok());
+
+        // Verify queue size
+        assert_eq!(handler.consensus_pool.queue_size(), 2);
+    }
+
+    #[test]
+    fn test_committed_subdag_default() {
+        let subdag = CommittedSubDag::default();
+
+        assert!(subdag.blocks.is_empty());
+        assert_eq!(subdag.timestamp_ms, 0);
+        assert_eq!(subdag.commit_ref.round, 0);
+    }
+
+    #[test]
+    fn test_block_ref_default() {
+        let block_ref = BlockRef::default();
+
+        assert_eq!(block_ref.round, 0);
+        assert_eq!(block_ref.digest, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_commit_ref_default() {
+        let commit_ref = CommitRef::default();
+
+        assert_eq!(commit_ref.round, 0);
+        assert_eq!(commit_ref.digest, [0u8; 32]);
+    }
+}

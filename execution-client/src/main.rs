@@ -10,38 +10,28 @@
 #![warn(unused_crate_dependencies)]
 // alloy_consensus is used in transaction_listener.rs
 use alloy_consensus as _;
-mod consensus;
-mod payload;
-mod pool;
-mod rpc;
 
-mod types;
 use clap::Parser;
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_transaction_pool::blobstore::DiskFileBlobStore;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
-// Suppress warnings for dependencies used by CLI binary
-use crate::{
-    consensus::{ConsensusPool, MysticetiConsensus},
-    payload::MysticetiPayloadBuilderFactory,
-    pool::MysticetiPoolBuilder,
-    rpc::{
-        MysticetiConsensusApiServer, MysticetiConsensusHandler, RawTransactionApiServer,
-        TransactionHandler,
-    },
-    types::TxValidatorConfig,
+
+// Import from the library crate
+use fastevm_execution::{
+    args::CliMysticetiArgs, ConsensusPool, MysticetiConsensus, MysticetiConsensusApiServer,
+    MysticetiConsensusHandler, MysticetiPayloadBuilderFactory, MysticetiPoolBuilder,
+    RawTransactionApiServer, TransactionHandler, TxValidatorConfig,
 };
 use reth_ethereum::{
     chainspec::ChainSpecProvider,
     cli::{chainspec::EthereumChainSpecParser, Cli},
     node::{
-        builder::{components::BasicPayloadServiceBuilder, NodeBuilder, NodeHandle},
+        builder::{components::BasicPayloadServiceBuilder, NodeHandle},
         node::EthereumAddOns,
         EthereumNode,
     },
 };
-// use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
 use std::sync::Arc;
 use tracing::{error, info};
 // Use in cli
@@ -53,23 +43,6 @@ use reth_rpc_layer as _;
 use secp256k1::{self as _};
 use serde_json as _;
 use sha2 as _;
-
-/// Our custom cli args extension that adds one flag to reth default CLI.
-#[derive(Debug, Clone, Copy, Default, clap::Args)]
-pub(crate) struct CliMysticetiArgs {
-    /// CLI flag to enable the txpool extension namespace
-    #[arg(long)]
-    pub enable_tx_subscription: bool,
-    /// Number of transactions to send in a batch
-    #[arg(long)]
-    pub committed_subdags_per_block: usize,
-    /// Build interval in milliseconds
-    #[arg(long)]
-    pub block_build_interval_ms: u64,
-    /// Maximum number of accounts to reload during pool maintenance
-    #[arg(long, default_value = "500")]
-    pub max_reload_accounts: u64,
-}
 
 /// Flow hook execution:
 /// on_component_initialized
