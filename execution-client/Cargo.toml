@@ -8,19 +8,26 @@ name = "fastevm-execution"
 path = "src/main.rs"
 
 [[bin]]
+name = "fastevm-gravity"
+path = "src/gravity.rs"
+
+[[bin]]
 name = "cli"
 path = "src/cli.rs"
 
 [dependencies]
-reth-extension = { workspace = true }
+# reth-extension = { workspace = true }
+rpc-shared-api = { workspace = true }
+gravity-api-types = { workspace = true }
 # Ethereum
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
 alloy-rpc-types-engine = { workspace = true }
+alloy-rpc-types-eth = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-evm = { workspace = true }
-# alloy-rpc-types-eth = { workspace = true }
-# alloy-rlp = { workspace = true }
+
+alloy-rlp = { workspace = true }
 # alloy = { workspace = true, features = ["network", "rpc"] }
 # alloy-signer-local = { workspace = true }
 
@@ -31,6 +38,8 @@ clap = "4"
 hex = { workspace = true }
 secp256k1 = { workspace = true }
 # rustc-hash = { workspace = true }
+# Gravity
+greth = { workspace = true }
 # Reth
 reth-network-peers = { workspace = true }
 reth-basic-payload-builder = { workspace = true }
@@ -93,5 +102,5 @@ alloy-signer-local = { workspace = true }
 alloy-network = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
 sha2 = { version = "0.10", default-features = false }
-consensus-config = { workspace = true }
-consensus-core = { workspace = true }
+# consensus-config = { workspace = true }
+# consensus-core = { workspace = true }

@@ -9,11 +9,7 @@ exclude = [".github/", "testing"]
 
 [workspace]
 members = [
-    "reth-extension",
-    "execution-client",
-    "consensus-client",
-    "testing/integration"
-
+    "execution-client"
 ]
 resolver = "2"
 
@@ -28,8 +24,9 @@ rustdoc.all = "warn"
 
 [workspace.dependencies]
 # Mysticeti
-consensus-core = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-core" }
-consensus-config = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-config" }
+# consensus-core = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-core" }
+# consensus-config = { git = "https://github.com/scalarorg/mysticeti.git", package = "consensus-config" }
+rpc-shared-api = { git = "https://github.com/scalarorg/rpc-shared-api.git", package = "rpc-shared-api" }
 fastcrypto = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9" }
 fastcrypto-tbls = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9" }
 fastcrypto-zkp = { git = "https://github.com/MystenLabs/fastcrypto", rev = "69d496c71fb37e3d22fe85e5bbfd4256d61422b9", package = "fastcrypto-zkp" }
@@ -76,6 +73,9 @@ alloy-transport-http = { version = "1.0.37", features = ["reqwest-rustls-tls"], 
 alloy-transport-ipc = { version = "1.0.37", default-features = false }
 alloy-transport-ws = { version = "1.0.37", default-features = false }
 
+# gravity
+gravity-api-types = { package = "api-types", git = "https://github.com/Galxe/gravity-aptos", tag = "gravity-v1.1.0" }
+greth = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "greth" }
 
 # Reth (using gravity-reth)
 reth-basic-payload-builder = { git = "https://github.com/Galxe/gravity-reth.git", branch = "main", package = "reth-basic-payload-builder" }
@@ -217,7 +217,7 @@ assert_matches = "1.5.0"
 similar-asserts = { version = "1.5.0", features = ["serde"] }
 
 # Add execution and consensus client as dependencies for integration tests
-reth-extension = { path = "reth-extension" }
+# reth-extension = { path = "reth-extension" }
 fastevm-execution = { path = "execution-client" }
 fastevm-consensus = { path = "consensus-client" }
 

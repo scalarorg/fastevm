@@ -26,7 +26,10 @@ use crate::{
     consensus::{ConsensusPool, MysticetiConsensus},
     payload::MysticetiPayloadBuilderFactory,
     pool::MysticetiPoolBuilder,
-    rpc::{MysticetiConsensusHandler, TransactionHandler},
+    rpc::{
+        MysticetiConsensusApiServer, MysticetiConsensusHandler, RawTransactionApiServer,
+        TransactionHandler,
+    },
     types::TxValidatorConfig,
 };
 use reth_ethereum::{
@@ -39,7 +42,6 @@ use reth_ethereum::{
     },
 };
 // use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
-use reth_extension::{MysticetiConsensusApiServer, MysticetiTransactionApiServer};
 use std::sync::Arc;
 use tracing::{error, info};
 // Use in cli

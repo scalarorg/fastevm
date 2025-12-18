@@ -1,4 +1,6 @@
 use crate::consensus::ConsensusPool;
+use crate::rpc::api::MysticetiConsensusApiServer;
+use alloy_rlp::Decodable;
 use anyhow::Result;
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
@@ -6,12 +8,51 @@ use jsonrpsee::types::error::PARSE_ERROR_CODE;
 use jsonrpsee::types::ErrorObjectOwned;
 use parking_lot::RwLock;
 use reth_ethereum::chainspec::EthChainSpec;
-use reth_extension::CommittedSubDag;
-use reth_extension::MysticetiCommittedSubdag;
-use reth_extension::MysticetiConsensusApiServer;
+use reth_ethereum::primitives::Recovered;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
+use rpc_shared_api::{CommittedSubDag, MysticetiCommittedSubdag};
 use std::sync::Arc;
 use tracing::{debug, info};
+
+/// Convert a CommittedSubDag from RPC to MysticetiCommittedSubdag with decoded transactions
+fn convert_committed_subdag<T: PoolTransaction>(
+    subdag: CommittedSubDag,
+) -> Result<MysticetiCommittedSubdag<Arc<T>>> {
+    let CommittedSubDag {
+        leader,
+        blocks,
+        timestamp_ms,
+        commit_ref,
+        reputation_scores_desc,
+    } = subdag;
+
+    let mut transactions = Vec::new();
+    for block in blocks {
+        for tx in block.block.transactions().iter() {
+            let tx_data = tx.data().to_vec();
+            let recovered_transaction =
+                Recovered::<<T as PoolTransaction>::Consensus>::decode(&mut tx_data.as_slice())
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to decode consensus transaction: {}", e)
+                    })?;
+            let transaction = T::try_from_consensus(recovered_transaction).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to convert consensus transaction to pool transaction: {}",
+                    e
+                )
+            })?;
+            transactions.push(Arc::new(transaction));
+        }
+    }
+
+    Ok(MysticetiCommittedSubdag {
+        leader,
+        transactions,
+        timestamp_ms,
+        commit_ref,
+        reputation_scores_desc,
+    })
+}
 
 /// The type that implements the `txpool` rpc namespace trait
 pub struct MysticetiConsensusHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
@@ -51,11 +92,11 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<P
     /// Add missing transactions from consensus pool to transaction pool
     async fn process_subdags(&self, subdags: Vec<CommittedSubDag>) -> Result<()> {
         let mut committed_subdags = Vec::new();
-        let fist_index = subdags.first().map(|subdag| subdag.commit_ref.index);
-        let last_index = subdags.last().map(|subdag| subdag.commit_ref.index);
+        let fist_index = subdags.first().map(|subdag| subdag.commit_ref.round);
+        let last_index = subdags.last().map(|subdag| subdag.commit_ref.round);
         let mut tx_counter = 0;
         for subdag in subdags {
-            let committed_subdag = MysticetiCommittedSubdag::<Pool::Transaction>::try_from(subdag)?;
+            let committed_subdag = convert_committed_subdag::<Pool::Transaction>(subdag)?;
             //Update transaction pool with committed transactions
             tx_counter += committed_subdag.transactions.len();
             if committed_subdag.transactions.len() > 0 {
@@ -79,7 +120,7 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<P
 
     async fn update_pool_with_transactions(
         &self,
-        committed_transactions: &MysticetiCommittedSubdag<Pool::Transaction>,
+        committed_transactions: &MysticetiCommittedSubdag<Arc<Pool::Transaction>>,
     ) -> Result<usize> {
         let mut added_count = 0;
         //Loop through all transactions in the subdag, add to pool if missing
@@ -151,9 +192,9 @@ impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> Mystice
         let mut committed_subdags = Vec::new();
         let mut tx_counter = 0;
         let start_time = std::time::Instant::now();
-        let commited_index = subdag.commit_ref.index;
-        let committed_subdag = MysticetiCommittedSubdag::<Pool::Transaction>::try_from(subdag)
-            .map_err(|e| {
+        let commited_index = subdag.commit_ref.round;
+        let committed_subdag =
+            convert_committed_subdag::<Pool::Transaction>(subdag).map_err(|e| {
                 ErrorObjectOwned::owned(
                     PARSE_ERROR_CODE,
                     format!(
@@ -187,8 +228,8 @@ impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> Mystice
         let mut tx_counter = 0;
         let start_time = std::time::Instant::now();
         for subdag in subdags {
-            let committed_subdag = MysticetiCommittedSubdag::<Pool::Transaction>::try_from(subdag)
-                .map_err(|e| {
+            let committed_subdag =
+                convert_committed_subdag::<Pool::Transaction>(subdag).map_err(|e| {
                     ErrorObjectOwned::owned(
                         PARSE_ERROR_CODE,
                         format!(
@@ -203,10 +244,10 @@ impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> Mystice
         }
         let fist_index = committed_subdags
             .first()
-            .map(|subdag| subdag.commit_ref.index);
+            .map(|subdag| subdag.commit_ref.round);
         let last_index = committed_subdags
             .last()
-            .map(|subdag| subdag.commit_ref.index);
+            .map(|subdag| subdag.commit_ref.round);
         self.consensus_pool.add_committed_subdags(committed_subdags);
         let mut total_txs = self.total_txs.write();
         *total_txs += tx_counter as u64;

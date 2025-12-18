@@ -705,7 +705,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reth_extension::CommittedSubDag;
+    use rpc_shared_api::CommittedSubDag;
 
     #[test]
     fn test_committed_subdag_operations() {

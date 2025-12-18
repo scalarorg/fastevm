@@ -15,7 +15,7 @@
 
 use alloy_consensus::Transaction;
 use alloy_primitives::TxHash;
-use reth_extension::MysticetiCommittedSubdag;
+use rpc_shared_api::MysticetiCommittedSubdag;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -42,7 +42,7 @@ where
     committed_subdags_per_block: usize,
     next_committed_index: RwLock<u64>,
     //Store committed transactions (converted from subdag) in queue
-    commited_queue: RwLock<BTreeMap<u64, MysticetiCommittedSubdag<Pool::Transaction>>>,
+    commited_queue: RwLock<BTreeMap<u64, MysticetiCommittedSubdag<Arc<Pool::Transaction>>>>,
     // Transactions are not included into last payload due to missing of ancestors
     pending_transactions: RwLock<Vec<Arc<Pool::Transaction>>>,
 
@@ -68,8 +68,8 @@ where
     pub fn next_committed_subdag_batch(
         &self,
     ) -> Option<(
-        MysticetiCommittedSubdag<Pool::Transaction>,
-        MysticetiCommittedSubdag<Pool::Transaction>,
+        MysticetiCommittedSubdag<Arc<Pool::Transaction>>,
+        MysticetiCommittedSubdag<Arc<Pool::Transaction>>,
     )> {
         let next_committed_index = *self.next_committed_index.read().unwrap();
         let last_index = next_committed_index + self.committed_subdags_per_block as u64 - 1;
@@ -149,12 +149,12 @@ where
 {
     pub fn add_committed_subdags(
         &self,
-        committed_subdags: Vec<MysticetiCommittedSubdag<Pool::Transaction>>,
+        committed_subdags: Vec<MysticetiCommittedSubdag<Arc<Pool::Transaction>>>,
     ) {
         let len = committed_subdags.len();
         let mut committed_queue = self.commited_queue.write().unwrap();
         for committed_subdag in committed_subdags {
-            committed_queue.insert(committed_subdag.commit_ref.index as u64, committed_subdag);
+            committed_queue.insert(committed_subdag.commit_ref.round as u64, committed_subdag);
         }
         debug!(
             "Added {} committed subdags to queue. Queue size: {:?}",
@@ -167,7 +167,7 @@ where
     pub fn create_proposal_transactions(
         &self,
         pending_transactions: &[Arc<Pool::Transaction>],
-        next_committed_subdags_batch: Vec<MysticetiCommittedSubdag<Pool::Transaction>>,
+        next_committed_subdags_batch: Vec<MysticetiCommittedSubdag<Arc<Pool::Transaction>>>,
     ) -> Vec<Arc<Pool::Transaction>> {
         if !next_committed_subdags_batch.is_empty() {
             let first_committed_transactions = next_committed_subdags_batch.first().unwrap();
@@ -175,8 +175,8 @@ where
             debug!(
                 "Append transactions within {} subdags from {} to {}",
                 next_committed_subdags_batch.len(),
-                first_committed_transactions.commit_ref.index,
-                last_committed_transactions.commit_ref.index,
+                first_committed_transactions.commit_ref.round,
+                last_committed_transactions.commit_ref.round,
             );
         }
         //Map keep all sender's transactions
@@ -309,10 +309,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_primitives::{Address, B256, U256};
-    use consensus_config::AuthorityIndex;
-    use consensus_core::{BlockRef, CommitRef};
-    use reth_ethereum::{pool::noop::NoopTransactionPool, primitives::Recovered, TransactionSigned};
+    use alloy_primitives::{Address, U256};
+    use rpc_shared_api::{BlockRef, CommitRef};
+    use reth_ethereum::pool::noop::NoopTransactionPool;
     use reth_ethereum::rpc::eth::utils::recover_raw_transaction;
     use reth_transaction_pool::PoolTransaction;
     use std::sync::Arc;
@@ -388,28 +387,16 @@ mod tests {
 
     // Helper function to create a mock MysticetiCommittedSubdag
     fn create_mock_subdag(
-        index: u64,
+        round: u64,
         transactions: Vec<Arc<<NoopTransactionPool as reth_transaction_pool::TransactionPool>::Transaction>>,
-    ) -> MysticetiCommittedSubdag<<NoopTransactionPool as reth_transaction_pool::TransactionPool>::Transaction> {
-        // Create BlockDigest from B256::ZERO - get the digest type from BlockRef
-        // We'll use the digest field directly - let's check what BlockRef expects
-        // BlockRef expects its own digest type, we can use Default or get from BlockRef
-        let zero_digest = BlockRef::default().digest;
-        
-        // Create CommitDigest from B256::ZERO - get from CommitRef
-        let zero_commit_digest = CommitRef::default().digest;
-
+    ) -> MysticetiCommittedSubdag<Arc<<NoopTransactionPool as reth_transaction_pool::TransactionPool>::Transaction>> {
         MysticetiCommittedSubdag {
-            leader: BlockRef {
-                author: AuthorityIndex::ZERO,
-                round: 0,
-                digest: zero_digest,
-            },
+            leader: BlockRef::default(),
             transactions,
             timestamp_ms: 0,
             commit_ref: CommitRef {
-                index: index as u32,
-                digest: zero_commit_digest,
+                round,
+                digest: [0u8; 32],
             },
             reputation_scores_desc: Vec::new(),
         }
