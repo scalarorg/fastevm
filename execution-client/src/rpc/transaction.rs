@@ -1,8 +1,8 @@
+use crate::rpc::api::{Bytes as RpcBytes, RawTransactionApiServer};
 use crate::types::TxValidatorConfig;
 use alloy_primitives::Bytes;
 use async_trait::async_trait;
 use eyre::Result;
-use futures_util::StreamExt;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     PendingSubscriptionSink, SubscriptionMessage,
@@ -17,12 +17,10 @@ use reth_ethereum::{
         EthApi,
     },
 };
-use reth_extension::{encode_transactions, MysticetiTransactionApiServer};
 use reth_provider::{ChainSpecProvider, StateProviderFactory};
 use reth_transaction_pool::{
-    BlobStore, EthTransactionValidator, NewTransactionEvent, PoolTransaction, TransactionOrigin,
+    BlobStore, EthTransactionValidator, PoolTransaction, TransactionOrigin,
     TransactionValidationOutcome, TransactionValidationTaskExecutor, TransactionValidator,
-    ValidPoolTransaction,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -100,7 +98,7 @@ pub struct TransactionHandler<
     eth_api: EthApi<N, Rpc>,
     tx_validator: Arc<RwLock<Option<EthTransactionValidator<C, Pool::Transaction>>>>,
     config_receiver: Option<tokio::sync::oneshot::Receiver<TxValidatorConfig<C, S>>>,
-    sender_raw_tx: broadcast::Sender<Vec<Bytes>>,
+    sender_raw_tx: broadcast::Sender<Vec<RpcBytes>>,
     // tx_queue_sender: mpsc::Sender<Bytes>,
     //worker_handle: tokio::task::JoinHandle<()>,
 }
@@ -282,152 +280,19 @@ impl<
         Rpc: RpcConvert,
         C: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory + 'static,
         S: BlobStore,
-    > MysticetiTransactionApiServer for TransactionHandler<Pool, N, Rpc, C, S>
+    > RawTransactionApiServer for TransactionHandler<Pool, N, Rpc, C, S>
 where
     Pool: TransactionPool + Clone + 'static,
 {
-    fn transaction_count(&self) -> RpcResult<usize> {
-        Ok(self.pool.pool_size().total)
-    }
-    async fn send_raw_transaction_async(&self, tx: Bytes) -> RpcResult<()> {
+    async fn send_raw_transaction_async(&self, tx: RpcBytes) -> RpcResult<()> {
         // Broadcast raw transaction to subscribers
         let _ = self.sender_raw_tx.send(vec![tx]);
-        // Try don't put transaction into reth pool
-        // Send transaction to processing queue
-
-        // if let Err(e) = self.tx_queue_sender.send(tx).await {
-        //     error!("Failed to send transaction to processing queue: {:?}", e);
-        //     return Err(ErrorObjectOwned::owned(
-        //         INVALID_REQUEST_CODE,
-        //         "Transaction queue is full".to_string(),
-        //         None::<()>,
-        //     ));
-        // }
-
         Ok(())
     }
-    async fn batch_send_raw_transaction_async(&self, txs: Vec<Bytes>) -> RpcResult<()> {
+
+    async fn send_raw_transactions_async(&self, txs: Vec<RpcBytes>) -> RpcResult<()> {
         // Broadcast raw transactions to subscribers
-        let _ = self.sender_raw_tx.send(txs.clone());
-        Ok(())
-    }
-    fn subscribe_pending_transactions(
-        &self,
-        pending_subscription_sink: PendingSubscriptionSink,
-    ) -> SubscriptionResult {
-        let pool = self.pool.clone();
-        // Spawn an async block to listen for transactions.
-        tokio::spawn(Box::pin(async move {
-            let sink = match pending_subscription_sink.accept().await {
-                Ok(sink) => sink,
-                Err(e) => {
-                    println!("failed to accept subscription: {e}");
-                    return;
-                }
-            };
-
-            // Transaction buffer for batching
-            // Pre-allocate with batch threshold to reduce reallocations
-            let mut buffer: Vec<Arc<ValidPoolTransaction<<Pool as TransactionPool>::Transaction>>> =
-                Vec::with_capacity(BATCH_SIZE_THRESHOLD);
-
-            // Create a periodic timer for batch timeout
-            let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
-            let mut total_send_txs = 0_u64;
-
-            let mut pending_stream = pool.new_pending_pool_transactions_listener();
-            loop {
-                tokio::select! {
-                    // Handle new transaction events
-                    Some(NewTransactionEvent { transaction, .. }) = pending_stream.next() => {
-                        if transaction.is_local() {
-                            // because of this push, buffer has at least 1 transaction
-                            buffer.push(transaction);
-                            // Send batch if threshold is reached
-                            if buffer.len() >= BATCH_SIZE_THRESHOLD {
-                                total_send_txs += buffer.len() as u64;
-                                debug!("[Threshold] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
-                                let batch = std::mem::take(&mut buffer);
-                                let msg = encode_transactions(batch);
-                                let _ = sink.send(msg).await;
-                            }
-                        }
-                    }
-                    // Handle batch timeout
-                    _ = batch_timer.tick() => {
-                        if !buffer.is_empty() {
-                            total_send_txs += buffer.len() as u64;
-                            debug!("[Timer] Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
-                            let batch = std::mem::take(&mut buffer);
-                            let msg = encode_transactions(batch);
-                            let _ = sink.send(msg).await;
-                        }
-                    }
-                }
-                //End loop
-            }
-        }));
-        Ok(())
-    }
-
-    fn subscribe_all_transactions(
-        &self,
-        pending_subscription_sink: PendingSubscriptionSink,
-    ) -> SubscriptionResult {
-        info!("Subscribing to all transactions");
-        let pool = self.pool.clone();
-        // Spawn an async block to listen for transactions.
-        tokio::spawn(Box::pin(async move {
-            let sink = match pending_subscription_sink.accept().await {
-                Ok(sink) => sink,
-                Err(e) => {
-                    println!("failed to accept subscription: {e}");
-                    return;
-                }
-            };
-
-            // Transaction buffer for batching
-            // Pre-allocate with batch threshold to reduce reallocations
-            let mut buffer: Vec<Arc<ValidPoolTransaction<<Pool as TransactionPool>::Transaction>>> =
-                Vec::with_capacity(BATCH_SIZE_THRESHOLD);
-
-            // Create a periodic timer for batch timeout
-            let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
-            let mut total_send_txs = 0_u64;
-
-            let mut all_transactions_stream = pool.new_transactions_listener();
-            loop {
-                tokio::select! {
-                    // Handle new transaction events
-                    Some(NewTransactionEvent { transaction, .. }) = all_transactions_stream.recv() => {
-                        if transaction.is_local() {
-                            // because of this push, buffer has at least 1 transaction
-                            buffer.push(transaction);
-                            // Send batch if threshold is reached
-                            if buffer.len() >= BATCH_SIZE_THRESHOLD {
-                                total_send_txs += buffer.len() as u64;
-                                info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
-                                let batch = std::mem::take(&mut buffer);
-                                let msg = encode_transactions(batch);
-                                let _ = sink.send(msg).await;
-                            }
-                        }
-                    }
-                    // Handle batch timeout
-                    _ = batch_timer.tick() => {
-                        if !buffer.is_empty() {
-                            total_send_txs += buffer.len() as u64;
-                            info!("Sending batch of {} transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
-                            let batch = std::mem::take(&mut buffer);
-                            let msg = encode_transactions(batch);
-                            let _ = sink.send(msg).await;
-                        }
-                        batch_timer.reset();
-                    }
-                }
-                //End loop
-            }
-        }));
+        let _ = self.sender_raw_tx.send(txs);
         Ok(())
     }
 
@@ -436,9 +301,8 @@ where
         pending_subscription_sink: PendingSubscriptionSink,
     ) -> SubscriptionResult {
         info!("Subscribing to raw transactions with validation");
-        //let mut receiver = self.eth_api.subscribe_to_raw_transactions();
         let mut receiver = self.sender_raw_tx.subscribe();
-        let tx_validator = Arc::clone(&self.tx_validator);
+        let _tx_validator = Arc::clone(&self.tx_validator);
         tokio::spawn(Box::pin(async move {
             let sink = match pending_subscription_sink.accept().await {
                 Ok(sink) => sink,
@@ -450,19 +314,16 @@ where
 
             // Transaction buffer for batching - now stores validated transactions
             // Pre-allocate with batch threshold to reduce reallocations
-            let mut buffer: Vec<Bytes> = Vec::with_capacity(BATCH_SIZE_THRESHOLD);
+            let mut buffer: Vec<RpcBytes> = Vec::with_capacity(BATCH_SIZE_THRESHOLD);
 
             // Create a periodic timer for batch timeout
             let mut batch_timer = tokio::time::interval(Duration::from_millis(BATCH_TIMEOUT_MS));
             let mut total_send_txs = 0_u64;
-            let mut validation_failures = 0_u64;
 
             loop {
                 tokio::select! {
                     // Handle new transaction events
                     Ok(raw_txs) = receiver.recv() => {
-                        // Validate the raw transaction before adding to buffer
-                        // let start_time = Instant::now();
                         // Reserve capacity if needed to avoid multiple reallocations
                         if buffer.len() + raw_txs.len() > buffer.capacity() {
                             buffer.reserve(BATCH_SIZE_THRESHOLD);
@@ -477,35 +338,6 @@ where
                             );
                             let _ = sink.send(msg).await;
                         }
-                        // TODO: Add validation logic
-                        // match validate_raw_transaction::<C, Pool>(&tx_validator, &raw_tx).await {
-                        //     Ok(true) => {
-                        //         // debug!("Transaction validated in {:?}", start_time.elapsed());
-                        //         // Transaction is valid, add to buffer
-                        //         buffer.push(raw_tx);
-
-                        //         // Send batch if threshold is reached
-                        //         if buffer.len() >= BATCH_SIZE_THRESHOLD {
-                        //             total_send_txs += buffer.len() as u64;
-                        //             info!("[Threshold] Sending batch of {} validated transactions. Total sent transactions: {}", buffer.len(), total_send_txs);
-                        //             let batch = std::mem::take(&mut buffer);
-                        //             let msg = SubscriptionMessage::from(
-                        //                 serde_json::value::to_raw_value(&batch).expect("serialize batch"),
-                        //             );
-                        //             let _ = sink.send(msg).await;
-                        //         }
-                        //     }
-                        //     Ok(false) => {
-                        //         // Transaction failed validation, skip it
-                        //         validation_failures += 1;
-                        //         warn!("Skipping invalid transaction. Total validation failures: {}", validation_failures);
-                        //     },
-                        //     Err(e) => {
-                        //         // Fatal validation error
-                        //         error!("Fatal validation error: {}", e);
-                        //         validation_failures += 1;
-                        //     }
-                        // }
                     }
                     // Handle batch timeout
                     _ = batch_timer.tick() => {
@@ -521,7 +353,6 @@ where
                         batch_timer.reset();
                     }
                 }
-                //End loop
             }
         }));
         Ok(())
@@ -531,10 +362,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonrpsee::ws_client::WsClientBuilder;
     use reth_ethereum::pool::noop::NoopTransactionPool;
-    use reth_extension::MysticetiTransactionApiClient;
-    use reth_rpc_layer::{secret_to_bearer_header, JwtSecret};
 
     #[test]
     fn test_transaction_listener_components() {
@@ -586,75 +414,4 @@ mod tests {
         // The listener is a receiver that will never receive anything for NoopTransactionPool
         // Note: We can't easily test is_closed() without more complex setup
     }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_subscribe_transactions_with_docker() {
-        let ws_url = format!("ws://127.0.0.1:8551");
-        let mut headers = http::HeaderMap::new();
-        let jwt_secret_hex = "0xda3c3a6c5e12572ba6cbe4b7c71d107ddf859aaaf6090f14de6baa3141e43bd8";
-        let jwt_secret = match JwtSecret::from_hex(jwt_secret_hex) {
-            Ok(jwt_secret) => jwt_secret,
-            Err(err) => {
-                panic!("JWT secret parsing failed: {:?}", err);
-            }
-        };
-        let mut auth_header = secret_to_bearer_header(&jwt_secret);
-        // The header value should not be visible in logs for security.
-        auth_header.set_sensitive(true);
-        println!("Auth header: {:?}", auth_header.to_str().unwrap());
-        headers.insert(http::header::AUTHORIZATION, auth_header);
-        let client = WsClientBuilder::default()
-            .set_headers(headers)
-            .build(&ws_url)
-            .await
-            .expect("Failed to create ws client");
-
-        let mut sub = MysticetiTransactionApiClient::subscribe_all_transactions(&client)
-            .await
-            .expect("failed to subscribe");
-
-        let first = sub.next().await.unwrap().unwrap();
-        assert_eq!(first.len(), 0, "expected initial count to be 0");
-    }
-
-    // pub async fn create_transfer_transaction(
-    //     signer_privkey: &str,
-    //     recipient: &str,
-    //     chain_id: ChainId,
-    //     gwei_amount: u64,
-    //     nonce: u64,
-    // ) -> Result<<Ethereum as Network>::TxEnvelope> {
-    //     // Parse the recipient address from string to Address type
-    //     let recipient_addr = Address::from_str(recipient)
-    //         .map_err(|e| eyre::eyre!("Invalid recipient address: {}", e))?;
-
-    //     // Create a wallet signer from the provided private key
-    //     let wallet = PrivateKeySigner::from_str(signer_privkey)
-    //         .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
-
-    //     // Get the sender's address from the wallet
-    //     let sender_addr = wallet.address();
-
-    //     // Build a transaction request with standard ETH transfer parameters
-    //     let tx = TransactionRequest::default()
-    //         .with_from(sender_addr)
-    //         .with_to(recipient_addr)
-    //         .with_nonce(nonce)
-    //         .with_chain_id(chain_id)
-    //         .with_value(U256::from(gwei_amount))
-    //         .with_gas_limit(21_000) // Standard gas limit for ETH transfers
-    //         .with_max_priority_fee_per_gas(1_000_000_000) // 1 Gwei
-    //         .with_max_fee_per_gas(20_000_000_000); // 20 Gwei
-
-    //     // Convert the LocalSigner to an EthereumWallet to satisfy the NetworkWallet trait bound
-    //     let ethereum_wallet = alloy::network::EthereumWallet::from(wallet);
-
-    //     // Build and sign the transaction using the ethereum wallet
-    //     let tx_envelope = tx
-    //         .build(&ethereum_wallet)
-    //         .await
-    //         .map_err(|e| eyre::eyre!("Failed to build transaction: {}", e))?;
-
-    //     Ok(tx_envelope)
-    // }
 }

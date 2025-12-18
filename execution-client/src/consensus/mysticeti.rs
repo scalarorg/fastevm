@@ -352,12 +352,12 @@ where
                  FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
                  LastCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}
                  Queue size: {:?}",
-                last_committed_subdag.commit_ref.index - first_committed_subdag.commit_ref.index
+                last_committed_subdag.commit_ref.round - first_committed_subdag.commit_ref.round
                     + 1,
-                first_committed_subdag.commit_ref.index,
+                first_committed_subdag.commit_ref.round,
                 first_committed_subdag.timestamp_ms,
                 first_committed_subdag.leader.round,
-                last_committed_subdag.commit_ref.index,
+                last_committed_subdag.commit_ref.round,
                 last_committed_subdag.timestamp_ms,
                 last_committed_subdag.leader.round,
                 self.consensus_pool.queue_size(),

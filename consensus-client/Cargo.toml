@@ -14,8 +14,8 @@ reth-extension = { workspace = true }
 consensus-core = { workspace = true }
 consensus-config = { workspace = true }
 
-mysten-metrics = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "mysten-metrics"}
-sui-protocol-config = { git = "https://github.com/MystenLabs/sui", rev = "c58d2a0bfaae04581c56510548194524e89e2888", package = "sui-protocol-config"}
+mysten-metrics = { git = "https://github.com/MystenLabs/sui", rev = "74e8414a498601333fa4dd408c892f5fe3b0ca93", package = "mysten-metrics"}
+sui-protocol-config = { git = "https://github.com/MystenLabs/sui", rev = "74e8414a498601333fa4dd408c892f5fe3b0ca93", package = "sui-protocol-config"}
 alloy-primitives = { workspace = true }
 reth-rpc-layer = { workspace = true }
 

@@ -1,6 +1,6 @@
 use reth_ethereum::node::api::PayloadTypes;
 use reth_ethereum_engine_primitives::EthPayloadTypes;
-use reth_extension::MysticetiCommittedSubdag;
+use rpc_shared_api::MysticetiCommittedSubdag;
 use reth_payload_builder::PayloadId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
