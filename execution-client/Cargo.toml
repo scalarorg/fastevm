@@ -3,6 +3,10 @@ name = "fastevm-execution"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "fastevm_execution"
+path = "src/lib.rs"
+
 [[bin]]
 name = "fastevm-execution"
 path = "src/main.rs"
@@ -14,6 +18,10 @@ path = "src/gravity.rs"
 [[bin]]
 name = "cli"
 path = "src/cli.rs"
+
+[[bin]]
+name = "fastevm-bench"
+path = "tests/bench/main.rs"
 
 [dependencies]
 # reth-extension = { workspace = true }
@@ -92,6 +100,8 @@ auto_impl.workspace = true
 rustc-hash.workspace = true
 strum = { workspace = true }
 sysinfo = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+
 [dev-dependencies]
 tokio-test = { workspace = true }
 tempfile = "3"
@@ -102,5 +112,11 @@ alloy-signer-local = { workspace = true }
 alloy-network = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
 sha2 = { version = "0.10", default-features = false }
-# consensus-config = { workspace = true }
-# consensus-core = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+
+# gravity_bench - Transaction generator for benchmarking
+gravity_bench = { git = "https://github.com/Galxe/gravity_bench.git", branch = "main" }
+
+[features]
+default = []
+bench = []
