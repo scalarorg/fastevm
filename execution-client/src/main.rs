@@ -11,29 +11,55 @@
 // alloy_consensus is used in transaction_listener.rs
 use alloy_consensus as _;
 
+mod args;
+mod consensus;
+mod coordinator;
+mod payload;
+mod pool;
+mod rpc;
+mod types;
+
 use clap::Parser;
+use coordinator::{GravityCoordinator, RethBlockChainProvider};
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_transaction_pool::blobstore::DiskFileBlobStore;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
-
-// Import from the library crate
-use fastevm_execution::{
-    args::CliMysticetiArgs, ConsensusPool, MysticetiConsensus, MysticetiConsensusApiServer,
-    MysticetiConsensusHandler, MysticetiPayloadBuilderFactory, MysticetiPoolBuilder,
-    RawTransactionApiServer, TransactionHandler, TxValidatorConfig,
+// Suppress warnings for dependencies used by CLI binary
+use crate::{
+    consensus::{ConsensusPool, MysticetiConsensus},
+    payload::MysticetiPayloadBuilderFactory,
+    pool::MysticetiPoolBuilder,
+    rpc::{
+        MysticetiConsensusApiServer, MysticetiConsensusHandler, RawTransactionApiServer,
+        TransactionHandler,
+    },
+    types::TxValidatorConfig,
 };
+use greth::{
+    gravity_storage::block_view_storage::BlockViewStorage,
+    reth_pipe_exec_layer_ext_v2::{new_pipe_exec_layer_api, ExecutionArgs},
+    reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
+};
+use reth_chainspec::ChainSpec;
+use reth_ethereum::tasks::TaskExecutor;
 use reth_ethereum::{
-    chainspec::ChainSpecProvider,
+    chainspec::{ChainSpecProvider, EthChainSpec},
     cli::{chainspec::EthereumChainSpecParser, Cli},
     node::{
-        builder::{components::BasicPayloadServiceBuilder, NodeHandle},
+        builder::{components::BasicPayloadServiceBuilder, FullNodeFor, NodeHandle},
         node::EthereumAddOns,
         EthereumNode,
     },
 };
+use reth_node_api::Block;
+use reth_provider::{BlockHashReader, BlockNumReader, BlockReader};
+// use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
+use alloy_eips::BlockHashOrNumber;
+use alloy_rpc_types_eth::TransactionRequest;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
 // Use in cli
 use bip39 as _;
 use hdwallet as _;
@@ -44,6 +70,156 @@ use secp256k1::{self as _};
 use serde_json as _;
 use sha2 as _;
 
+/// Extends the node with pipe execution layer functionality.
+///
+/// This method sets up the pipe execution layer API, creates a coordinator,
+/// and initializes the pipe API for OrderedBlock injection.
+///
+/// Based on the pattern from gravity_bench/gravity_node.rs
+///
+/// Note: This implementation requires gravity-reth dependencies:
+/// - greth::gravity_storage::block_view_storage::BlockViewStorage
+/// - greth::reth_pipe_exec_layer_ext_v2::{ExecutionArgs, PipeExecLayerApi, new_pipe_exec_layer_api}
+/// - A coordinator implementation (e.g., GravityBenchCoordinator)
+async fn pipe_extend<EthApi>(
+    task_executor: TaskExecutor,
+    provider: RethBlockChainProvider,
+    chain_spec: Arc<ChainSpec>,
+    eth_api: EthApi,
+) -> eyre::Result<()>
+where
+    EthApi: EthCall + Clone + Send + Sync + 'static,
+    EthApi::NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>,
+{
+    info!("📦 [Gravity] Creating pipe execution layer API");
+
+    // Get latest block information
+    let latest_block_number = match provider.last_block_number() {
+        Ok(num) => num,
+        Err(e) => {
+            warn!("❌ [Gravity] Failed to get latest block number: {}", e);
+            return Ok(());
+        }
+    };
+
+    let latest_block_hash = match provider.block_hash(latest_block_number) {
+        Ok(Some(hash)) => hash,
+        Ok(None) => {
+            warn!("❌ [Gravity] Latest block hash not found");
+            return Ok(());
+        }
+        Err(e) => {
+            warn!("❌ [Gravity] Failed to get latest block hash: {}", e);
+            return Ok(());
+        }
+    };
+
+    let latest_block = match provider.block(BlockHashOrNumber::Number(latest_block_number)) {
+        Ok(Some(block)) => block,
+        Ok(None) => {
+            info!("ℹ️ [Gravity] No blocks found, skipping setup (will sync on first block)");
+            return Ok(());
+        }
+        Err(e) => {
+            warn!("❌ [Gravity] Failed to get latest block: {}", e);
+            return Ok(());
+        }
+    };
+
+    info!(
+        "   Latest block: number={}, hash={:?}",
+        latest_block_number, latest_block_hash
+    );
+
+    // Create storage wrapper
+    // Note: Requires greth::gravity_storage::block_view_storage::BlockViewStorage
+    let storage = BlockViewStorage::new(provider.clone());
+
+    // Get chain_id from chain_spec
+    // Note: Requires greth::reth_chainspec::ChainKind
+    let chain_id = chain_spec.chain().id();
+    info!("   Chain ID: {}", chain_id);
+
+    // Create execution args channel for pipe execution layer
+    // Note: Requires greth::reth_pipe_exec_layer_ext_v2::ExecutionArgs
+    let (execution_args_tx, execution_args_rx) = oneshot::channel::<ExecutionArgs>();
+
+    // Create pipe execution layer API
+    // Note: Requires greth::reth_pipe_exec_layer_ext_v2::{PipeExecLayerApi, new_pipe_exec_layer_api}
+    let pipeline_api = new_pipe_exec_layer_api(
+        chain_spec.clone(),
+        storage,
+        latest_block.header().clone(),
+        latest_block_hash,
+        execution_args_rx,
+        eth_api.clone(),
+    );
+
+    // Create channel for coordinator to signal block execution completion
+    // (block_number, new_epoch)
+    let (block_executed_tx, block_executed_rx) = unbounded_channel::<(u64, Option<u64>)>();
+
+    // Create coordinator
+    // Note: Requires a coordinator implementation (e.g., GravityCoordinator)
+    let pipeline_api_arc = Arc::new(pipeline_api);
+    let coordinator = GravityCoordinator::new(
+        pipeline_api_arc.clone(),
+        provider.clone(),
+        chain_id,
+        Some(block_executed_tx),
+    );
+
+    // Start coordinator tasks (start_execution, start_commit_vote, start_commit)
+    coordinator.run();
+    // info!("✅ [Gravity] Coordinator started (execution, commit_vote, commit tasks)");
+
+    // Send execution args
+    // Note: This would send the execution args to the pipe execution layer
+    let _ = execution_args_tx.send(ExecutionArgs {
+        block_number_to_block_id: std::collections::BTreeMap::new(),
+    });
+
+    // Initialize pipe API and start injection loop
+    // This would require additional setup similar to gravity_node.rs
+    // The injection loop would handle OrderedBlock injection triggered by coordinator
+    // when block execution completes
+    let provider_clone = provider.clone();
+    let eth_api_clone = eth_api.clone();
+
+    // Spawn background task for pipe execution layer coordination
+    // Note: This is a placeholder - actual implementation would require:
+    // 1. PipeExecLayerApi setup
+    // 2. Coordinator implementation
+    // 3. Injection loop implementation
+    task_executor.spawn(async move {
+        info!("🔄 [Gravity] Pipe execution layer background task started");
+        info!("   This would handle OrderedBlock injection when block execution completes");
+
+        // Placeholder: In actual implementation, this would:
+        // 1. Wait for block execution completion signals from coordinator
+        // 2. Process OrderedBlocks from buffer
+        // 3. Inject them into the execution pipeline
+
+        // For now, just log that the task is running
+        let mut block_executed_rx = block_executed_rx;
+        while let Some((block_number, epoch)) = block_executed_rx.recv().await {
+            info!(
+                "📦 [Gravity] Block execution completed: number={}, epoch={:?}",
+                block_number, epoch
+            );
+            // In actual implementation, this would trigger OrderedBlock injection
+        }
+    });
+
+    info!("✅ [Gravity] Pipe execution layer setup completed");
+    info!("   Note: Full implementation requires gravity-reth dependencies:");
+    info!("   - greth::gravity_storage::block_view_storage::BlockViewStorage");
+    info!("   - greth::reth_pipe_exec_layer_ext_v2");
+    info!("   - Coordinator implementation");
+
+    Ok(())
+}
+
 /// Flow hook execution:
 /// on_component_initialized
 /// Exex
@@ -51,25 +227,8 @@ use sha2 as _;
 /// on_rpc_started
 /// on_node_started:
 fn main() -> eyre::Result<()> {
-    Cli::<EthereumChainSpecParser, CliMysticetiArgs>::parse()
+    Cli::<EthereumChainSpecParser, args::CliMysticetiArgs>::parse()
         .run(|builder, args| async move {
-            // Extract config and create custom database
-            // let config = builder.config();
-            // let datadir = config.datadir();
-            // let db_path = datadir.db();
-            // info!(path = ?db_path, "Creating custom database");
-            // let db_args = DatabaseArguments::from(&config.db);
-            // let custom_database = Arc::new(init_db(db_path, db_args)?);
-
-            // // Create task executor and rebuild builder with custom database
-            // let task_executor = builder.task_executor().clone();
-            // let config = config.clone();
-
-            // // Build node from scratch with custom database (cleaner approach)
-            // let builder = NodeBuilder::new(config)
-            //     .with_database(custom_database)
-            //     .with_launch_context(task_executor);
-
             // Create a channel for sending built payload to mysticeti consensus
             let (tx_built_payload, rx_built_payload) = unbounded_channel();
 
@@ -84,6 +243,9 @@ fn main() -> eyre::Result<()> {
                     tx_built_payload,
                 ),
             );
+
+            // Create a shared state to pass eth_api from extend_rpc_modules to on_node_started
+            // We'll store it as a flag and access it differently since EthApi is generic
 
             let handle = builder
                 .with_types::<EthereumNode>()
@@ -100,8 +262,10 @@ fn main() -> eyre::Result<()> {
                 .with_add_ons(EthereumAddOns::default())
                 .extend_rpc_modules({
                     let consensus_pool = consensus_pool.clone();
+                    let args = args.clone();
                     move |ctx| {
-                        if !args.enable_tx_subscription {
+                        if ctx.config().gravity.disable_pipe_execution {
+                            info!("📦 [Gravity] Pipe execution disabled");
                             return Ok(());
                         }
                         let chain_spec = ctx.provider().chain_spec();
@@ -128,18 +292,32 @@ fn main() -> eyre::Result<()> {
                     }
                 })
                 .on_node_started(move |node| {
-                    // let payload_builder_handle: reth_payload_builder::PayloadBuilderHandle<
-                    //     reth_ethereum::node::EthEngineTypes,
-                    // > = node.payload_builder_handle.clone();
+                    // Access gravity arguments from node.config.gravity
+                    let gravity = &node.config.gravity;
+                    let task_executor = node.task_executor.clone();
+                    // Check for gravity.disable-pipe-execution flag
+                    if !gravity.disable_pipe_execution {
+                        info!("Extending pipe execution layer");
+                        let eth_api = node.rpc_registry.eth_api().clone();
+                        let provider = node.provider.clone();
+                        let chain_spec = node.chain_spec().clone();
+                        node.task_executor.spawn(async move {
+                            if let Err(e) =
+                                pipe_extend(task_executor, provider, chain_spec, eth_api).await
+                            {
+                                error!("Failed to extend pipe execution layer: {:?}", e);
+                            }
+                        });
+                    }
+
                     let engine_handle = node.add_ons_handle.beacon_engine_handle;
                     // Get the canonical state stream
                     let mut mysticeti_consensus = MysticetiConsensus::new(
                         consensus_pool,
                         node.provider,
-                        //payload_builder_handle,
                         rx_built_payload,
                         engine_handle,
-                        args.block_build_interval_ms,
+                        args.block_interval_ms,
                     );
                     node.task_executor.spawn(async move {
                         if let Err(e) = mysticeti_consensus.start().await {

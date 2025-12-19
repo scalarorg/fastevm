@@ -12,10 +12,6 @@ name = "fastevm-execution"
 path = "src/main.rs"
 
 [[bin]]
-name = "fastevm-gravity"
-path = "src/gravity.rs"
-
-[[bin]]
 name = "cli"
 path = "src/cli.rs"
 

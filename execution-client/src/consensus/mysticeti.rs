@@ -46,7 +46,7 @@ where
     engine_handle: BeaconConsensusEngineHandle<Payload>,
     provider: Provider,
     // Keep track of the canonical state number
-    block_build_interval: u64,
+    block_interval_ms: u64,
     // canonical_block_number
     // Updated when receive canonical state updated
     canonical_block_number: u64,
@@ -71,15 +71,14 @@ where
         //payload_builder_handle: PayloadBuilderHandle<Payload>,
         rx_built_payload: UnboundedReceiver<Payload::BuiltPayload>,
         engine_handle: BeaconConsensusEngineHandle<Payload>,
-        block_build_interval: u64,
+        block_interval_ms: u64,
     ) -> Self {
         Self {
             consensus_pool,
-            //payload_builder_handle,
             rx_built_payload: Some(rx_built_payload),
             engine_handle,
             provider,
-            block_build_interval,
+            block_interval_ms,
             canonical_block_number: 0,
             last_processing_payload: None,
             last_built_payload: None,
@@ -201,9 +200,8 @@ where
 {
     pub async fn start(&mut self) -> Result<()> {
         //TODO: Add configurable interval
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(
-            self.block_build_interval,
-        ));
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_millis(self.block_interval_ms));
         let mut notifications = self.provider.canonical_state_stream();
         // let mut payload_events = self
         //     .payload_builder_handle
