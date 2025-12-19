@@ -519,7 +519,7 @@ impl BenchRunner {
     }
 
     /// Parse the gravity_bench output to extract statistics
-    fn parse_bench_output(&self, output: &str) -> BenchResult<BenchStats> {
+    pub fn parse_bench_output(&self, output: &str) -> BenchResult<BenchStats> {
         let mut stats = BenchStats::default();
         stats.duration_secs = self.config.performance.duration_secs;
 

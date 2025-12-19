@@ -22,6 +22,8 @@ Thumbs.db
 *.log
 logs/
 
+# runtime data
+data/
 # Temporary files
 *.tmp
 *.temp

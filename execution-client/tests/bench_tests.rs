@@ -220,25 +220,41 @@ async fn test_full_benchmark_5_minutes() {
         }
     };
 
-    let runner = BenchRunner::new(config)
-        .with_node_binary_path(node_binary_path)
-        .with_gravity_bench_path("gravity_bench") // Assumes gravity_bench is in PATH
+    let runner = BenchRunner::new(config.clone())
         .with_working_dir(&working_dir);
 
-    // Step 1: Start the node
+    // Get script paths
+    let scripts_dir = project_root.join("execution-client").join("scripts");
+    let start_node_script = scripts_dir.join("start-bench-node.sh");
+    let run_bench_script = scripts_dir.join("run-gravity-bench.sh");
+
+    // Prepare paths
+    let data_dir = working_dir.join(format!("bench_data_{}", NODE_PORT));
+    let log_file = working_dir.join(format!("fastevm-gravity-{}.log", NODE_PORT));
+
+    // Step 1: Start the node using bash script
     println!("\n[Step 1] Starting fastevm-gravity node...");
-    let mut node_handle = match runner.start_gravity_node(NODE_PORT) {
-        Ok(handle) => {
-            println!("  ✓ Node process started");
-            handle
-        }
-        Err(e) => {
-            println!("  ✗ Failed to start node: {}", e);
-            println!("\n  Make sure to build the binary first:");
-            println!("  cargo build --release --bin fastevm-gravity");
-            return;
-        }
-    };
+    let node_pid_output = std::process::Command::new(&start_node_script)
+        .arg(&node_binary_path)
+        .arg(NODE_PORT.to_string())
+        .arg(&data_dir)
+        .arg(&log_file)
+        .output()
+        .expect("Failed to execute start-bench-node.sh script");
+
+    if !node_pid_output.status.success() {
+        let stderr = String::from_utf8_lossy(&node_pid_output.stderr);
+        println!("  ✗ Failed to start node: {}", stderr);
+        println!("\n  Make sure to build the binary first:");
+        println!("  cargo build --release --bin fastevm-gravity");
+        return;
+    }
+
+    let node_pid_str = String::from_utf8_lossy(&node_pid_output.stdout).trim().to_string();
+    let node_pid: u32 = node_pid_str.parse().unwrap_or(0);
+    println!("  ✓ Node process started (PID: {})", node_pid);
+
+    let rpc_url = format!("http://localhost:{}", NODE_PORT);
 
     // Step 2: Wait for node to be ready
     println!(
@@ -247,7 +263,7 @@ async fn test_full_benchmark_5_minutes() {
     );
     match runner
         .wait_for_node_ready(
-            node_handle.rpc_url(),
+            &rpc_url,
             Duration::from_secs(NODE_STARTUP_TIMEOUT_SECS),
         )
         .await
@@ -255,14 +271,17 @@ async fn test_full_benchmark_5_minutes() {
         Ok(_) => println!("  ✓ Node is ready and accepting RPC requests"),
         Err(e) => {
             println!("  ✗ Node failed to become ready: {}", e);
-            println!("\n  Check the log file: {:?}", node_handle.log_file());
-            node_handle.stop().ok();
+            println!("\n  Check the log file: {:?}", log_file);
+            // Kill the node process
+            if node_pid > 0 {
+                let _ = std::process::Command::new("kill").arg(node_pid.to_string()).output();
+            }
             return;
         }
     }
 
     // Create RPC client
-    let rpc = runner.create_rpc_client(node_handle.rpc_url());
+    let rpc = runner.create_rpc_client(&rpc_url);
 
     // Step 3: Record initial state
     println!("\n[Step 3] Recording initial state...");
@@ -273,7 +292,10 @@ async fn test_full_benchmark_5_minutes() {
         }
         Err(e) => {
             println!("  ✗ Failed to get block number: {}", e);
-            node_handle.stop().ok();
+            // Kill the node process
+            if node_pid > 0 {
+                let _ = std::process::Command::new("kill").arg(node_pid.to_string()).output();
+            }
             return;
         }
     };
@@ -290,7 +312,7 @@ async fn test_full_benchmark_5_minutes() {
         initial_faucet_balance as f64 / 1e18
     );
 
-    // Step 4: Run the benchmark
+    // Step 4: Run the benchmark using bash script
     println!(
         "\n[Step 4] Running gravity_bench for {} seconds ({} minutes)...",
         BENCH_DURATION_SECS,
@@ -301,7 +323,29 @@ async fn test_full_benchmark_5_minutes() {
     println!("  Senders: {}", BENCH_NUM_SENDERS);
     println!();
 
-    let bench_result = runner.run_benchmark().await;
+    // Write config file
+    let config_path = working_dir.join("bench_config_test.toml");
+    config.write_to_file(&config_path).expect("Failed to write config file");
+
+    // Run gravity_bench using bash script
+    let bench_output = std::process::Command::new(&run_bench_script)
+        .arg(&config_path)
+        .arg(&working_dir)
+        .arg("gravity_bench") // gravity_bench path (assumes in PATH)
+        .arg(if config.recovery_mode { "true" } else { "false" })
+        .output()
+        .expect("Failed to execute run-gravity-bench.sh script");
+
+    let bench_result = if bench_output.status.success() {
+        let stdout = String::from_utf8_lossy(&bench_output.stdout);
+        runner.parse_bench_output(&stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&bench_output.stderr);
+        Err(gravity_bench::BenchError::ExecutionError(format!(
+            "gravity_bench failed: {}",
+            stderr
+        )))
+    };
 
     match &bench_result {
         Ok(stats) => {
@@ -367,9 +411,15 @@ async fn test_full_benchmark_5_minutes() {
 
     // Step 7: Shutdown the node
     println!("\n[Step 7] Shutting down node...");
-    match node_handle.stop() {
-        Ok(_) => println!("  ✓ Node stopped successfully"),
-        Err(e) => println!("  ✗ Error stopping node: {}", e),
+    if node_pid > 0 {
+        match std::process::Command::new("kill").arg(node_pid.to_string()).output() {
+            Ok(_) => {
+                // Wait a bit for graceful shutdown
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                println!("  ✓ Node stopped successfully");
+            }
+            Err(e) => println!("  ✗ Error stopping node: {}", e),
+        }
     }
 
     // Print summary
@@ -377,12 +427,12 @@ async fn test_full_benchmark_5_minutes() {
     println!("  Test Summary");
     println!("========================================");
     println!("  Blocks produced: {}", final_block - initial_block);
-    if let Ok(stats) = bench_result {
+    if let Ok(stats) = &bench_result {
         println!("  TXs sent: {}", stats.total_txs_sent);
         println!("  Avg TPS: {:.2}", stats.avg_tps);
     }
-    println!("  Log file: {:?}", node_handle.log_file());
-    println!("  Data dir: {:?}", node_handle.data_dir());
+    println!("  Log file: {:?}", log_file);
+    println!("  Data dir: {:?}", data_dir);
     println!("========================================\n");
 
     // Cleanup (optional - comment out to inspect data after test)
