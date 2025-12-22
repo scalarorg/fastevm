@@ -11,9 +11,9 @@ path = "src/lib.rs"
 name = "fastevm-execution"
 path = "src/main.rs"
 
-[[bin]]
-name = "cli"
-path = "src/cli.rs"
+# [[bin]]
+# name = "cli"
+# path = "src/cli.rs"
 
 [[bin]]
 name = "fastevm-bench"

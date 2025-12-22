@@ -20,7 +20,8 @@ mod rpc;
 mod types;
 
 use clap::Parser;
-use coordinator::{GravityCoordinator, RethBlockChainProvider};
+use coordinator::GravityCoordinator;
+use fastevm_execution::{RethBlockChainProvider, RethPipeExecLayerApi};
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_transaction_pool::blobstore::DiskFileBlobStore;
 use tokio::sync::mpsc::unbounded_channel;
@@ -37,8 +38,8 @@ use crate::{
     types::TxValidatorConfig,
 };
 use greth::{
-    gravity_storage::block_view_storage::BlockViewStorage,
-    reth_pipe_exec_layer_ext_v2::{new_pipe_exec_layer_api, ExecutionArgs},
+    gravity_storage::{block_view_storage::BlockViewStorage, GravityStorage},
+    reth_pipe_exec_layer_ext_v2::{new_pipe_exec_layer_api, ExecutionArgs, PipeExecLayerApi},
     reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
 };
 use reth_chainspec::ChainSpec;
@@ -86,7 +87,7 @@ async fn pipe_extend<EthApi>(
     provider: RethBlockChainProvider,
     chain_spec: Arc<ChainSpec>,
     eth_api: EthApi,
-) -> eyre::Result<()>
+) -> eyre::Result<Arc<RethPipeExecLayerApi<EthApi>>>
 where
     EthApi: EthCall + Clone + Send + Sync + 'static,
     EthApi::NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>,
@@ -98,7 +99,7 @@ where
         Ok(num) => num,
         Err(e) => {
             warn!("❌ [Gravity] Failed to get latest block number: {}", e);
-            return Ok(());
+            return Err(eyre::eyre!("Failed to get latest block number: {}", e));
         }
     };
 
@@ -106,11 +107,11 @@ where
         Ok(Some(hash)) => hash,
         Ok(None) => {
             warn!("❌ [Gravity] Latest block hash not found");
-            return Ok(());
+            return Err(eyre::eyre!("Latest block hash not found"));
         }
         Err(e) => {
             warn!("❌ [Gravity] Failed to get latest block hash: {}", e);
-            return Ok(());
+            return Err(eyre::eyre!("Failed to get latest block hash: {}", e));
         }
     };
 
@@ -118,11 +119,13 @@ where
         Ok(Some(block)) => block,
         Ok(None) => {
             info!("ℹ️ [Gravity] No blocks found, skipping setup (will sync on first block)");
-            return Ok(());
+            return Err(eyre::eyre!(
+                "No blocks found, skipping setup (will sync on first block)"
+            ));
         }
         Err(e) => {
             warn!("❌ [Gravity] Failed to get latest block: {}", e);
-            return Ok(());
+            return Err(eyre::eyre!("Failed to get latest block: {}", e));
         }
     };
 
@@ -191,25 +194,25 @@ where
     // 1. PipeExecLayerApi setup
     // 2. Coordinator implementation
     // 3. Injection loop implementation
-    task_executor.spawn(async move {
-        info!("🔄 [Gravity] Pipe execution layer background task started");
-        info!("   This would handle OrderedBlock injection when block execution completes");
+    // task_executor.spawn(async move {
+    //     info!("🔄 [Gravity] Pipe execution layer background task started");
+    //     info!("   This would handle OrderedBlock injection when block execution completes");
 
-        // Placeholder: In actual implementation, this would:
-        // 1. Wait for block execution completion signals from coordinator
-        // 2. Process OrderedBlocks from buffer
-        // 3. Inject them into the execution pipeline
+    //     // Placeholder: In actual implementation, this would:
+    //     // 1. Wait for block execution completion signals from coordinator
+    //     // 2. Process OrderedBlocks from buffer
+    //     // 3. Inject them into the execution pipeline
 
-        // For now, just log that the task is running
-        let mut block_executed_rx = block_executed_rx;
-        while let Some((block_number, epoch)) = block_executed_rx.recv().await {
-            info!(
-                "📦 [Gravity] Block execution completed: number={}, epoch={:?}",
-                block_number, epoch
-            );
-            // In actual implementation, this would trigger OrderedBlock injection
-        }
-    });
+    //     // For now, just log that the task is running
+    //     let mut block_executed_rx = block_executed_rx;
+    //     while let Some((block_number, epoch)) = block_executed_rx.recv().await {
+    //         info!(
+    //             "📦 [Gravity] Block execution completed: number={}, epoch={:?}",
+    //             block_number, epoch
+    //         );
+    //         // In actual implementation, this would trigger OrderedBlock injection
+    //     }
+    // });
 
     info!("✅ [Gravity] Pipe execution layer setup completed");
     info!("   Note: Full implementation requires gravity-reth dependencies:");
@@ -217,7 +220,7 @@ where
     info!("   - greth::reth_pipe_exec_layer_ext_v2");
     info!("   - Coordinator implementation");
 
-    Ok(())
+    Ok(pipeline_api_arc)
 }
 
 /// Flow hook execution:
@@ -299,31 +302,35 @@ fn main() -> eyre::Result<()> {
                     if !gravity.disable_pipe_execution {
                         info!("Extending pipe execution layer");
                         let eth_api = node.rpc_registry.eth_api().clone();
-                        let provider = node.provider.clone();
                         let chain_spec = node.chain_spec().clone();
+                        let engine_handle = node.add_ons_handle.beacon_engine_handle;
+
                         node.task_executor.spawn(async move {
-                            if let Err(e) =
-                                pipe_extend(task_executor, provider, chain_spec, eth_api).await
+                            let provider = node.provider.clone();
+                            match pipe_extend(task_executor, provider, chain_spec, eth_api.clone())
+                                .await
                             {
-                                error!("Failed to extend pipe execution layer: {:?}", e);
+                                Ok(pipeline_api) => {
+                                    // Get the canonical state stream
+                                    let mut mysticeti_consensus = MysticetiConsensus::new(
+                                        consensus_pool,
+                                        node.provider,
+                                        eth_api,
+                                        rx_built_payload,
+                                        engine_handle,
+                                        Some(pipeline_api),
+                                        args.block_interval_ms,
+                                    );
+                                    if let Err(e) = mysticeti_consensus.start().await {
+                                        error!("Failed to start mysticeti consensus: {:?}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to extend pipe execution layer: {:?}", e);
+                                }
                             }
                         });
                     }
-
-                    let engine_handle = node.add_ons_handle.beacon_engine_handle;
-                    // Get the canonical state stream
-                    let mut mysticeti_consensus = MysticetiConsensus::new(
-                        consensus_pool,
-                        node.provider,
-                        rx_built_payload,
-                        engine_handle,
-                        args.block_interval_ms,
-                    );
-                    node.task_executor.spawn(async move {
-                        if let Err(e) = mysticeti_consensus.start().await {
-                            error!("Failed to start mysticeti consensus: {:?}", e);
-                        }
-                    });
 
                     Ok(())
                 })
