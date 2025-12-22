@@ -1,10 +1,23 @@
 use crate::consensus::ConsensusPool;
 use alloy_consensus::transaction::TxHashRef;
 use alloy_consensus::BlockHeader;
-use alloy_primitives::{Address, TxHash, B256};
+use alloy_eips::eip4895::Withdrawals;
+use alloy_primitives::{Address, TxHash, B256, U256};
+use alloy_rlp::{Decodable, Encodable};
 use alloy_rpc_types_engine::PayloadAttributes;
+use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::Result;
 use futures_util::StreamExt;
+use greth::{
+    gravity_storage::{block_view_storage::BlockViewStorage, GravityStorage},
+    reth_pipe_exec_layer_ext_v2::{
+        new_pipe_exec_layer_api, onchain_config::OnchainConfigFetcher, ExecutionArgs, OrderedBlock,
+        PipeExecLayerApi,
+    },
+    reth_primitives::TransactionSigned,
+    reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
+};
+use reth_ethereum::primitives::Recovered;
 use reth_ethereum::{
     chainspec::{ChainSpecProvider, EthChainSpec},
     node::api::{
@@ -34,11 +47,14 @@ use tracing::{debug, error, info};
 use std::collections::HashSet;
 //const PAYLOAD_EXECUTION_TIMEOUT: u64 = 30; // 30 second timeout
 //const PAYLOAD_EXECUTION_INTERVAL: u64 = 500; // 10 millisecond interval
-pub struct MysticetiConsensus<Provider, Payload, Pool>
+pub struct MysticetiConsensus<Provider, Payload, Pool, Storage, EthApi>
 where
     Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
     Payload: PayloadTypes,
     Pool: TransactionPool,
+    Storage: GravityStorage,
+    EthApi: EthCall + Clone + Send + Sync + 'static,
+    EthApi::NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>,
 {
     consensus_pool: Arc<ConsensusPool<Pool>>,
     //payload_builder_handle: PayloadBuilderHandle<Payload>,
@@ -57,22 +73,33 @@ where
     last_built_payload: Option<Payload::BuiltPayload>,
     // Keep pyload buffer and send to evm executor if last payload is executed
     payload_buffer: VecDeque<Payload::BuiltPayload>,
+    // Pipeline API for executing payloads
+    // If None, payloads will be send to the consensus engine handle directly
+    // Otherwise, payloads will be send to the pipeline API
+    pipeline_api: Option<Arc<PipeExecLayerApi<Storage, EthApi>>>,
+    onchain_config_fetcher: OnchainConfigFetcher<EthApi>,
 }
 
-impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
+impl<Provider, Payload, Pool, Storage, EthApi>
+    MysticetiConsensus<Provider, Payload, Pool, Storage, EthApi>
 where
     Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
     Payload: PayloadTypes,
     Pool: TransactionPool,
+    Storage: GravityStorage,
+    EthApi: EthCall + Clone + Send + Sync + 'static,
+    EthApi::NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>,
 {
     pub fn new(
         consensus_pool: Arc<ConsensusPool<Pool>>,
         provider: Provider,
-        //payload_builder_handle: PayloadBuilderHandle<Payload>,
+        eth_api: EthApi,
         rx_built_payload: UnboundedReceiver<Payload::BuiltPayload>,
         engine_handle: BeaconConsensusEngineHandle<Payload>,
+        pipeline_api: Option<Arc<PipeExecLayerApi<Storage, EthApi>>>,
         block_interval_ms: u64,
     ) -> Self {
+        let onchain_config_fetcher = OnchainConfigFetcher::new(eth_api);
         Self {
             consensus_pool,
             rx_built_payload: Some(rx_built_payload),
@@ -83,24 +110,123 @@ where
             last_processing_payload: None,
             last_built_payload: None,
             payload_buffer: VecDeque::new(),
+            pipeline_api,
+            onchain_config_fetcher,
         }
     }
 }
 
-impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
+impl<Provider, Payload, Pool, Storage, EthApi>
+    MysticetiConsensus<Provider, Payload, Pool, Storage, EthApi>
 where
     Provider: ChainSpecProvider + StateProviderFactory + Unpin + 'static,
     Payload: PayloadTypes,
     Pool: TransactionPool,
+    Storage: GravityStorage,
+    EthApi: EthCall + Clone + Send + Sync + 'static,
+    EthApi::NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>,
 {
-    // fn has_proposal_block(&self) -> bool {
-    //     self.proposal_block.is_some()
+    // fn build_nil_ordered_block(&self) -> OrderedBlock {
+    //     let block_number = 0;
+    //     let epoch = self.onchain_config_fetcher.fetch_epoch(block_number);
+    //     let block_hash = B256::ZERO;
+    //     let parent_hash = B256::ZERO;
+    //     let timestamp = 0;
+    //     let withdrawals = Withdrawals::default();
+    //     let proposer = None;
+    //     let randomness = U256::ZERO;
+    //     OrderedBlock {
+    //         epoch,
+    //         parent_id: parent_hash,
+    //         id: block_hash,
+    //         number: block_number,
+    //         timestamp,
+    //         coinbase: Address::ZERO,
+    //         prev_randao: B256::ZERO,
+    //         withdrawals,
+    //         transactions: Vec::new(),
+    //         senders: Vec::new(),
+    //         proposer,
+    //         extra_data: Vec::new(),
+    //         randomness,
+    //         enable_randomness: false,
+    //     }
     // }
-    // fn proposal_block_executed(&self) -> Option<bool> {
-    //     self.proposal_block
-    //         .as_ref()
-    //         .map(|proposal_block| proposal_block.is_executed())
-    // }
+
+    fn build_ordered_block(&self, built_payload: &Payload::BuiltPayload) -> Result<OrderedBlock> {
+        // Extract basic block information from ExecutionPayload trait
+        let block_number = built_payload.block().header().number();
+        let epoch = self.onchain_config_fetcher.fetch_epoch(block_number);
+        let block_hash = built_payload.block().hash();
+        let parent_hash = built_payload.block().header().parent_hash();
+        let timestamp = built_payload.block().header().timestamp();
+        let withdrawals = built_payload
+            .block()
+            .body()
+            .withdrawals()
+            .cloned()
+            .map(Withdrawals::from)
+            .unwrap_or_default();
+
+        // Extract payload-specific fields (fee_recipient, prev_randao, transactions)
+        // Use the ExecutionPayload trait methods to access these fields
+        // let coinbase = built_payload.block().header().coinbase();
+        // let prev_randao = built_payload.block().header().prev_randao();
+
+        let coinbase = Address::ZERO;
+        let prev_randao = B256::ZERO;
+
+        // Decode transactions from raw bytes
+        let mut transactions = Vec::new();
+        let mut senders = Vec::new();
+
+        for tx in built_payload.block().body().transactions() {
+            // Encode transaction to bytes using RLP, then decode to Recovered to get both transaction and sender
+            let mut encoded = Vec::new();
+            tx.encode(&mut encoded);
+            let mut tx_data = encoded;
+            let recovered = Recovered::<TransactionSigned>::decode(&mut tx_data.as_slice())
+                .map_err(|e| anyhow::anyhow!("Failed to decode transaction: {}", e))?;
+
+            // Extract sender address
+            let sender = recovered.signer();
+            senders.push(sender);
+
+            // Convert Recovered to TransactionSigned for OrderedBlock
+            // TransactionSigned can be constructed from the transaction and signature
+            let signed_tx = TransactionSigned::from(recovered.into_inner());
+            transactions.push(signed_tx);
+        }
+
+        // Extract proposer from parent_beacon_block_root if available
+        let proposer = built_payload
+            .block()
+            .header()
+            .parent_beacon_block_root()
+            .map(|root| {
+                let mut proposer_bytes = [0u8; 32];
+                proposer_bytes.copy_from_slice(root.as_slice());
+                proposer_bytes
+            });
+
+        let ordered_block = OrderedBlock {
+            epoch,
+            parent_id: parent_hash,
+            id: block_hash,
+            number: block_number,
+            timestamp,
+            coinbase,
+            prev_randao,
+            withdrawals,
+            transactions,
+            senders,
+            proposer,
+            extra_data: vec![],
+            randomness: U256::ZERO,
+            enable_randomness: false,
+        };
+        Ok(ordered_block)
+    }
     /// Get current forkchoice state
     async fn create_forkchoice_state(&self, last_block_hash: Option<B256>) -> ForkchoiceState {
         //Todo: Implement this
@@ -123,29 +249,29 @@ where
             }
         }
     }
-
-    // async fn retrieve_payload(
-    //     &self,
-    //     payload_id: PayloadId,
-    // ) -> Result<Option<Payload::BuiltPayload>> {
-    //     self.payload_builder_handle
-    //         .best_payload(payload_id)
-    //         .await
-    //         .transpose()
-    //         .map_err(anyhow::Error::msg)
-    // }
-
-    /// Try to execute the pending payload
-    async fn execute_pending_payload(
+    async fn execute_payload_with_pipeline(
         &self,
         built_payload: &Payload::BuiltPayload,
     ) -> Result<Option<Payload::ExecutionData>> {
-        debug!(
-            "Execute built payload {:?}",
-            built_payload.block().header().number()
-        );
-
         let execution_payload = Payload::block_to_payload(built_payload.block().clone());
+        if let Some(pipeline_api) = self.pipeline_api.as_ref() {
+            if let Ok(ordered_block) = self.build_ordered_block(built_payload) {
+                if let Some(_) = pipeline_api.push_ordered_block(ordered_block) {
+                    Ok(Some(execution_payload.clone()))
+                } else {
+                    Err(anyhow::anyhow!("Push ordered block failed"))
+                }
+            } else {
+                Err(anyhow::anyhow!("Build ordered block failed"))
+            }
+        } else {
+            Err(anyhow::anyhow!("Pipeline API is not set"))
+        }
+    }
+    async fn execute_payload_with_engine(
+        &self,
+        execution_payload: &Payload::ExecutionData,
+    ) -> Result<Option<Payload::ExecutionData>> {
         match self
             .engine_handle
             .new_payload(execution_payload.clone())
@@ -176,7 +302,7 @@ where
                             error!("Forkchoice updated failed: {:?}", e);
                         }
                     }
-                    Ok(Some(execution_payload))
+                    Ok(Some(execution_payload.clone()))
                 } else {
                     Err(anyhow::anyhow!(
                         "Execute new payload failed with status: {:?}",
@@ -190,44 +316,55 @@ where
             )),
         }
     }
+    /// Try to execute the pending payload
+    async fn execute_pending_payload(
+        &self,
+        built_payload: &Payload::BuiltPayload,
+    ) -> Result<Option<Payload::ExecutionData>> {
+        debug!(
+            "Execute built payload {:?}",
+            built_payload.block().header().number()
+        );
+        if let Some(pipeline_api) = self.pipeline_api.as_ref() {
+            self.execute_payload_with_pipeline(built_payload).await
+        } else {
+            let execution_payload = Payload::block_to_payload(built_payload.block().clone());
+            self.execute_payload_with_engine(&execution_payload).await
+        }
+    }
 }
 
-impl<Provider, Payload, Pool> MysticetiConsensus<Provider, Payload, Pool>
+impl<Provider, Payload, Pool, Storage, EthApi>
+    MysticetiConsensus<Provider, Payload, Pool, Storage, EthApi>
 where
     Provider: ChainSpecProvider + StateProviderFactory + CanonStateSubscriptions + Unpin + 'static,
     Payload: PayloadTypes<PayloadAttributes = EthPayloadAttributes>,
     Pool: TransactionPool,
+    Storage: GravityStorage,
+    EthApi: EthCall + Clone + Send + Sync + 'static,
+    EthApi::NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>,
 {
     pub async fn start(&mut self) -> Result<()> {
         //TODO: Add configurable interval
         let mut interval =
             tokio::time::interval(tokio::time::Duration::from_millis(self.block_interval_ms));
         let mut notifications = self.provider.canonical_state_stream();
-        // let mut payload_events = self
-        //     .payload_builder_handle
-        //     .subscribe()
-        //     .await
-        //     .map(|events| events.into_built_payload_stream())
-        //     .map_err(|e| anyhow::anyhow!("Failed to subscribe to payload events: {:?}", e))?;
+
         let mut built_payload_stream =
             UnboundedReceiverStream::new(self.rx_built_payload.take().unwrap());
+        // Create the first nil OrderedBlock to start the pipeline
+        // if let Some(pipeline_api) = self.pipeline_api.as_ref() {
+        //     let ordered_block = self.build_nil_ordered_block();
+        //     if let Some(_) = pipeline_api.push_ordered_block(ordered_block) {
+        //         info!("Push nil ordered block successfully");
+        //     } else {
+        //         error!("Push nil ordered block failed");
+        //     }
+        // } else {
+        //     error!("Pipeline API is not set");
+        // }
         loop {
             tokio::select! {
-                // new_event = payload_events.next() => {
-                //     debug!("Received payload events updated");
-                //     match new_event {
-                //         Some(new_payload) => {
-                //             debug!("New payload built, put it to the buffer. New payload number {}. Payload buffer size: {:?}",
-                //                 new_payload.block().header().number(),
-                //                 self.payload_buffer.len());
-                //             self.last_built_payload.replace(new_payload.clone());
-                //             self.payload_buffer.push_back(new_payload);
-                //         },
-                //         None => {
-                //             debug!("Payload events updated: None");
-                //         }
-                //     }
-                // }
                 //Receive built payload from channel send from custom payload builder
                 new_built_payload = built_payload_stream.next() => {
                     match new_built_payload {
@@ -264,11 +401,6 @@ where
                                     }
                                 }
                             }
-                            // self.payload_builder_handle
-                            //     .best_payload(payload_id)
-                            //     .await
-                            //     .transpose()
-                            //     .map_err(anyhow::Error::msg)
 
                         }
                         None => {
@@ -442,75 +574,6 @@ where
             }
         }
     }
-    // async fn process_proposal_block(
-    //     &mut self,
-    // ) -> Result<Option<<EthEngineTypes as PayloadTypes>::ExecutionData>> {
-    //     assert!(self.has_proposal_block());
-    //     let proposal_block_executed = self.proposal_block_executed();
-    //     if proposal_block_executed == Some(true) {
-    //         let proposal_block = self.proposal_block.as_ref().unwrap();
-    //         trace!(
-    //             "Current proposal block with payload id {:?} is executed. Try to build next one.",
-    //             proposal_block.payload_id
-    //         );
-    //         match self
-    //             .build_next_proposal_block(proposal_block.built_payload.clone())
-    //             .await
-    //         {
-    //             Ok(Some(payload_id)) => {
-    //                 debug!(
-    //                     "Build next proposal block successfully. Pending payload id: {:?}",
-    //                     payload_id
-    //                 );
-    //             }
-    //             Ok(None) => {}
-    //             Err(e) => {
-    //                 error!("Build next proposal block failed: {:?}", e);
-    //             }
-    //         }
-    //         return Ok(None);
-    //     }
-    //     // Proposal block is processing
-    //     let (payload_id, mut built_payload) = {
-    //         let proposal_block = self.proposal_block.as_ref().unwrap();
-    //         (
-    //             proposal_block.payload_id.clone(),
-    //             proposal_block.built_payload.clone(),
-    //         )
-    //     };
-    //     if built_payload.is_none() {
-    //         debug!(
-    //             "Payload {:?} is not built. Try to get it from payload builder.",
-    //             payload_id
-    //         );
-    //         if let Ok(Some(payload)) = self.retrieve_payload(payload_id).await {
-    //             built_payload.replace(payload.clone());
-    //             self.proposal_block.as_mut().unwrap().set_payload(payload);
-    //         }
-    //     }
-    //     if let Some(built_payload) = built_payload {
-    //         debug!("Payload {:?} is built. Try to execute it.", payload_id);
-    //         match self.execute_pending_payload(&built_payload).await {
-    //             Ok(Some(execution_payload)) => {
-    //                 //Set proposal block as executed
-    //                 self.proposal_block.as_mut().unwrap().set_executed();
-    //                 return Ok(Some(execution_payload));
-    //             }
-    //             Ok(None) => {
-    //                 debug!(
-    //                     "Payload {:?} is not executed. Try to execute it later",
-    //                     payload_id
-    //                 );
-    //                 return Ok(None);
-    //             }
-    //             Err(e) => {
-    //                 error!("Execute pending payload failed: {:?}", e);
-    //                 return Err(anyhow::anyhow!("Execute pending payload failed: {:?}", e));
-    //             }
-    //         }
-    //     }
-    //     Ok(None)
-    // }
 }
 
 #[cfg(test)]

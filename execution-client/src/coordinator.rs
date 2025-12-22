@@ -1,4 +1,6 @@
+use crate::{RethBlockChainProvider, RethPipeExecLayerApi};
 use alloy_rpc_types_eth::TransactionRequest;
+use fastevm_execution::RethEthCall;
 use gravity_api_types::events::contract_event::GravityEvent;
 use greth::{
     gravity_storage::block_view_storage::BlockViewStorage,
@@ -12,23 +14,6 @@ use greth::{
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-
-pub type RethBlockChainProvider =
-    BlockchainProvider<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>;
-
-pub trait RethEthCall:
-    EthCall<NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>>
-{
-}
-
-impl<T> RethEthCall for T where
-    T: EthCall<NetworkTypes: RpcTypes<TransactionRequest = TransactionRequest>>
-{
-}
-
-pub type RethPipeExecLayerApi<EthApi> =
-    PipeExecLayerApi<BlockViewStorage<RethBlockChainProvider>, EthApi>;
-
 /// Coordinator that verifies executed blocks and sends results back to PipeExecLayer
 /// Simplified version for gravity_bench - directly verifies and commits blocks
 pub struct GravityCoordinator<EthApi: RethEthCall> {
