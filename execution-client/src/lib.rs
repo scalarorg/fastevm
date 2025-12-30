@@ -49,3 +49,8 @@ impl<T> RethEthCall for T where
 
 pub type RethPipeExecLayerApi<EthApi> =
     PipeExecLayerApi<BlockViewStorage<RethBlockChainProvider>, EthApi>;
+
+/// Type alias for MysticetiConsensus with default Storage type
+/// This allows omitting the Storage type parameter when pipeline_api is None
+pub type MysticetiConsensusDefaultStorage<Provider, Payload, Pool, EthApi> =
+    MysticetiConsensus<Provider, Payload, Pool, EthApi, BlockViewStorage<RethBlockChainProvider>>;

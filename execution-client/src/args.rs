@@ -53,7 +53,6 @@ mod tests {
     fn test_cli_mysticeti_args_parsing_with_tx_subscription() {
         let args = TestCliWrapper::parse_from([
             "test",
-            "--enable-tx-subscription",
             "--committed-subdags-per-block",
             "5",
             "--block-interval-ms",
@@ -97,7 +96,6 @@ mod tests {
     #[test]
     fn test_cli_mysticeti_args_clone() {
         let args = CliMysticetiArgs {
-            enable_tx_subscription: true,
             committed_subdags_per_block: 10,
             block_interval_ms: 100,
             max_reload_accounts: 500,
@@ -117,7 +115,6 @@ mod tests {
     #[test]
     fn test_cli_mysticeti_args_debug() {
         let args = CliMysticetiArgs {
-            enable_tx_subscription: true,
             committed_subdags_per_block: 10,
             block_interval_ms: 100,
             max_reload_accounts: 500,
@@ -125,7 +122,6 @@ mod tests {
 
         let debug_str = format!("{:?}", args);
 
-        assert!(debug_str.contains("enable_tx_subscription: true"));
         assert!(debug_str.contains("committed_subdags_per_block: 10"));
         assert!(debug_str.contains("block_interval_ms: 100"));
         assert!(debug_str.contains("max_reload_accounts: 500"));

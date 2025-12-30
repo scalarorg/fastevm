@@ -30,11 +30,7 @@ use reth_payload_builder::{
     BlobSidecars, EthBuiltPayload, EthPayloadBuilderAttributes, PayloadBuilderError,
 };
 use reth_revm::{database::StateProviderDatabase, db::State};
-use reth_transaction_pool::{
-    error::{Eip4844PoolTransactionError, InvalidPoolTransactionError},
-    identifier::{SenderId, TransactionId},
-    TransactionOrigin,
-};
+use reth_transaction_pool::error::{Eip4844PoolTransactionError, InvalidPoolTransactionError};
 use revm::context_interface::Block as _;
 use tracing::{debug, info, trace, warn};
 

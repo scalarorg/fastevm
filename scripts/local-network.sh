@@ -28,7 +28,12 @@ GENESIS_FILE=$PROJECT_ROOT/execution-client/shared/genesis.json
 GENESIS_OUTPUT_DIR="$DATA_DIR/genesis"
 CLI=$PROJECT_ROOT/target/release/cli
 EXECUTION_CLIENT=$PROJECT_ROOT/target/release/fastevm-execution
-CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
+#CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
+#CONSENSUS_CLIENT=evm-consensus
+CONSENSUS_CLIENT=~/workspace/codelight/scalar-consensus/mysticeti/target/release/evm-consensus
+
+GRAVITY_PIPE_BLOCK_GAS_LIMIT=5000000000
+GRAVITY_CACHE_MAX_PERSIST_GAP=64
 
 # Default values for account generation
 DEFAULT_ACCOUNT_NUMBER=100000
@@ -42,8 +47,11 @@ ACCOUNT_AMOUNT="$DEFAULT_ACCOUNT_AMOUNT"
 MNEMONIC="$DEFAULT_MNEMONIC"
 
 # Execution node configuration (can be overridden by environment variables)
+# With consensus producing ~10 subdags/second (min_round_delay: 100ms),
+# we should process 1-2 subdags per block to match the rate
+# Using 1 subdag per block with 100ms interval = 10 blocks/second = 10 subdags/second
 COMMITTED_SUBDAGS_PER_BLOCK="${COMMITTED_SUBDAGS_PER_BLOCK:-30}"
-BLOCK_BUILD_INTERVAL_MS="${BLOCK_BUILD_INTERVAL_MS:-100}"
+BLOCK_INTERVAL_MS="${BLOCK_INTERVAL_MS:-100}"
 
 # Port configuration
 EXECUTION_PORTS=(8545 8544 8543 8542)  # HTTP RPC ports
@@ -54,8 +62,10 @@ CONSENSUS_PORTS=(26657 26658 26659 26660)  # Consensus ports
 
 # Network configuration
 NETWORK_SUBNET="172.20.0.0/16"
-NODE_IPS=("172.20.0.20" "172.20.0.21" "172.20.0.22" "172.20.0.23")
-CONSENSUS_IPS=("172.20.0.10" "172.20.0.11" "172.20.0.12" "172.20.0.13")
+#NODE_IPS=("172.20.0.20" "172.20.0.21" "172.20.0.22" "172.20.0.23")
+#CONSENSUS_IPS=("172.20.0.10" "172.20.0.11" "172.20.0.12" "172.20.0.13")
+NODE_IPS=("127.0.0.1" "127.0.0.1" "127.0.0.1" "127.0.0.1")
+CONSENSUS_IPS=("127.0.0.1" "127.0.0.1" "127.0.0.1" "127.0.0.1")
 
 # Logging functions
 log_info() {
@@ -243,26 +253,175 @@ init_execution_node() {
     # Generate P2P secret key
     generate_p2p_secret_key "$node_index" "$data_dir"
     
+    cp $SCRIPT_DIR/genesis.json $data_dir/genesis.json
+
     # Copy prefunded genesis.json if it exists, otherwise fall back to original
-    local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
-    if [ -f "$prefunded_genesis" ]; then
-        cp "$prefunded_genesis" "$data_dir/genesis.json"
-        log_info "Copied prefunded genesis.json to $data_dir"
-    elif [ -f "$GENESIS_FILE" ]; then
-        cp "$GENESIS_FILE" "$data_dir/genesis.json"
-        log_info "Copied original genesis.json to $data_dir"
-    else
-        log_warning "No genesis file found, using default chain"
-    fi
+    # local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
+    # if [ -f "$prefunded_genesis" ]; then
+    #     cp "$prefunded_genesis" "$data_dir/genesis.json"
+    #     log_info "Copied prefunded genesis.json to $data_dir"
+    # elif [ -f "$GENESIS_FILE" ]; then
+    #     cp "$GENESIS_FILE" "$data_dir/genesis.json"
+    #     log_info "Copied original genesis.json to $data_dir"
+    # else
+    #     log_warning "No genesis file found, using default chain"
+    # fi
     
     # Initialize the node if genesis exists
-    if [ -f "$data_dir/genesis.json" ]; then
-        log_info "Initializing node with genesis..."
-        "$PROJECT_ROOT/target/release/fastevm-execution" init --datadir "$data_dir" --chain "$data_dir/genesis.json" || true
+    # if [ -f "$data_dir/genesis.json" ]; then
+    #     log_info "Initializing node with genesis..."
+    #     "$PROJECT_ROOT/target/release/fastevm-execution" init --datadir "$data_dir" --chain "$data_dir/genesis.json" || true
+    # fi
+}
+
+# Step 1: Generate validators.yml configuration file (if needed)
+generate_validators_config() {
+    local validators_output="$DATA_DIR/validators.yml"
+    
+    # Check if validators.yml already exists
+    if [ -f "$validators_output" ]; then
+        log_info "validators.yml already exists at: $validators_output"
+        return 0
+    fi
+    
+    log_info "Step 1: Generating validators.yml configuration file..."
+    
+    # Number of authorities
+    local authorities_count=${#CONSENSUS_IPS[@]}
+    
+    # Build IP addresses string from CONSENSUS_IPS array
+    local ip_addresses_str=""
+    for i in "${!CONSENSUS_IPS[@]}"; do
+        if [ -n "$ip_addresses_str" ]; then
+            ip_addresses_str="${ip_addresses_str},${CONSENSUS_IPS[$i]}"
+        else
+            ip_addresses_str="${CONSENSUS_IPS[$i]}"
+        fi
+    done
+    
+    # Build network ports string from CONSENSUS_PORTS array
+    local network_ports_str=""
+    for i in "${!CONSENSUS_PORTS[@]}"; do
+        if [ -n "$network_ports_str" ]; then
+            network_ports_str="${network_ports_str},${CONSENSUS_PORTS[$i]}"
+        else
+            network_ports_str="${CONSENSUS_PORTS[$i]}"
+        fi
+    done
+    
+    log_info "Generating validators.yml with:"
+    log_info "  Authorities: $authorities_count"
+    log_info "  IP addresses: $ip_addresses_str"
+    log_info "  Network ports: $network_ports_str"
+    
+    # Step 1: Generate validators.yml using consensus client generate-validators command
+    if command -v "$CONSENSUS_CLIENT" >/dev/null 2>&1; then
+        if "$CONSENSUS_CLIENT" generate-validators \
+            --output "$validators_output" \
+            --authorities "$authorities_count" \
+            --epoch "0" \
+            --stake "1000" \
+            --ip-addresses "$ip_addresses_str" \
+            --network-ports "$network_ports_str" \
+            --hostname-prefix "fastevm-consensus"; then
+            log_success "Step 1 completed: Generated validators.yml at: $validators_output"
+            return 0
+        else
+            log_error "Failed to generate validators.yml"
+            return 1
+        fi
+    else
+        log_error "Consensus client not found: $CONSENSUS_CLIENT"
+        log_info "Please build the project first with: make build"
+        return 1
     fi
 }
 
-# Initialize consensus node data
+# Step 2: Generate genesis_config.json configuration file from validators.yml
+generate_genesis_config() {
+    local validators_file="$DATA_DIR/validators.yml"
+    local genesis_output="$DATA_DIR/genesis_config.json"
+    
+    # Check if validators.yml exists
+    if [ ! -f "$validators_file" ]; then
+        log_error "validators.yml not found at: $validators_file"
+        log_error "Please generate validators.yml first (Step 1)"
+        return 1
+    fi
+    
+    # Check if genesis_config.json already exists
+    if [ -f "$genesis_output" ]; then
+        log_info "genesis_config.json already exists at: $genesis_output"
+        return 0
+    fi
+    
+    log_info "Step 2: Generating genesis_config.json configuration file from validators.yml..."
+    log_info "  Using validators from: $validators_file"
+    log_info "  Output: $genesis_output"
+    
+    # Generate genesis_config.json using generate-genesis-config command with --config-path pointing to validators.yml
+    if command -v "$CONSENSUS_CLIENT" >/dev/null 2>&1; then
+        if "$CONSENSUS_CLIENT" generate-genesis-config \
+            --config-path "$validators_file" \
+            --genesis-path "$genesis_output"; then
+            log_success "Step 2 completed: Generated genesis_config.json at: $genesis_output"
+            return 0
+        else
+            log_error "Failed to generate genesis_config.json from validators.yml"
+            return 1
+        fi
+    else
+        log_error "Consensus client not found: $CONSENSUS_CLIENT"
+        log_info "Please build the project first with: make build"
+        return 1
+    fi
+}
+
+# Step 3: Generate committees.yml configuration file from validators.yml (shared across all consensus nodes)
+generate_committees_config() {
+    local validators_file="$DATA_DIR/validators.yml"
+    local committees_output="$DATA_DIR/committees.yml"
+    
+    # Step 1: Check if validators.yml exists, if not generate it first
+    if [ ! -f "$validators_file" ]; then
+        log_info "validators.yml not found, generating it first (Step 1)..."
+        if ! generate_validators_config; then
+            log_error "Failed to generate validators.yml"
+            return 1
+        fi
+    else
+        log_info "validators.yml found at: $validators_file"
+    fi
+    
+    # Step 2: Generate genesis_config.json from validators.yml
+    if ! generate_genesis_config; then
+        log_error "Failed to generate genesis_config.json"
+        return 1
+    fi
+    
+    log_info "Step 3: Generating committees.yml configuration file from validators.yml..."
+    log_info "  Using validators from: $validators_file"
+    
+    # Generate committees.yml using generate-committee command with --config-path pointing to validators.yml
+    if command -v "$CONSENSUS_CLIENT" >/dev/null 2>&1; then
+        # Step 3: Use generate-committee with --config-path to read from validators.yml
+        if "$CONSENSUS_CLIENT" generate-committee \
+            --config-path "$validators_file" \
+            --committee-path "$committees_output" \
+            --epoch "0"; then
+            log_success "Step 3 completed: Generated committees.yml at: $committees_output"
+            return 0
+        else
+            log_error "Failed to generate committees.yml from validators.yml"
+            return 1
+        fi
+    else
+        log_error "Consensus client not found: $CONSENSUS_CLIENT"
+        log_info "Please build the project first with: make build"
+        return 1
+    fi
+}
+
 # Generate consensus node configuration files
 generate_consensus_files() {
     local node_index="$1"
@@ -310,23 +469,18 @@ generate_consensus_files() {
         return 1
     fi
     
-    # Generate committees.yml using fastevm-consensus command
-    if command -v "$CONSENSUS_CLIENT" >/dev/null 2>&1; then
-        if "$CONSENSUS_CLIENT" generate-committee \
-            --output "$data_dir/committees.yml" \
-            --authorities "4" \
-            --epoch "0" \
-            --stake "1000" \
-            --ip-addresses "127.0.0.1,127.0.0.1,127.0.0.1,127.0.0.1" \
-            --network-ports "26657,26658,26659,26660"; then
-            log_info "Generated committees.yml for consensus node $node_index"
+    # Copy shared committees.yml to this node's directory
+    local shared_committees="$DATA_DIR/committees.yml"
+    if [ -f "$shared_committees" ]; then
+        if cp "$shared_committees" "$data_dir/committees.yml"; then
+            log_info "Copied committees.yml to consensus node $node_index"
         else
-            log_error "Failed to generate committees.yml for consensus node $node_index"
+            log_error "Failed to copy committees.yml to consensus node $node_index"
             return 1
         fi
     else
-        log_error "Consensus client not found: $CONSENSUS_CLIENT"
-        log_info "Please build the project first with: make build"
+        log_error "Shared committees.yml not found: $shared_committees"
+        log_error "Please run generate_committees_config first"
         return 1
     fi
     
@@ -480,9 +634,10 @@ start_execution_node() {
     cmd_args+=(
         "--builder.gaslimit" "240000000"
     )
-    # Disable gravity-specific features to prevent panic when pipe execution event bus is not initialized
+    # gravity parameters
     cmd_args+=(
-        "--gravity.disable-pipe-execution"
+        "--gravity.pipe-block-gas-limit" "$GRAVITY_PIPE_BLOCK_GAS_LIMIT"
+        "--gravity.cache.max-persist-gap" "$GRAVITY_CACHE_MAX_PERSIST_GAP"
     )
     
     # Add remaining arguments
@@ -496,9 +651,8 @@ start_execution_node() {
         "--discovery.port" "$p2p_port"
         "--p2p-secret-key" "$data_dir/p2p/secret.key"
         "--bootnodes" "$bootnodes"
-        "--enable-tx-subscription"
         "--committed-subdags-per-block" "$COMMITTED_SUBDAGS_PER_BLOCK"
-        "--block-build-interval-ms" "$BLOCK_BUILD_INTERVAL_MS"
+        "--block-interval-ms" "$BLOCK_INTERVAL_MS"
         "$debug_level"
     )
     
@@ -568,8 +722,15 @@ wait_for_service() {
 start_network() {
     log_info "Starting FastEVM local network..."
     
+    # Clean up any existing processes and ports before starting
+    log_info "Cleaning up any existing processes..."
+    stop_network
+    
     # Generate prefunded genesis.json first
     prefund_genesis
+    
+    # Generate committees.yml configuration (shared across all consensus nodes)
+    generate_committees_config
     
     # Initialize all nodes
     for i in {1..4}; do
@@ -579,6 +740,7 @@ start_network() {
     
     # Start execution nodes
     for i in {1..4}; do
+        log_info "Starting execution node $i ..."
         start_execution_node "$i"
     done
     
@@ -609,7 +771,7 @@ start_network() {
 stop_network() {
     log_info "Stopping FastEVM local network..."
     
-    # Stop all processes
+    # Stop all processes by PID files first
     for pid_file in "$PIDS_DIR"/*.pid; do
         if [ -f "$pid_file" ]; then
             local pid=$(cat "$pid_file")
@@ -625,22 +787,39 @@ stop_network() {
     
     # Clean up PID files
     rm -f "$PIDS_DIR"/*.pid
-    # Stop mysticeti process
-    # List of ports you want to kill
-    PORTS=(26657 26658 26659 26660 8545 8544 8543 8542)
-    PORTS=(26657 26658 26659 26660 8545 8544 8543 8542)
-
-    for PORT in "${PORTS[@]}"; do
-        PID=$(lsof -ti :$PORT)
-        echo "Killing process $PID on port $PORT"
-        echo "Killing process $PID on port $PORT"
-        if [ -n "$PID" ]; then
-            echo "🔪 Killing process $PID on port $PORT"
-            kill -9 $PID
-        else
-            echo "✅ No process found on port $PORT"
+    
+    # Kill any fastevm-execution processes
+    if pgrep -f "fastevm-execution" > /dev/null 2>&1; then
+        log_info "Killing remaining fastevm-execution processes..."
+        pkill -9 -f "fastevm-execution" 2>/dev/null || true
+    fi
+    
+    # Kill any evm-consensus processes
+    if pgrep -f "evm-consensus" > /dev/null 2>&1; then
+        log_info "Killing remaining evm-consensus processes..."
+        pkill -9 -f "evm-consensus" 2>/dev/null || true
+    fi
+    
+    # Kill processes on all ports used by the network
+    # Consensus ports, HTTP RPC ports, Engine API ports, P2P ports, WebSocket ports
+    local all_ports=(
+        "${CONSENSUS_PORTS[@]}"      # 26657, 26658, 26659, 26660
+        "${EXECUTION_PORTS[@]}"      # 8545, 8544, 8543, 8542
+        "${ENGINE_PORTS[@]}"         # 8551, 8552, 8553, 8554
+        "${P2P_PORTS[@]}"            # 30303, 30304, 30305, 30306
+        "${EXECUTION_PORTS_WS[@]}"   # 8546, 8548, 8550, 8552
+    )
+    
+    for port in "${all_ports[@]}"; do
+        local pid=$(lsof -ti :$port 2>/dev/null)
+        if [ -n "$pid" ]; then
+            log_info "Killing process $pid on port $port"
+            kill -9 "$pid" 2>/dev/null || true
         fi
     done
+    
+    # Wait a moment for processes to fully terminate
+    sleep 1
 
     log_success "Network stopped!"
 }
@@ -845,6 +1024,8 @@ case "$COMMAND" in
         check_prerequisites
         setup_directories
         build_project
+        # Generate committees.yml configuration (shared across all consensus nodes)
+        generate_committees_config
         for i in {1..4}; do
             init_execution_node "$i"
             init_consensus_node "$i"
@@ -853,6 +1034,9 @@ case "$COMMAND" in
         ;;
     "regenerate-consensus")
         log_info "Regenerating consensus node configuration files..."
+        
+        # Generate committees.yml configuration first (shared across all consensus nodes)
+        generate_committees_config
         
         # Regenerate files for all consensus nodes
         for i in {1..4}; do

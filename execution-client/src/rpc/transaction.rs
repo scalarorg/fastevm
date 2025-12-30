@@ -23,7 +23,7 @@ use reth_transaction_pool::{
     TransactionValidationOutcome, TransactionValidationTaskExecutor, TransactionValidator,
 };
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::{
     sync::{
         broadcast,

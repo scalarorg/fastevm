@@ -13,14 +13,14 @@ use alloy_consensus as _;
 
 mod args;
 mod consensus;
-mod coordinator;
+// mod coordinator;
 mod payload;
 mod pool;
 mod rpc;
 mod types;
 
 use clap::Parser;
-use coordinator::GravityCoordinator;
+//use coordinator::GravityCoordinator;
 use fastevm_execution::{RethBlockChainProvider, RethPipeExecLayerApi};
 use reth_ethereum_engine_primitives::EthPayloadTypes;
 use reth_transaction_pool::blobstore::DiskFileBlobStore;
@@ -38,22 +38,23 @@ use crate::{
     types::TxValidatorConfig,
 };
 use greth::{
-    gravity_storage::{block_view_storage::BlockViewStorage, GravityStorage},
-    reth_pipe_exec_layer_ext_v2::{new_pipe_exec_layer_api, ExecutionArgs, PipeExecLayerApi},
+    gravity_storage::block_view_storage::BlockViewStorage,
+    reth_pipe_exec_layer_ext_v2::{new_pipe_exec_layer_api, ExecutionArgs},
     reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
 };
 use reth_chainspec::ChainSpec;
-use reth_ethereum::tasks::TaskExecutor;
+use reth_ethereum::EthPrimitives;
 use reth_ethereum::{
     chainspec::{ChainSpecProvider, EthChainSpec},
     cli::{chainspec::EthereumChainSpecParser, Cli},
     node::{
-        builder::{components::BasicPayloadServiceBuilder, FullNodeFor, NodeHandle},
+        builder::{components::BasicPayloadServiceBuilder, NodeHandle},
         node::EthereumAddOns,
         EthereumNode,
     },
 };
 use reth_node_api::Block;
+use reth_pipe_exec_layer_event_bus::get_pipe_exec_layer_event_bus;
 use reth_provider::{BlockHashReader, BlockNumReader, BlockReader};
 // use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
 use alloy_eips::BlockHashOrNumber;
@@ -64,11 +65,11 @@ use tracing::{error, info, warn};
 // Use in cli
 use bip39 as _;
 use hdwallet as _;
-use hex as _;
+// use hex as _;
 use reth_network_peers as _;
-use reth_rpc_layer as _;
+// use reth_rpc_layer as _;
 use secp256k1::{self as _};
-use serde_json as _;
+// use serde_json as _;
 use sha2 as _;
 
 /// Extends the node with pipe execution layer functionality.
@@ -83,7 +84,6 @@ use sha2 as _;
 /// - greth::reth_pipe_exec_layer_ext_v2::{ExecutionArgs, PipeExecLayerApi, new_pipe_exec_layer_api}
 /// - A coordinator implementation (e.g., GravityBenchCoordinator)
 async fn pipe_extend<EthApi>(
-    task_executor: TaskExecutor,
     provider: RethBlockChainProvider,
     chain_spec: Arc<ChainSpec>,
     eth_api: EthApi,
@@ -157,27 +157,29 @@ where
         execution_args_rx,
         eth_api.clone(),
     );
-
+    let pipeline_api_arc = Arc::new(pipeline_api);
     // Create channel for coordinator to signal block execution completion
     // (block_number, new_epoch)
-    let (block_executed_tx, block_executed_rx) = unbounded_channel::<(u64, Option<u64>)>();
+    // let (block_executed_tx, _block_executed_rx) = unbounded_channel::<(u64, Option<u64>)>();
 
     // Create coordinator
     // Note: Requires a coordinator implementation (e.g., GravityCoordinator)
-    let pipeline_api_arc = Arc::new(pipeline_api);
-    let coordinator = GravityCoordinator::new(
-        pipeline_api_arc.clone(),
-        provider.clone(),
-        chain_id,
-        Some(block_executed_tx),
-    );
+
+    // let coordinator = GravityCoordinator::new(
+    //     pipeline_api_arc.clone(),
+    //     provider.clone(),
+    //     chain_id,
+    //     Some(block_executed_tx),
+    // );
 
     // Start coordinator tasks (start_execution, start_commit_vote, start_commit)
-    coordinator.run();
+    // coordinator.run();
     // info!("✅ [Gravity] Coordinator started (execution, commit_vote, commit tasks)");
 
     // Send execution args
     // Note: This would send the execution args to the pipe execution layer
+    // This is initial mapping of block number to block id
+    // By default, we use empty mapping
     let _ = execution_args_tx.send(ExecutionArgs {
         block_number_to_block_id: std::collections::BTreeMap::new(),
     });
@@ -186,8 +188,8 @@ where
     // This would require additional setup similar to gravity_node.rs
     // The injection loop would handle OrderedBlock injection triggered by coordinator
     // when block execution completes
-    let provider_clone = provider.clone();
-    let eth_api_clone = eth_api.clone();
+    // let provider_clone = provider.clone();
+    // let eth_api_clone = eth_api.clone();
 
     // Spawn background task for pipe execution layer coordination
     // Note: This is a placeholder - actual implementation would require:
@@ -218,7 +220,7 @@ where
     info!("   Note: Full implementation requires gravity-reth dependencies:");
     info!("   - greth::gravity_storage::block_view_storage::BlockViewStorage");
     info!("   - greth::reth_pipe_exec_layer_ext_v2");
-    info!("   - Coordinator implementation");
+    // info!("   - Coordinator implementation");
 
     Ok(pipeline_api_arc)
 }
@@ -265,7 +267,6 @@ fn main() -> eyre::Result<()> {
                 .with_add_ons(EthereumAddOns::default())
                 .extend_rpc_modules({
                     let consensus_pool = consensus_pool.clone();
-                    let args = args.clone();
                     move |ctx| {
                         if ctx.config().gravity.disable_pipe_execution {
                             info!("📦 [Gravity] Pipe execution disabled");
@@ -296,32 +297,36 @@ fn main() -> eyre::Result<()> {
                 })
                 .on_node_started(move |node| {
                     // Access gravity arguments from node.config.gravity
-                    let gravity = &node.config.gravity;
+                    let gravity = node.config.gravity.clone();
                     let task_executor = node.task_executor.clone();
-                    // Check for gravity.disable-pipe-execution flag
-                    if !gravity.disable_pipe_execution {
-                        info!("Extending pipe execution layer");
-                        let eth_api = node.rpc_registry.eth_api().clone();
-                        let chain_spec = node.chain_spec().clone();
-                        let engine_handle = node.add_ons_handle.beacon_engine_handle;
-
-                        node.task_executor.spawn(async move {
-                            let provider = node.provider.clone();
-                            match pipe_extend(task_executor, provider, chain_spec, eth_api.clone())
-                                .await
-                            {
+                    let provider = node.provider.clone();
+                    let eth_api = node.rpc_registry.eth_api().clone();
+                    let chain_spec = node.chain_spec().clone();
+                    let engine_handle = node.add_ons_handle.beacon_engine_handle;
+                    node.task_executor.spawn(async move {
+                        // Check for gravity.disable-pipe-execution flag
+                        if !gravity.disable_pipe_execution {
+                            info!("Extending pipe execution layer");
+                            match pipe_extend(provider, chain_spec, eth_api.clone()).await {
                                 Ok(pipeline_api) => {
                                     // Get the canonical state stream
-                                    let mut mysticeti_consensus = MysticetiConsensus::new(
-                                        consensus_pool,
-                                        node.provider,
-                                        eth_api,
-                                        rx_built_payload,
-                                        engine_handle,
-                                        Some(pipeline_api),
-                                        args.block_interval_ms,
-                                    );
-                                    if let Err(e) = mysticeti_consensus.start().await {
+                                    let pipe_event_bus =
+                                        get_pipe_exec_layer_event_bus::<EthPrimitives>();
+                                    let mut mysticeti_consensus =
+                                        MysticetiConsensus::new_with_pipeline_api(
+                                            task_executor,
+                                            consensus_pool,
+                                            node.provider,
+                                            eth_api,
+                                            rx_built_payload,
+                                            engine_handle,
+                                            Some(pipeline_api),
+                                            pipe_event_bus,
+                                            args.block_interval_ms,
+                                        );
+                                    if let Err(e) =
+                                        mysticeti_consensus.start_with_pipeline_api().await
+                                    {
                                         error!("Failed to start mysticeti consensus: {:?}", e);
                                     }
                                 }
@@ -329,8 +334,24 @@ fn main() -> eyre::Result<()> {
                                     error!("Failed to extend pipe execution layer: {:?}", e);
                                 }
                             }
-                        });
-                    }
+                        } else {
+                            info!("Pipe execution layer disabled");
+                            // Use helper function to avoid specifying Storage type explicitly
+                            let mut mysticeti_consensus =
+                                MysticetiConsensus::new_with_default_storage(
+                                    task_executor,
+                                    consensus_pool,
+                                    provider,
+                                    eth_api,
+                                    rx_built_payload,
+                                    engine_handle,
+                                    args.block_interval_ms,
+                                );
+                            if let Err(e) = mysticeti_consensus.start_with_engine_handle().await {
+                                error!("Failed to start mysticeti consensus: {:?}", e);
+                            }
+                        }
+                    });
 
                     Ok(())
                 })

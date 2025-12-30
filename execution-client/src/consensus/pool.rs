@@ -41,7 +41,9 @@ where
 {
     committed_subdags_per_block: usize,
     next_committed_index: RwLock<u64>,
-    //Store committed transactions (converted from subdag) in queue
+    // First committed subdag is used for building first empty ordered block for update timestamp and epoch.
+    first_committed_subdag: RwLock<Option<MysticetiCommittedSubdag<Arc<Pool::Transaction>>>>,
+    //Store committed transactions (converted from subdag) in queue    
     commited_queue: RwLock<BTreeMap<u64, MysticetiCommittedSubdag<Arc<Pool::Transaction>>>>,
     // Transactions are not included into last payload due to missing of ancestors
     pending_transactions: RwLock<Vec<Arc<Pool::Transaction>>>,
@@ -54,17 +56,48 @@ impl<Pool: TransactionPool> ConsensusPool<Pool>
 where
     Pool: TransactionPool,
 {
+    /// Creates a new `ConsensusPool` instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `committed_subdags_per_block` - The number of committed subdags to process per block.
+    ///
+    /// # Returns
+    ///
+    /// A new `ConsensusPool` instance with the next committed index initialized to 1.
     pub fn new(committed_subdags_per_block: usize) -> Self {
         Self {
             committed_subdags_per_block,
             //First committed index is 1
             next_committed_index: RwLock::new(1),
+            first_committed_subdag: RwLock::new(None),
             commited_queue: RwLock::new(BTreeMap::new()),
             pending_transactions: RwLock::new(Vec::new()),
             lock: Mutex::new(()),
         }
     }
-
+    /// Get next committed subdag
+    /// # Returns
+    ///
+    /// * `Some(subdag)` - If there is a next committed subdag.
+    /// * `None` - If there is no next committed subdag.
+    /// This method is used for building first empty ordered block for update timestamp and epoch.
+    pub fn get_fist_committed_subdag(&self) -> Option<MysticetiCommittedSubdag<Arc<Pool::Transaction>>> {
+        let first_committed_subdag = self.first_committed_subdag.read().unwrap();
+        return first_committed_subdag.clone();
+    }
+    /// Retrieves the first and last committed subdags from the next batch to be processed.
+    ///
+    /// This method checks if there are enough committed subdags in the queue to form a complete batch
+    /// (based on `committed_subdags_per_block`). It returns the first and last subdags of the batch
+    /// without removing them from the queue.
+    ///
+    /// This method use for building next proposal block in the engine handle flow
+    /// # Returns
+    ///
+    /// * `Some((first, last))` - If there are enough committed subdags in the queue, returns a tuple
+    ///   containing the first and last committed subdags of the next batch.
+    /// * `None` - If there are not enough committed subdags to form a complete batch.
     pub fn next_committed_subdag_batch(
         &self,
     ) -> Option<(
@@ -147,10 +180,27 @@ impl<Pool: TransactionPool> ConsensusPool<Pool>
 where
     Pool: TransactionPool,
 {
+    /// Adds committed subdags to the internal queue for processing.
+    ///
+    /// The subdags are indexed by their round number and stored in a BTreeMap to maintain
+    /// ordering. This method is used to queue up committed subdags that will be processed
+    /// when building the next block proposal.
+    ///
+    /// # Arguments
+    ///
+    /// * `committed_subdags` - A vector of committed subdags to add to the queue. Each subdag
+    ///   is indexed by its `commit_ref.round` value.
     pub fn add_committed_subdags(
         &self,
         committed_subdags: Vec<MysticetiCommittedSubdag<Arc<Pool::Transaction>>>,
     ) {
+        if committed_subdags.is_empty() {
+            return;
+        }
+        let first_committed_subdag = committed_subdags.first().unwrap();
+        if self.first_committed_subdag.read().unwrap().is_none() {
+            self.first_committed_subdag.write().unwrap().replace(first_committed_subdag.clone());
+        }
         let len = committed_subdags.len();
         let mut committed_queue = self.commited_queue.write().unwrap();
         for committed_subdag in committed_subdags {
