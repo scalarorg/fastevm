@@ -1,16 +1,7 @@
 use crate::{RethBlockChainProvider, RethPipeExecLayerApi};
-use alloy_rpc_types_eth::TransactionRequest;
 use fastevm_execution::RethEthCall;
 use gravity_api_types::events::contract_event::GravityEvent;
-use greth::{
-    gravity_storage::block_view_storage::BlockViewStorage,
-    reth_db::DatabaseEnv,
-    reth_node_api::NodeTypesWithDBAdapter,
-    reth_node_ethereum::EthereumNode,
-    reth_pipe_exec_layer_ext_v2::{ExecutionResult, PipeExecLayerApi},
-    reth_provider::providers::BlockchainProvider,
-    reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
-};
+use greth::reth_pipe_exec_layer_ext_v2::ExecutionResult;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -83,22 +74,22 @@ impl<EthApi: RethEthCall> GravityCoordinator<EthApi> {
 
             // Signal to GravityBenchNode that block execution is complete
             // This allows immediate sending of the next block instead of waiting for canonical block event
-            if let Some(ref tx) = self.block_executed_tx {
-                let mut new_epoch = None;
-                for gravity_event in gravity_events {
-                    match gravity_event {
-                        GravityEvent::NewEpoch(epoch, _) => {
-                            new_epoch = Some(epoch);
-                        }
-                        _ => {}
-                    }
-                }
-                if let Err(e) = tx.send((block_number, new_epoch)) {
-                    warn!("Failed to send block execution signal: {}", e);
-                } else {
-                    info!("✅ [GravityBenchCoordinator] Signaled block execution complete: block_number={}, new_epoch={:?}", block_number, new_epoch);
-                }
-            }
+            // if let Some(ref tx) = self.block_executed_tx {
+            //     let mut new_epoch = None;
+            //     for gravity_event in gravity_events {
+            //         match gravity_event {
+            //             GravityEvent::NewEpoch(epoch, _) => {
+            //                 new_epoch = Some(epoch);
+            //             }
+            //             _ => {}
+            //         }
+            //     }
+            //     if let Err(e) = tx.send((block_number, new_epoch)) {
+            //         warn!("Failed to send block execution signal: {}", e);
+            //     } else {
+            //         info!("✅ [GravityBenchCoordinator] Signaled block execution complete: block_number={}, new_epoch={:?}", block_number, new_epoch);
+            //     }
+            // }
         }
     }
 
