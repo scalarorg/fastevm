@@ -47,8 +47,6 @@ where
     commited_queue: RwLock<BTreeMap<u64, MysticetiCommittedSubdag<Arc<Pool::Transaction>>>>,
     // Transactions are not included into last payload due to missing of ancestors
     pending_transactions: RwLock<Vec<Arc<Pool::Transaction>>>,
-
-    lock: Mutex<()>,
     // latest_state: Option<StateProviderBox>,
 }
 
@@ -73,7 +71,6 @@ where
             first_committed_subdag: RwLock::new(None),
             commited_queue: RwLock::new(BTreeMap::new()),
             pending_transactions: RwLock::new(Vec::new()),
-            lock: Mutex::new(()),
         }
     }
     /// Get next committed subdag
@@ -82,9 +79,23 @@ where
     /// * `Some(subdag)` - If there is a next committed subdag.
     /// * `None` - If there is no next committed subdag.
     /// This method is used for building first empty ordered block for update timestamp and epoch.
+    /// Loop through committed queue to find the first committed subdag with none zero timestamp
     pub fn get_fist_committed_subdag(&self) -> Option<MysticetiCommittedSubdag<Arc<Pool::Transaction>>> {
-        let first_committed_subdag = self.first_committed_subdag.read().unwrap();
-        return first_committed_subdag.clone();
+        let committed_queue = self.commited_queue.read().unwrap();
+        for (index, subdag) in committed_queue.iter() {
+            if subdag.timestamp_ms > 0 {
+                return Some(subdag.clone());
+            }
+        }
+        return None;    
+    }
+    fn get_pending_transactions(&self) -> Vec<Arc<Pool::Transaction>> {
+        let pending_transactions = self.pending_transactions.read().unwrap();
+        pending_transactions.clone()
+    }
+    fn update_pending_transactions(&self, new_transactions: Vec<Arc<Pool::Transaction>>) {
+        let mut pending_transactions = self.pending_transactions.write().unwrap();
+        *pending_transactions = new_transactions;
     }
     /// Retrieves the first and last committed subdags from the next batch to be processed.
     ///
@@ -142,7 +153,7 @@ where
     /// Get memory statistics for monitoring
     pub fn memory_stats(&self) -> (usize, usize, u64) {
         let committed_queue = self.commited_queue.read().unwrap();
-        let pending_transactions = self.pending_transactions.read().unwrap();
+        let pending_transactions = self.get_pending_transactions();
         let next_index = *self.next_committed_index.read().unwrap();
         
         (
@@ -156,7 +167,7 @@ where
     /// This is a rough estimate based on typical transaction sizes
     pub fn estimate_memory_usage(&self) -> (u64, u64) {
         let committed_queue = self.commited_queue.read().unwrap();
-        let pending_transactions = self.pending_transactions.read().unwrap();
+        let pending_transactions = self.get_pending_transactions();
         
         // Estimate: ~120 bytes per transaction + overhead
         // Subdag overhead: ~200 bytes per subdag
@@ -294,64 +305,75 @@ where
             let next_committed_transactions = next_committed_transactions.unwrap();
             next_committed_subdags_batch.push(next_committed_transactions);
         }
-        let pending_transactions = self.pending_transactions.read().unwrap();
+        let pending_transactions = self.get_pending_transactions();
         let sorted_transactions =
             self.create_proposal_transactions(&pending_transactions[..], next_committed_subdags_batch);
         //Clone pending transactions for building a BestTransactions iterator
         return sorted_transactions;
     }
-    /// Remove mined transactions from both pending transactions and committed queue
-    pub fn remove_mined_transactions(&self, block_number: u64, tx_hashes: &HashSet<TxHash>) {
-        //We lock the consensus pool to ensure thread safety
-        //make sure committed queue is not modified while removing mined transactions
-        let _lock = self.lock.lock().unwrap();
-        // Lock both collections to ensure thread safety
-        let pending_transactions = self.pending_transactions.read().unwrap();
-        let mut committed_queue = self.commited_queue.write().unwrap();
+    /// Update consensus pool after a block is mined
+    /// # Arguments
+    ///
+    /// * `block_number` - The number of the block that is mined.
+    /// * `tx_hashes` - The hashes of the transactions that are mined.
+    ///
+    /// Remove mined transactions from committed queue and pending transactions
+    /// Update next committed index for next batch
+    /// # Returns
+    ///
+    /// * `None` - If there is no next committed subdag.
+    pub fn update_mined_block(&self, block_number: u64, tx_hashes: &HashSet<TxHash>) {
+        let pending_transactions = self.get_pending_transactions();
+        let subdag_per_block = self.committed_subdags_per_block;
+        let mut committed_subdags_len = 0;
         let mut next_committed_index = self.next_committed_index.write().unwrap();
         let mut next_committed_subdags_batch = Vec::new();
-        for i in 0..self.committed_subdags_per_block {
-            let index = *next_committed_index + i as u64;
-            let committed_transactions = committed_queue.remove(&index);
-            assert!(committed_transactions.is_some());
-            next_committed_subdags_batch.push(committed_transactions.unwrap());
+        {
+            let mut committed_queue = self.commited_queue.write().unwrap();
+            committed_subdags_len = committed_queue.len();
+            for i in 0..subdag_per_block {
+                let index = *next_committed_index + i as u64;
+                let committed_transactions = committed_queue.remove(&index);
+                assert!(committed_transactions.is_some());
+                next_committed_subdags_batch.push(committed_transactions.unwrap());
+            }
         }
-        
         // Use reference to avoid cloning the entire pending_transactions vector
         let mut sorted_transactions =
-            self.create_proposal_transactions(&pending_transactions[..], next_committed_subdags_batch);
+            self.create_proposal_transactions(pending_transactions.as_slice(), next_committed_subdags_batch);
         let initial_pending_len = pending_transactions.len();
+        let mut new_pending_len = 0;
         // Remove mined transactions from pending transactions
+        debug!("Remove mined transactions from pending transactions. Pending transactions len: {}", initial_pending_len);
         sorted_transactions.retain(|tx| !tx_hashes.contains(tx.hash()));
-        
-        let mut pending_transactions = self.pending_transactions.write().unwrap();
-        *pending_transactions = sorted_transactions;
+        debug!("After remove mined transactions. Pending transactions len: {}", sorted_transactions.len());
+        self.update_pending_transactions(sorted_transactions);
         //Increase next committed index for next batch
-        *next_committed_index += self.committed_subdags_per_block as u64;
+        *next_committed_index += subdag_per_block as u64;
 
         // Calculate estimated memory usage
-        let (committed_mem, pending_mem) = {
-            let committed_tx_count: usize = committed_queue
-                .values()
-                .map(|subdag| subdag.transactions.len())
-                .sum();
-            let avg_tx_size = 200u64; // Conservative estimate with overhead
-            let subdag_overhead = 200u64;
-            let committed_mem = (committed_tx_count as u64 * avg_tx_size) + 
-                              (committed_queue.len() as u64 * subdag_overhead);
-            let pending_mem = pending_transactions.len() as u64 * avg_tx_size;
-            (committed_mem, pending_mem)
-        };
+        // let (committed_mem, pending_mem) = {
+        //     let committed_tx_count: usize = committed_queue
+        //         .values()
+        //         .map(|subdag| subdag.transactions.len())
+        //         .sum();
+        //     let avg_tx_size = 200u64; // Conservative estimate with overhead
+        //     let subdag_overhead = 200u64;
+        //     let committed_mem = (committed_tx_count as u64 * avg_tx_size) + 
+        //                       (committed_queue.len() as u64 * subdag_overhead);
+        //     let pending_mem = new_pending_len as u64 * avg_tx_size;
+        //     (committed_mem, pending_mem)
+        // };
         
         debug!(
-            "Removed mined transactions in block number {:?} with {:?} mined txs. Pending txs reduced from {} to {}. Remain committed subdags len: {}. Estimated memory: committed={:.2}MB, pending={:.2}MB",
+            "Removed mined transactions in block number {:?} with {:?} mined txs. Pending txs reduced from {} to {}. Remain committed subdags len: {}.",
             block_number,
             tx_hashes.len(),
             initial_pending_len,
-            pending_transactions.len(),
-            committed_queue.len(),
-            committed_mem as f64 / 1_000_000.0,
-            pending_mem as f64 / 1_000_000.0
+            new_pending_len,
+            committed_subdags_len - subdag_per_block,
+            // committed_mem as f64 / 1_000_000.0,
+            // pending_mem as f64 / 1_000_000.0
         );
     }
 }
@@ -437,7 +459,7 @@ mod tests {
 
     // Helper function to create a mock MysticetiCommittedSubdag
     fn create_mock_subdag(
-        round: u64,
+        round: usize,
         transactions: Vec<Arc<<NoopTransactionPool as reth_transaction_pool::TransactionPool>::Transaction>>,
     ) -> MysticetiCommittedSubdag<Arc<<NoopTransactionPool as reth_transaction_pool::TransactionPool>::Transaction>> {
         MysticetiCommittedSubdag {
