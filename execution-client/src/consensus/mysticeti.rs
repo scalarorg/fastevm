@@ -348,13 +348,17 @@ where
                     {
                         info!("Pull executed block hash successfully: block_id={:?}, block_number={:?}, block_hash={:?}", 
                             block_id, block_number, block_hash);
-                        if !txs_info.is_empty() {
-                            // extract mined transactions from txs_info
-                            let mined_txs = txs_info.iter().map(|tx| tx.tx_hash.clone()).collect::<HashSet<TxHash>>();
-                            // Remove mined transactions from consensus pool
-                            consensus_pool.remove_mined_transactions(block_number, &mined_txs);
-                        }                       
+                        // extract mined transactions from txs_info
+                        let mined_txs = txs_info.iter().map(|tx| tx.tx_hash.clone()).collect::<HashSet<TxHash>>();
                         *canonical_block_number.write() = block_number;  
+                        if block_number > 1 {
+                            // Remove mined transactions from consensus pool and update next committed index
+                            // Block with number 1 is synthetic block for update timestamp and epoch.
+                            consensus_pool.update_mined_block(block_number, &mined_txs);
+                        }
+                        else {
+                            info!("Executed genesis block. Skip removing mined transactions.");
+                        }
                         for event in gravity_events {
                             match event {
                                 GravityEvent::NewEpoch(epoch, _) => {
@@ -479,11 +483,11 @@ where
                 return self.build_ordered_block(proposal_transactions, last_committed_subdag).map(Option::Some);
             }
         } else {
-            info!("No last ordered block. Build first empty ordered block for update timestamp and epoch.");
             let first_committed_subdag = self.consensus_pool.get_fist_committed_subdag();
             if first_committed_subdag.is_none() {
                 return Ok(None);
             }
+            info!("No last ordered block. Build first empty ordered block for update timestamp and epoch.");
             return self.build_ordered_block(vec![], first_committed_subdag.unwrap()).map(Option::Some);
         }
         info!("No proposal transactions available. Wating for the next committed subdag. Committed subdag queue size: {:?}", self.consensus_pool.queue_size());
@@ -700,7 +704,7 @@ where
                                 //     .map(|tx| calculate_tx_hash(tx))
                                 //     .collect::<HashSet<TxHash>>();
                                  //Remove pending buffer
-                                self.consensus_pool.remove_mined_transactions(pending_block_number, &tx_hashes);
+                                self.consensus_pool.update_mined_block(pending_block_number, &tx_hashes);
                                 // Try to execute next built payload
                                 if let Some(next_payload) = self.payload_buffer.pop_front() {
                                     info!("Execute next payload from buffer {:?}.", next_payload.block().header().number());
