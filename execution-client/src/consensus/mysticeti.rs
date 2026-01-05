@@ -348,6 +348,17 @@ where
                     {
                         info!("Pull executed block hash successfully: block_id={:?}, block_number={:?}, block_hash={:?}", 
                             block_id, block_number, block_hash);
+                        match pipeline_api_clone
+                            .commit_executed_block_hash(block_id, Some(block_hash)) {
+                            Some(_) => {
+                                info!("Committed executed block hash successfully: block_id={:?}, block_number={:?}, block_hash={:?}", 
+                                    block_id, block_number, block_hash);
+                            }
+                            None => {
+                                error!("Failed to commit executed block hash: block_id={:?}, block_number={:?}, block_hash={:?}", 
+                                    block_id, block_number, block_hash);
+                            }
+                        }
                         // extract mined transactions from txs_info
                         let mined_txs = txs_info.iter().map(|tx| tx.tx_hash.clone()).collect::<HashSet<TxHash>>();
                         *canonical_block_number.write() = block_number;  
@@ -387,6 +398,7 @@ where
                         let block_number = ordered_block.number;
                         let block_id = ordered_block.id;
                         let parent_id = ordered_block.parent_id;
+                        let number_of_transactions = ordered_block.transactions.len();
                         debug!("Push ordered block to pipeline API: Block number: {:?}, Block id: 0x{:?}, Parent id: 0x{:?}", block_number, block_id, parent_id);
                         // Push the block to the pipeline API (consumes the block)
                         let push_result = pipeline_api_clone.push_ordered_block(ordered_block);
@@ -411,8 +423,8 @@ where
                                 enable_randomness: false, // Not used for tracking
                             };
                             self.last_ordered_block.replace(minimal_block);
-                            info!("Push ordered block successfully: Block number: {:?}, Block id: {:?}", 
-                                block_number, block_id);
+                            info!("Push ordered block successfully: Block number: {:?}, Block id: {:?}, Number of transactions: {:?}", 
+                                block_number, block_id, number_of_transactions);
                         } else {
                             error!(
                                 "Push ordered block failed: Block number: {:?}, Block id: {:?}",
@@ -464,10 +476,8 @@ where
                 self.consensus_pool.next_committed_subdag_batch()
             {
                 info!(
-                    "Create proposal block with committed batch size: {:?}:
-             FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}},
-             LastCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}
-             Queue size: {:?}",
+                    "Queue size: {:?}, Create proposal block with committed batch size: {:?}: FirstCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}, LastCommittedSubdag: {{index: {:?}, timestamp: {:?}, round: {:?}}}",
+                    self.consensus_pool.queue_size(),
                     last_committed_subdag.commit_ref.round
                         - first_committed_subdag.commit_ref.round
                         + 1,
@@ -477,7 +487,6 @@ where
                     last_committed_subdag.commit_ref.round,
                     last_committed_subdag.timestamp_ms,
                     last_committed_subdag.leader.round,
-                    self.consensus_pool.queue_size(),
                 );
                 let proposal_transactions = self.consensus_pool.get_proposal_transactions();
                 return self.build_ordered_block(proposal_transactions, last_committed_subdag).map(Option::Some);
@@ -490,7 +499,7 @@ where
             info!("No last ordered block. Build first empty ordered block for update timestamp and epoch.");
             return self.build_ordered_block(vec![], first_committed_subdag.unwrap()).map(Option::Some);
         }
-        info!("No proposal transactions available. Wating for the next committed subdag. Committed subdag queue size: {:?}", self.consensus_pool.queue_size());
+        debug!("No proposal transactions available. Wating for the next committed subdag. Committed subdag queue size: {:?}", self.consensus_pool.queue_size());
         return Ok(None);
     }
     /// Builds an `OrderedBlock` from transactions and committed subdag information.
@@ -600,7 +609,7 @@ where
                     }
                 })
             });
-
+        info!("Build ordered block with number: {:?}, number of transactions: {:?}", block_number, signed_transactions.len());
         let ordered_block = OrderedBlock {
             epoch,
             parent_id: parent_id,
