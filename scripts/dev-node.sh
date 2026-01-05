@@ -300,7 +300,7 @@ start_execution_node() {
         "--instance" "1"
         "--engine.always-process-payload-attributes-on-canonical-head"
         "--http"
-        "--http.api" "eth,net,web3,admin,debug"
+        "--http.api" "eth,net,web3,admin,debug,txpool"
         "--http.addr" "0.0.0.0"
         "--http.port" "$HTTP_PORT"
         "--http.corsdomain" "*"
@@ -310,7 +310,7 @@ start_execution_node() {
     if [ "$ENABLE_WS" = true ]; then
         cmd_args+=(
             "--ws"
-            "--ws.api" "eth,net,web3,admin,debug"
+            "--ws.api" "eth,net,web3,admin,debug,txpool"
             "--ws.addr" "0.0.0.0"
             "--ws.port" "$WS_PORT"
             "--ws.origins" "*"

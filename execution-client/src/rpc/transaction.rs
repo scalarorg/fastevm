@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
+    types::ErrorObjectOwned,
     PendingSubscriptionSink, SubscriptionMessage,
 };
 use parking_lot::RwLock;
@@ -286,13 +287,51 @@ where
 {
     async fn send_raw_transaction_async(&self, tx: RpcBytes) -> RpcResult<()> {
         // Broadcast raw transaction to subscribers
-        let _ = self.sender_raw_tx.send(vec![tx]);
+        let result = self.sender_raw_tx.send(vec![tx]);
+        if result.is_err() {
+            error!(
+                "Failed to send raw transaction to subscribers: {:?}",
+                result
+            );
+            return Err(ErrorObjectOwned::owned(
+                -32000,
+                format!(
+                    "Failed to send raw transactions to subscribers: {:?}",
+                    result
+                ),
+                Some(result.unwrap()),
+            )
+            .into_owned());
+        }
+        let len = result.unwrap(); // unwrap is safe because we checked the error above
+        if len > 1000 {
+            info!("Number of transactions in the buffer: {:?}", len);
+        }
         Ok(())
     }
 
     async fn send_raw_transactions_async(&self, txs: Vec<RpcBytes>) -> RpcResult<()> {
         // Broadcast raw transactions to subscribers
-        let _ = self.sender_raw_tx.send(txs);
+        let result = self.sender_raw_tx.send(txs);
+        if result.is_err() {
+            error!(
+                "Failed to send raw transactions to subscribers: {:?}",
+                result
+            );
+            return Err(ErrorObjectOwned::owned(
+                -32000,
+                format!(
+                    "Failed to send raw transactions to subscribers: {:?}",
+                    result
+                ),
+                Some(result.unwrap()),
+            )
+            .into_owned());
+        }
+        let len = result.unwrap(); // unwrap is safe because we checked the error above
+        if len > 1000 {
+            info!("Number of transactions in the buffer: {:?}", len);
+        }
         Ok(())
     }
 

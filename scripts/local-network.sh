@@ -32,7 +32,7 @@ EXECUTION_CLIENT=$PROJECT_ROOT/target/release/fastevm-execution
 #CONSENSUS_CLIENT=evm-consensus
 CONSENSUS_CLIENT=~/workspace/codelight/scalar-consensus/mysticeti/target/release/evm-consensus
 
-GRAVITY_PIPE_BLOCK_GAS_LIMIT=5000000000
+GRAVITY_PIPE_BLOCK_GAS_LIMIT=10000000000
 GRAVITY_CACHE_MAX_PERSIST_GAP=64
 
 # Default values for account generation
@@ -602,7 +602,7 @@ start_execution_node() {
         "--instance" "$node_index"
         "--engine.always-process-payload-attributes-on-canonical-head"
         "--http"
-        "--http.api" "eth,net,web3,admin,debug"
+        "--http.api" "eth,net,web3,admin,debug,txpool"
         "--http.addr" "0.0.0.0"
         "--http.port" "$http_port"
         "--http.corsdomain" "*"
