@@ -9827,6 +9827,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "tokio-test",
 ]
 
 [[package]]
