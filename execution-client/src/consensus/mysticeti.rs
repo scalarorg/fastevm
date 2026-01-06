@@ -7,6 +7,7 @@ use alloy_rpc_types_engine::PayloadAttributes;
 use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::Result;
 use futures_util::StreamExt;
+// Import GravityEvent from gravity framework (same type used by ExecutionResult)
 use gravity_api_types::events::contract_event::GravityEvent;
 use greth::{
     gravity_storage::{block_view_storage::BlockViewStorage, GravityStorage},
@@ -394,7 +395,7 @@ where
                                 parent_id,
                                 id: block_id,
                                 number: block_number,
-                                timestamp: 0,            // Not used for tracking
+                                timestamp_us: 0,            // Not used for tracking
                                 coinbase: Address::ZERO, // Not used for tracking
                                 prev_randao: B256::ZERO, // Not used for tracking
                                 withdrawals: Withdrawals::default(), // Not used for tracking
@@ -598,7 +599,7 @@ where
             parent_id: parent_id,
             id: block_id,
             number: block_number,
-            timestamp,
+            timestamp_us: timestamp,
             coinbase,
             prev_randao,
             withdrawals,
