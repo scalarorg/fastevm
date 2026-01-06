@@ -1,8 +1,6 @@
 use crate::rpc::api::{Bytes as RpcBytes, RawTransactionApiServer};
 use crate::types::TxValidatorConfig;
-use alloy_primitives::Bytes;
 use async_trait::async_trait;
-use eyre::Result;
 use jsonrpsee::{
     core::{RpcResult, SubscriptionResult},
     types::ErrorObjectOwned,
@@ -12,79 +10,68 @@ use parking_lot::RwLock;
 use reth_ethereum::{
     chainspec::EthereumHardforks,
     pool::TransactionPool,
-    rpc::{
-        api::eth::RpcConvert,
-        eth::{utils::recover_raw_transaction, RpcNodeCore},
-        EthApi,
-    },
+    rpc::{api::eth::RpcConvert, eth::RpcNodeCore, EthApi},
 };
 use reth_provider::{ChainSpecProvider, StateProviderFactory};
 use reth_transaction_pool::{
-    BlobStore, EthTransactionValidator, PoolTransaction, TransactionOrigin,
-    TransactionValidationOutcome, TransactionValidationTaskExecutor, TransactionValidator,
+    BlobStore, EthTransactionValidator, TransactionValidationTaskExecutor,
 };
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::{
-    sync::{
-        broadcast,
-        mpsc::{self, Receiver},
-    },
-    task::JoinHandle,
-};
-use tracing::{debug, error, info, warn};
+use tokio::sync::broadcast;
+use tracing::{debug, error, info};
 // Configuration constants for transaction batching
 const BATCH_SIZE_THRESHOLD: usize = 100; // Send batch when we have 100 transactions
 const BATCH_TIMEOUT_MS: u64 = 100; // Send batch after 10 ms even if not full
 const DEFAULT_BROADCAST_CAPACITY: usize = 100_000;
-const TX_QUEUE_CAPACITY: usize = 10_000; // Capacity of transaction processing queue
-const LOG_BATCH_SIZE: usize = 100; // Log every N transactions to reduce I/O overhead
+// const TX_QUEUE_CAPACITY: usize = 10_000; // Capacity of transaction processing queue
+// const LOG_BATCH_SIZE: usize = 100; // Log every N transactions to reduce I/O overhead
 
-/// Validates a raw transaction and converts it to a pool transaction
-/// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
-async fn validate_raw_transaction<
-    Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
-    Pool: TransactionPool,
->(
-    tx_validator: &Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
-    raw_tx: &Bytes,
-) -> Result<bool> {
-    let transaction = recover_raw_transaction(&raw_tx)
-        .map(|recovered| Pool::Transaction::from_pooled(recovered))?;
-    let validator_guard = tx_validator.read();
-    if let Some(validator) = &*validator_guard {
-        let outcome = validator
-            .validate_transaction(TransactionOrigin::Local, transaction)
-            .await;
-        return Ok(outcome.is_valid());
-    }
-    Ok(true)
-}
+// /// Validates a raw transaction and converts it to a pool transaction
+// /// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
+// async fn validate_raw_transaction<
+//     Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
+//     Pool: TransactionPool,
+// >(
+//     tx_validator: &Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
+//     raw_tx: &Bytes,
+// ) -> Result<bool> {
+//     let transaction = recover_raw_transaction(&raw_tx)
+//         .map(|recovered| Pool::Transaction::from_pooled(recovered))?;
+//     let validator_guard = tx_validator.read();
+//     if let Some(validator) = &*validator_guard {
+//         let outcome = validator
+//             .validate_transaction(TransactionOrigin::Local, transaction)
+//             .await;
+//         return Ok(outcome.is_valid());
+//     }
+//     Ok(true)
+// }
 
-/// Validates a batch of raw transactions and converts it to a pool transaction
-/// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
-async fn validate_raw_transactions<
-    Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
-    Pool: TransactionPool,
->(
-    tx_validator: &Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
-    raw_txs: &Vec<Bytes>,
-) -> Result<Vec<TransactionValidationOutcome<Pool::Transaction>>> {
-    let mut transactions = Vec::new();
-    for raw_tx in raw_txs {
-        let transaction = recover_raw_transaction(&raw_tx)
-            .map(|recovered| Pool::Transaction::from_pooled(recovered))?;
-        transactions.push(transaction);
-    }
-    let validator_guard = tx_validator.read();
-    if let Some(validator) = &*validator_guard {
-        let outcomes = validator
-            .validate_transactions_with_origin(TransactionOrigin::Local, transactions)
-            .await;
-        return Ok(outcomes);
-    }
-    Ok(Vec::new())
-}
+// /// Validates a batch of raw transactions and converts it to a pool transaction
+// /// Returns Ok(Some(transaction)) if valid, Ok(None) if invalid but recoverable, Err if fatal error
+// async fn validate_raw_transactions<
+//     Client: ChainSpecProvider<ChainSpec: EthereumHardforks> + StateProviderFactory,
+//     Pool: TransactionPool,
+// >(
+//     tx_validator: &Arc<RwLock<Option<EthTransactionValidator<Client, Pool::Transaction>>>>,
+//     raw_txs: &Vec<Bytes>,
+// ) -> Result<Vec<TransactionValidationOutcome<Pool::Transaction>>> {
+//     let mut transactions = Vec::new();
+//     for raw_tx in raw_txs {
+//         let transaction = recover_raw_transaction(&raw_tx)
+//             .map(|recovered| Pool::Transaction::from_pooled(recovered))?;
+//         transactions.push(transaction);
+//     }
+//     let validator_guard = tx_validator.read();
+//     if let Some(validator) = &*validator_guard {
+//         let outcomes = validator
+//             .validate_transactions_with_origin(TransactionOrigin::Local, transactions)
+//             .await;
+//         return Ok(outcomes);
+//     }
+//     Ok(Vec::new())
+// }
 
 /// The type that implements the `txpool` rpc namespace trait
 pub struct TransactionHandler<
@@ -114,7 +101,6 @@ impl<
 {
     pub fn new(pool: Pool, eth_api: EthApi<N, Rpc>) -> Self {
         let (sender_raw_tx, _) = broadcast::channel(DEFAULT_BROADCAST_CAPACITY);
-        let (tx_queue_sender, _tx_queue_receiver) = mpsc::channel::<Bytes>(TX_QUEUE_CAPACITY);
 
         // Start single worker for transaction processing
         //info!("Starting single transaction processing worker");
@@ -130,57 +116,57 @@ impl<
             // worker_handle,
         }
     }
-    /// Start transaction processing worker to send transactions to reth pool
-    /// This is not need if we use create payload from consensus pool only
-    fn start_worker(pool: Pool, mut tx_queue_receiver: Receiver<Bytes>) -> JoinHandle<()> {
-        tokio::spawn(async move {
-            let mut processed_txs = 0;
-            let mut last_log_count = 0;
+    // /// Start transaction processing worker to send transactions to reth pool
+    // /// This is not need if we use create payload from consensus pool only
+    // fn start_worker(pool: Pool, mut tx_queue_receiver: Receiver<Bytes>) -> JoinHandle<()> {
+    //     tokio::spawn(async move {
+    //         let mut processed_txs = 0;
+    //         let mut last_log_count = 0;
 
-            while let Some(raw_tx) = tx_queue_receiver.recv().await {
-                processed_txs += 1;
+    //         while let Some(raw_tx) = tx_queue_receiver.recv().await {
+    //             processed_txs += 1;
 
-                // Process the transaction
-                match recover_raw_transaction(&raw_tx) {
-                    Ok(recovered) => {
-                        let pool_transaction =
-                            <Pool as TransactionPool>::Transaction::from_pooled(recovered);
-                        match pool
-                            .add_transaction(TransactionOrigin::Local, pool_transaction)
-                            .await
-                        {
-                            Ok(_) => {
-                                // Only log debug messages occasionally to reduce I/O overhead
-                                if processed_txs % LOG_BATCH_SIZE == 0 {
-                                    debug!(
-                                        "Successfully added transaction to pool (total: {})",
-                                        processed_txs
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to add transaction to pool: {:?}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to recover transaction: {:?}", e);
-                    }
-                }
+    //             // Process the transaction
+    //             match recover_raw_transaction(&raw_tx) {
+    //                 Ok(recovered) => {
+    //                     let pool_transaction =
+    //                         <Pool as TransactionPool>::Transaction::from_pooled(recovered);
+    //                     match pool
+    //                         .add_transaction(TransactionOrigin::Local, pool_transaction)
+    //                         .await
+    //                     {
+    //                         Ok(_) => {
+    //                             // Only log debug messages occasionally to reduce I/O overhead
+    //                             if processed_txs % LOG_BATCH_SIZE == 0 {
+    //                                 debug!(
+    //                                     "Successfully added transaction to pool (total: {})",
+    //                                     processed_txs
+    //                                 );
+    //                             }
+    //                         }
+    //                         Err(e) => {
+    //                             error!("Failed to add transaction to pool: {:?}", e);
+    //                         }
+    //                     }
+    //                 }
+    //                 Err(e) => {
+    //                     error!("Failed to recover transaction: {:?}", e);
+    //                 }
+    //             }
 
-                // Log progress every LOG_BATCH_SIZE transactions
-                if processed_txs - last_log_count >= LOG_BATCH_SIZE {
-                    info!("Processed {} transactions", processed_txs);
-                    last_log_count = processed_txs;
-                }
-            }
+    //             // Log progress every LOG_BATCH_SIZE transactions
+    //             if processed_txs - last_log_count >= LOG_BATCH_SIZE {
+    //                 info!("Processed {} transactions", processed_txs);
+    //                 last_log_count = processed_txs;
+    //             }
+    //         }
 
-            info!(
-                "Transaction processing worker shutting down (processed {} total)",
-                processed_txs
-            );
-        })
-    }
+    //         info!(
+    //             "Transaction processing worker shutting down (processed {} total)",
+    //             processed_txs
+    //         );
+    //     })
+    // }
     pub fn with_config_receiver(
         mut self,
         receiver: tokio::sync::oneshot::Receiver<TxValidatorConfig<C, S>>,

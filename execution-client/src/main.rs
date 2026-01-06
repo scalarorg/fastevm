@@ -43,9 +43,8 @@ use greth::{
     reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
 };
 use reth_chainspec::ChainSpec;
-use reth_ethereum::EthPrimitives;
 use reth_ethereum::{
-    chainspec::{ChainSpecProvider, EthChainSpec},
+    chainspec::EthChainSpec,
     cli::{chainspec::EthereumChainSpecParser, Cli},
     node::{
         builder::{components::BasicPayloadServiceBuilder, NodeHandle},
@@ -54,23 +53,12 @@ use reth_ethereum::{
     },
 };
 use reth_node_api::Block;
-use reth_pipe_exec_layer_event_bus::get_pipe_exec_layer_event_bus;
 use reth_provider::{BlockHashReader, BlockNumReader, BlockReader};
 // use reth_ethereum_cli::{chainspec::EthereumChainSpecParser, interface::Cli};
 use alloy_eips::BlockHashOrNumber;
 use alloy_rpc_types_eth::TransactionRequest;
 use std::sync::Arc;
 use tracing::{error, info, warn};
-
-// Use in cli
-use bip39 as _;
-use hdwallet as _;
-// use hex as _;
-use reth_network_peers as _;
-// use reth_rpc_layer as _;
-use secp256k1::{self as _};
-// use serde_json as _;
-use sha2 as _;
 
 /// Extends the node with pipe execution layer functionality.
 ///
@@ -272,7 +260,7 @@ fn main() -> eyre::Result<()> {
                             info!("📦 [Gravity] Pipe execution disabled");
                             return Ok(());
                         }
-                        let chain_spec = ctx.provider().chain_spec();
+                        // let chain_spec = ctx.provider().chain_spec();
                         // Access the EthApi instance from the registry
                         let eth_api = ctx.registry.eth_api().clone();
 
@@ -283,11 +271,20 @@ fn main() -> eyre::Result<()> {
                         // Start validator reconstruction thread
                         listener.start_txvalidator_config_listener();
 
-                        let consensus_handler = MysticetiConsensusHandler::new(
-                            consensus_pool.clone(),
-                            pool.clone(),
-                            chain_spec,
-                        );
+                        let consensus_handler: MysticetiConsensusHandler<
+                            reth_transaction_pool::Pool<
+                                reth_transaction_pool::TransactionValidationTaskExecutor<
+                                    reth_transaction_pool::EthTransactionValidator<
+                                        _,
+                                        reth_transaction_pool::EthPooledTransaction,
+                                    >,
+                                >,
+                                reth_transaction_pool::CoinbaseTipOrdering<
+                                    reth_transaction_pool::EthPooledTransaction,
+                                >,
+                                DiskFileBlobStore,
+                            >,
+                        > = MysticetiConsensusHandler::new(consensus_pool);
                         // now we merge our extension namespace into all configured transports
                         ctx.modules.merge_configured(listener.into_rpc())?;
                         ctx.modules.merge_http(consensus_handler.into_rpc())?;
@@ -310,18 +307,14 @@ fn main() -> eyre::Result<()> {
                             match pipe_extend(provider, chain_spec, eth_api.clone()).await {
                                 Ok(pipeline_api) => {
                                     // Get the canonical state stream
-                                    let pipe_event_bus =
-                                        get_pipe_exec_layer_event_bus::<EthPrimitives>();
                                     let mut mysticeti_consensus =
                                         MysticetiConsensus::new_with_pipeline_api(
                                             task_executor,
                                             consensus_pool,
                                             node.provider,
-                                            eth_api,
                                             rx_built_payload,
                                             engine_handle,
                                             Some(pipeline_api),
-                                            pipe_event_bus,
                                             args.block_interval_ms,
                                         );
                                     if let Err(e) =
@@ -342,10 +335,10 @@ fn main() -> eyre::Result<()> {
                                     task_executor,
                                     consensus_pool,
                                     provider,
-                                    eth_api,
                                     rx_built_payload,
                                     engine_handle,
                                     args.block_interval_ms,
+                                    &eth_api,
                                 );
                             if let Err(e) = mysticeti_consensus.start_with_engine_handle().await {
                                 error!("Failed to start mysticeti consensus: {:?}", e);

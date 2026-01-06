@@ -19,7 +19,7 @@ use rpc_shared_api::MysticetiCommittedSubdag;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 use tracing::debug;
 
@@ -82,7 +82,7 @@ where
     /// Loop through committed queue to find the first committed subdag with none zero timestamp
     pub fn get_fist_committed_subdag(&self) -> Option<MysticetiCommittedSubdag<Arc<Pool::Transaction>>> {
         let committed_queue = self.commited_queue.read().unwrap();
-        for (index, subdag) in committed_queue.iter() {
+        for (_, subdag) in committed_queue.iter() {
             if subdag.timestamp_ms > 0 {
                 return Some(subdag.clone());
             }
@@ -150,41 +150,41 @@ where
         self.commited_queue.read().unwrap().len()
     }
 
-    /// Get memory statistics for monitoring
-    pub fn memory_stats(&self) -> (usize, usize, u64) {
-        let committed_queue = self.commited_queue.read().unwrap();
-        let pending_transactions = self.get_pending_transactions();
-        let next_index = *self.next_committed_index.read().unwrap();
+    // /// Get memory statistics for monitoring
+    // pub fn memory_stats(&self) -> (usize, usize, u64) {
+    //     let committed_queue = self.commited_queue.read().unwrap();
+    //     let pending_transactions = self.get_pending_transactions();
+    //     let next_index = *self.next_committed_index.read().unwrap();
         
-        (
-            committed_queue.len(),           // Number of committed subdags
-            pending_transactions.len(),      // Number of pending transactions
-            next_index,                      // Next committed index
-        )
-    }
+    //     (
+    //         committed_queue.len(),           // Number of committed subdags
+    //         pending_transactions.len(),      // Number of pending transactions
+    //         next_index,                      // Next committed index
+    //     )
+    // }
 
-    /// Estimate memory usage in bytes
-    /// This is a rough estimate based on typical transaction sizes
-    pub fn estimate_memory_usage(&self) -> (u64, u64) {
-        let committed_queue = self.commited_queue.read().unwrap();
-        let pending_transactions = self.get_pending_transactions();
+    // /// Estimate memory usage in bytes
+    // /// This is a rough estimate based on typical transaction sizes
+    // pub fn estimate_memory_usage(&self) -> (u64, u64) {
+    //     let committed_queue = self.commited_queue.read().unwrap();
+    //     let pending_transactions = self.get_pending_transactions();
         
-        // Estimate: ~120 bytes per transaction + overhead
-        // Subdag overhead: ~200 bytes per subdag
-        let avg_tx_size = 200u64; // Conservative estimate with overhead
-        let subdag_overhead = 200u64;
+    //     // Estimate: ~120 bytes per transaction + overhead
+    //     // Subdag overhead: ~200 bytes per subdag
+    //     let avg_tx_size = 200u64; // Conservative estimate with overhead
+    //     let subdag_overhead = 200u64;
         
-        let committed_tx_count: usize = committed_queue
-            .values()
-            .map(|subdag| subdag.transactions.len())
-            .sum();
+    //     let committed_tx_count: usize = committed_queue
+    //         .values()
+    //         .map(|subdag| subdag.transactions.len())
+    //         .sum();
         
-        let committed_memory = (committed_tx_count as u64 * avg_tx_size) + 
-                              (committed_queue.len() as u64 * subdag_overhead);
-        let pending_memory = pending_transactions.len() as u64 * avg_tx_size;
+    //     let committed_memory = (committed_tx_count as u64 * avg_tx_size) + 
+    //                           (committed_queue.len() as u64 * subdag_overhead);
+    //     let pending_memory = pending_transactions.len() as u64 * avg_tx_size;
         
-        (committed_memory, pending_memory)
-    }
+    //     (committed_memory, pending_memory)
+    // }
 }
 
 impl<Pool: TransactionPool> ConsensusPool<Pool>
@@ -342,15 +342,15 @@ where
         let mut sorted_transactions =
             self.create_proposal_transactions(pending_transactions.as_slice(), next_committed_subdags_batch);
         let initial_pending_len = pending_transactions.len();
-        let mut new_pending_len = 0;
         // Remove mined transactions from pending transactions
         debug!("Remove mined transactions from pending transactions. Pending transactions len: {}", initial_pending_len);
         sorted_transactions.retain(|tx| !tx_hashes.contains(tx.hash()));
-        debug!("After remove mined transactions. Pending transactions len: {}", sorted_transactions.len());
+        let new_pending_len = sorted_transactions.len();
+        debug!("After remove mined transactions. Pending transactions len: {}", new_pending_len);
         self.update_pending_transactions(sorted_transactions);
         //Increase next committed index for next batch
         *next_committed_index += subdag_per_block as u64;
-
+        
         // Calculate estimated memory usage
         // let (committed_mem, pending_mem) = {
         //     let committed_tx_count: usize = committed_queue

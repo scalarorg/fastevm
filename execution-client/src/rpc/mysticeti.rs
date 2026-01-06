@@ -7,7 +7,6 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::error::PARSE_ERROR_CODE;
 use jsonrpsee::types::ErrorObjectOwned;
 use parking_lot::RwLock;
-use reth_ethereum::chainspec::EthChainSpec;
 use reth_ethereum::primitives::Recovered;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use rpc_shared_api::{CommittedSubDag, MysticetiCommittedSubdag};
@@ -55,108 +54,100 @@ fn convert_committed_subdag<T: PoolTransaction>(
 }
 
 /// The type that implements the `txpool` rpc namespace trait
-pub struct MysticetiConsensusHandler<Pool: TransactionPool, ChainSpec: EthChainSpec> {
+pub struct MysticetiConsensusHandler<Pool: TransactionPool> {
     /// Consensus pool keep committed transactions from mysticeti
     consensus_pool: Arc<ConsensusPool<Pool>>,
-    /// Transaction pool keep transactions from reth
-    tx_pool: Pool,
-    chain_spec: Arc<ChainSpec>,
+    // Transaction pool keep transactions from reth
+    //tx_pool: Pool,
+    //chain_spec: Arc<ChainSpec>,
     // For debugging
     total_txs: Arc<RwLock<u64>>,
 }
-impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<Pool, ChainSpec> {
+impl<Pool: TransactionPool> MysticetiConsensusHandler<Pool> {
     pub fn new(
         consensus_pool: Arc<ConsensusPool<Pool>>,
-        tx_pool: Pool,
-        chain_spec: Arc<ChainSpec>,
+        // tx_pool: Pool,
+        // chain_spec: Arc<ChainSpec>,
     ) -> Self {
         Self {
             consensus_pool,
-            tx_pool,
-            chain_spec,
+            // tx_pool,
+            // chain_spec,
             total_txs: Arc::new(RwLock::new(0)),
         }
     }
-    pub fn clone(&self) -> Self {
-        Self {
-            consensus_pool: self.consensus_pool.clone(),
-            tx_pool: self.tx_pool.clone(),
-            chain_spec: self.chain_spec.clone(),
-            total_txs: self.total_txs.clone(),
-        }
-    }
 }
-impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<Pool, ChainSpec> {
-    /// Process a single subdag
-    /// We add committed transactions to consensus pool
-    /// Add missing transactions from consensus pool to transaction pool
-    async fn process_subdags(&self, subdags: Vec<CommittedSubDag>) -> Result<()> {
-        let mut committed_subdags = Vec::new();
-        let fist_index = subdags.first().map(|subdag| subdag.commit_ref.round);
-        let last_index = subdags.last().map(|subdag| subdag.commit_ref.round);
-        let mut tx_counter = 0;
-        for subdag in subdags {
-            let committed_subdag = convert_committed_subdag::<Pool::Transaction>(subdag)?;
-            //Update transaction pool with committed transactions
-            tx_counter += committed_subdag.transactions.len();
-            if committed_subdag.transactions.len() > 0 {
-                self.update_pool_with_transactions(&committed_subdag)
-                    .await?;
-            }
-            committed_subdags.push(committed_subdag);
-        }
-        let mut total_txs = self.total_txs.write();
-        *total_txs += tx_counter as u64;
-        info!(
-            "Processed subdags from index {:?} to {:?}, Total transactions: {:?}",
-            fist_index,
-            last_index,
-            *self.total_txs.read()
-        );
-        self.consensus_pool.add_committed_subdags(committed_subdags);
+impl<Pool: TransactionPool> MysticetiConsensusHandler<Pool> {
+    // /// Process a single subdag
+    // /// We add committed transactions to consensus pool
+    // /// Add missing transactions from consensus pool to transaction pool
+    // async fn process_subdags(&self, subdags: Vec<CommittedSubDag>) -> Result<()> {
+    //     let mut committed_subdags = Vec::new();
+    //     let fist_index = subdags.first().map(|subdag| subdag.commit_ref.round);
+    //     let last_index = subdags.last().map(|subdag| subdag.commit_ref.round);
+    //     let mut tx_counter = 0;
+    //     for subdag in subdags {
+    //         let committed_subdag = convert_committed_subdag::<Pool::Transaction>(subdag)?;
+    //         //Update transaction pool with committed transactions
+    //         tx_counter += committed_subdag.transactions.len();
+    //         if committed_subdag.transactions.len() > 0 {
+    //             self.update_pool_with_transactions(&committed_subdag)
+    //                 .await?;
+    //         }
+    //         committed_subdags.push(committed_subdag);
+    //     }
+    //     let mut total_txs = self.total_txs.write();
+    //     *total_txs += tx_counter as u64;
+    //     info!(
+    //         "Processed subdags from index {:?} to {:?}, Total transactions: {:?}",
+    //         fist_index,
+    //         last_index,
+    //         *self.total_txs.read()
+    //     );
+    //     self.consensus_pool.add_committed_subdags(committed_subdags);
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    async fn update_pool_with_transactions(
-        &self,
-        committed_transactions: &MysticetiCommittedSubdag<Arc<Pool::Transaction>>,
-    ) -> Result<usize> {
-        let mut added_count = 0;
-        //Loop through all transactions in the subdag, add to pool if missing
-        for tx in committed_transactions.transactions.iter() {
-            let tx_hash = tx.hash();
-            //Check if transaction is in pool
-            let pooled_tx = self.tx_pool.get(tx_hash);
-            //If transaction is not in pool, add to pool
-            if pooled_tx.is_none() {
-                // debug!(
-                //     "Added subdag transaction to pool: {:?}, sender: {:?}, nonce: {:?}",
-                //     tx_hash,
-                //     tx.sender_ref(),
-                //     tx.nonce()
-                // );
-                //Add transaction to pool
-                let add_result = self
-                    .tx_pool
-                    .add_external_transaction(tx.as_ref().clone())
-                    .await;
-                if add_result.is_ok() {
-                    added_count += 1;
-                }
-                // else {
-                //     error!("Error adding transaction to pool: {:?}", add_result.err());
-                // }
-            }
-        }
+    // async fn update_pool_with_transactions(
+    //     &self,
+    //     committed_transactions: &MysticetiCommittedSubdag<Arc<Pool::Transaction>>,
+    // ) -> Result<usize> {
+    //     let mut added_count = 0;
+    //     //Loop through all transactions in the subdag, add to pool if missing
+    //     for tx in committed_transactions.transactions.iter() {
+    //         let tx_hash = tx.hash();
+    //         //Check if transaction is in pool
+    //         let pooled_tx = self.tx_pool.get(tx_hash);
+    //         //If transaction is not in pool, add to pool
+    //         if pooled_tx.is_none() {
+    //             // debug!(
+    //             //     "Added subdag transaction to pool: {:?}, sender: {:?}, nonce: {:?}",
+    //             //     tx_hash,
+    //             //     tx.sender_ref(),
+    //             //     tx.nonce()
+    //             // );
+    //             //Add transaction to pool
+    //             let add_result = self
+    //                 .tx_pool
+    //                 .add_external_transaction(tx.as_ref().clone())
+    //                 .await;
+    //             if add_result.is_ok() {
+    //                 added_count += 1;
+    //             }
+    //             // else {
+    //             //     error!("Error adding transaction to pool: {:?}", add_result.err());
+    //             // }
+    //         }
+    //     }
 
-        // debug!(
-        //     "Added {}/{} subdag transactions to pool",
-        //     added_count,
-        //     committed_transactions.transactions.len()
-        // );
-        Ok(added_count)
-    }
+    //     // debug!(
+    //     //     "Added {}/{} subdag transactions to pool",
+    //     //     added_count,
+    //     //     committed_transactions.transactions.len()
+    //     // );
+    //     Ok(added_count)
+    // }
     // async fn handle_raw_transaction(&self, tx: Bytes) -> Result<B256> {
     //     let recovered = recover_raw_transaction(&tx)?;
 
@@ -182,8 +173,8 @@ impl<Pool: TransactionPool, ChainSpec: EthChainSpec> MysticetiConsensusHandler<P
 }
 
 #[async_trait]
-impl<Pool: TransactionPool + 'static, ChainSpec: EthChainSpec + 'static> MysticetiConsensusApiServer
-    for MysticetiConsensusHandler<Pool, ChainSpec>
+impl<Pool: TransactionPool + 'static> MysticetiConsensusApiServer
+    for MysticetiConsensusHandler<Pool>
 {
     #[doc = " Submit commited subdag"]
     fn submit_committed_subdag(&self, subdag: CommittedSubDag) -> RpcResult<()> {
@@ -285,7 +276,7 @@ mod tests {
         let tx_pool = TestPool::default();
         let chain_spec = MAINNET.clone();
 
-        MysticetiConsensusHandler::new(consensus_pool, tx_pool, chain_spec)
+        MysticetiConsensusHandler::new(consensus_pool)
     }
 
     fn create_empty_subdag(round: usize) -> CommittedSubDag {

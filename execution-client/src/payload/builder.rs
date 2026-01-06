@@ -10,16 +10,13 @@ use reth_basic_payload_builder::{
 use reth_ethereum::{
     chainspec::{EthChainSpec, EthereumHardforks},
     evm::EthEvmConfig,
-    pool::{
-        BestTransactions, BestTransactionsAttributes, PoolTransaction, TransactionPool,
-        ValidPoolTransaction,
-    },
+    pool::{BestTransactions, BestTransactionsAttributes, PoolTransaction, TransactionPool},
     primitives::transaction::error::InvalidTransactionError,
     provider::ChainSpecProvider,
     storage::StateProviderFactory,
     EthPrimitives, TransactionSigned,
 };
-use reth_ethereum_payload_builder::{default_ethereum_payload, EthereumBuilderConfig};
+use reth_ethereum_payload_builder::EthereumBuilderConfig;
 use reth_evm::{
     block::{BlockExecutionError, BlockValidationError},
     execute::{BlockBuilder, BlockBuilderOutcome},
@@ -454,7 +451,7 @@ where
         mut cached_reads,
         config,
         cancel,
-        best_payload,
+        best_payload: _,
     } = args;
     let PayloadConfig {
         parent_header,

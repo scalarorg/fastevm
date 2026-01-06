@@ -11,14 +11,13 @@ use gravity_api_types::events::contract_event::GravityEvent;
 use greth::{
     gravity_storage::{block_view_storage::BlockViewStorage, GravityStorage},
     reth_pipe_exec_layer_ext_v2::{
-        onchain_config::OnchainConfigFetcher, ExecutionResult, OrderedBlock, PipeExecLayerApi,
+        ExecutionResult, OrderedBlock, PipeExecLayerApi,
     },
     reth_primitives::TransactionSigned,
     reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
     reth_tasks::TaskExecutor,
 };
 use parking_lot::RwLock;
-use reth_ethereum::EthPrimitives;
 use reth_ethereum::{
     chainspec::{ChainSpecProvider, EthChainSpec},
     node::api::{
@@ -31,7 +30,6 @@ use reth_ethereum::{
 };
 use reth_node_api::BlockBody;
 use reth_payload_builder::PayloadId;
-use reth_pipe_exec_layer_event_bus::PipeExecLayerEventBus;
 use reth_provider::CanonStateSubscriptions;
 use reth_transaction_pool::{PoolTransaction, TransactionPool};
 use rpc_shared_api::MysticetiCommittedSubdag;
@@ -85,10 +83,7 @@ pub struct MysticetiConsensus<
     // If None, payloads will be send to the consensus engine handle directly
     // Otherwise, payloads will be send to the pipeline API
     pipeline_api: Option<Arc<PipeExecLayerApi<Storage, EthApi>>>,
-    pipe_event_bus: Option<&'static PipeExecLayerEventBus<EthPrimitives>>,
     last_ordered_block: Option<OrderedBlock>,
-    // OnchainConfigFetcher is only needed when pipeline_api is Some
-    onchain_config_fetcher: Option<OnchainConfigFetcher<EthApi>>,
 }
 
 impl<Provider, Payload, Pool, EthApi, Storage>
@@ -105,7 +100,6 @@ where
         task_executor: TaskExecutor,
         consensus_pool: Arc<ConsensusPool<Pool>>,
         provider: Provider,
-        eth_api: EthApi,
         rx_built_payload: UnboundedReceiver<Payload::BuiltPayload>,
         engine_handle: ConsensusEngineHandle<Payload>,
         block_interval_ms: u64,
@@ -124,9 +118,7 @@ where
             last_built_payload: None,
             payload_buffer: VecDeque::new(),
             pipeline_api: None,
-            pipe_event_bus: None,
-            last_ordered_block: None,
-            onchain_config_fetcher: None,
+            last_ordered_block: None
         }
     }
 }
@@ -143,20 +135,20 @@ where
 {
     /// Create MysticetiConsensus with default Storage type
     /// This allows omitting the Storage type parameter when pipeline_api is None
+    /// The `_eth_api` parameter is only used for type inference and is not actually used
     pub fn new_with_default_storage(
         task_executor: TaskExecutor,
         consensus_pool: Arc<ConsensusPool<Pool>>,
         provider: Provider,
-        eth_api: EthApi,
         rx_built_payload: UnboundedReceiver<Payload::BuiltPayload>,
         engine_handle: ConsensusEngineHandle<Payload>,
         block_interval_ms: u64,
+        _eth_api: &EthApi,
     ) -> Self {
         Self::new(
             task_executor,
             consensus_pool,
             provider,
-            eth_api,
             rx_built_payload,
             engine_handle,
             block_interval_ms,
@@ -178,18 +170,11 @@ where
         task_executor: TaskExecutor,
         consensus_pool: Arc<ConsensusPool<Pool>>,
         provider: Provider,
-        eth_api: EthApi,
         rx_built_payload: UnboundedReceiver<Payload::BuiltPayload>,
         engine_handle: ConsensusEngineHandle<Payload>,
         pipeline_api: Option<Arc<PipeExecLayerApi<Storage, EthApi>>>,
-        pipe_event_bus: Option<&'static PipeExecLayerEventBus<EthPrimitives>>,
         block_interval_ms: u64,
     ) -> Self {
-        let onchain_config_fetcher = if pipeline_api.is_some() {
-            Some(OnchainConfigFetcher::new(eth_api))
-        } else {
-            None
-        };
         Self {
             task_executor,
             consensus_pool,
@@ -203,9 +188,7 @@ where
             last_built_payload: None,
             payload_buffer: VecDeque::new(),
             pipeline_api,
-            pipe_event_bus,
-            last_ordered_block: None,
-            onchain_config_fetcher,
+            last_ordered_block: None
         }
     }
 }
