@@ -288,7 +288,7 @@ mod tests {
         MysticetiConsensusHandler::new(consensus_pool, tx_pool, chain_spec)
     }
 
-    fn create_empty_subdag(round: u64) -> CommittedSubDag {
+    fn create_empty_subdag(round: usize) -> CommittedSubDag {
         CommittedSubDag {
             leader: BlockRef::default(),
             blocks: Vec::new(),
