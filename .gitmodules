@@ -1,0 +1,6 @@
+[submodule "modules/mysticeti"]
+	path = modules/mysticeti
+	url = https://github.com/scalarorg/mysticeti.git
+[submodule "modules/rpc-shared-api"]
+	path = modules/rpc-shared-api
+	url = https://github.com/scalarorg/rpc-shared-api.git
