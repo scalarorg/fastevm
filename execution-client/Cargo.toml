@@ -11,13 +11,13 @@ path = "src/lib.rs"
 name = "fastevm-execution"
 path = "src/main.rs"
 
-[[bin]]
-name = "cli"
-path = "src/cli.rs"
+# [[bin]]
+# name = "cli"
+# path = "src/cli.rs"
 
-[[bin]]
-name = "fastevm-bench"
-path = "tests/bench/main.rs"
+# [[bin]]
+# name = "fastevm-bench"
+# path = "tests/bench/main.rs"
 
 [dependencies]
 # reth-extension = { workspace = true }
@@ -29,7 +29,7 @@ alloy-rpc-types-engine = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
-alloy-evm = { workspace = true }
+# alloy-evm = { workspace = true }
 
 alloy-rlp = { workspace = true }
 # alloy = { workspace = true, features = ["network", "rpc"] }
@@ -40,17 +40,15 @@ futures-util = { workspace = true}
 tracing = { workspace = true }
 clap = "4"  
 hex = { workspace = true }
-secp256k1 = { workspace = true }
 # Gravity
 greth = { workspace = true }
-reth-pipe-exec-layer-event-bus = { workspace = true }
+# reth-pipe-exec-layer-event-bus = { workspace = true }
 # Reth
-reth-network-peers = { workspace = true }
 reth-basic-payload-builder = { workspace = true }
 reth-chainspec = { workspace = true }
 reth-ethereum = { workspace = true }
-reth-ethereum-payload-builder = { workspace = true }
 reth-ethereum-engine-primitives = { workspace = true }
+reth-ethereum-payload-builder = { workspace = true }
 reth-evm = { workspace = true }
 # reth-primitives-traits = { workspace = true }
 reth-provider = { workspace = true }
@@ -85,17 +83,23 @@ parking_lot = { workspace = true }
 # metrics = { workspace = true }
 
 # Dependencies for mnemonic and account generation
-bip39 = "2.0"
-hdwallet = "0.3"
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-sha2 = { version = "0.10", default-features = false }
 # thiserror = { workspace = true }
 # Consensus dependencies
 # consensus-core = { workspace = true }
 # auto_impl.workspace = true
 # strum = { workspace = true }
 # sysinfo = { workspace = true }
-reqwest = { version = "0.12", features = ["json"] }
+
+
+# For cli
+# reth-network-peers = { workspace = true }
+# bip39 = "2.0"
+# hdwallet = "0.3"
+# reqwest = { version = "0.12", features = ["json"] }
+# secp256k1 = { workspace = true }
+# sha2 = { version = "0.10", default-features = false }
+# End for cli
 
 [dev-dependencies]
 tokio-test = { workspace = true }
