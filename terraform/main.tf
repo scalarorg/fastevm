@@ -143,7 +143,7 @@ resource "google_compute_instance" "fastevm_nodes" {
     network    = google_compute_network.fastevm_network.id
     subnetwork = google_compute_subnetwork.fastevm_subnet.id
     access_config {
-      // Ephemeral public IP
+      // Ephemeral public IP (automatically assigned)
     }
   }
 

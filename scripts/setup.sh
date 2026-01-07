@@ -1,4 +1,5 @@
 #!/bin/bash
+
 sudo apt update
 sudo apt install -y build-essential clang gcc pkg-config libclang-dev llvm-dev libssl-dev libfontconfig1-dev
 
@@ -26,9 +27,13 @@ else
     git submodule update --init --recursive
 fi
 cargo build --release
+sudo cp target/release/fastevm-execution /usr/local/bin/fastevm-execution
+cargo clean
 cd modules/mysticeti
 # cargo build --release
 cargo build --release -p evm-consensus --bin evm-consensus
+sudo cp target/release/evm-consensus /usr/local/bin/evm-consensus
+cargo clean
 # git clone https://github.com/paradigmxyz/reth.git
 # cd reth
 # git checkout tags/v1.8.2
@@ -39,5 +44,4 @@ cargo build --release -p evm-consensus --bin evm-consensus
 # git clone https://github.com/Galxe/gravity-reth.git
 # cd gravity-reth
 # cargo build --release
-
 

@@ -1,70 +1,112 @@
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Clean up any stale lock files in the data directory
-DATA_DIR="${DATADIR:-${SCRIPT_DIR}/../data}"
-rm -rf $DATA_DIR
-BUILDER_GAS_LIMIT=240000000
-BLOCK_TIME=1s
-BLOCK_MAX_TRANSACTIONS=10000
-BLOCK_INTERVAL_MS=1000
-COMMITTED_SUBDAGS_PER_BLOCK=30
-GRAVITY_PIPE_BLOCK_GAS_LIMIT=5000000000
-GRAVITY_CACHE_MAX_PERSIST_GAP=64
-ENGINE_PERSISTENCE_THRESHOLD=0
-# Default value of pipe block gas limit is 1000000000 => max number of transactions is 16666
-stop() {
-    # Stop any existing reth processes before starting
-    echo "Checking for existing reth processes..."
 
-    # Find and kill reth processes
-    if pgrep -f "gravity_node node" > /dev/null; then
-        echo "Found running gravity_node processes, stopping them..."
-        pkill -f "pggravity_noderep node"
-        
-        # Wait for processes to terminate gracefully
-        sleep 2
-        
-        # Force kill if still running
-        if pgrep -f "gravity_node node" > /dev/null; then
-            echo "Force killing remaining processes..."
-            pkill -9 -f "gravity_node node"
-            sleep 1
+# Load environment variables from fastevm.env if it exists
+ENV_FILE="${SCRIPT_DIR}/fastevm.env"
+if [ -f "$ENV_FILE" ]; then
+    echo "📄 Loading environment variables from $ENV_FILE"
+    set -a  # Automatically export all variables
+    source "$ENV_FILE"
+    set +a
+    echo "✅ Environment variables loaded"
+else
+    echo "⚠️  fastevm.env not found, using default values"
+fi
+
+# Default values (used if not set in fastevm.env)
+DATA_DIR="${DATADIR:-${SCRIPT_DIR}/../data}"
+BUILDER_GAS_LIMIT="${BUILDER_GAS_LIMIT:-240000000}"
+BLOCK_TIME="${BLOCK_TIME:-1s}"
+BLOCK_MAX_TRANSACTIONS="${BLOCK_MAX_TRANSACTIONS:-10000}"
+BLOCK_INTERVAL_MS="${BLOCK_INTERVAL_MS:-1000}"
+COMMITTED_SUBDAGS_PER_BLOCK="${COMMITTED_SUBDAGS_PER_BLOCK:-30}"
+GRAVITY_PIPE_BLOCK_GAS_LIMIT="${GRAVITY_PIPE_BLOCK_GAS_LIMIT:-5000000000}"
+GRAVITY_CACHE_MAX_PERSIST_GAP="${GRAVITY_CACHE_MAX_PERSIST_GAP:-64}"
+ENGINE_PERSISTENCE_THRESHOLD="${ENGINE_PERSISTENCE_THRESHOLD:-0}"
+
+# Clean up any stale lock files in the data directory
+rm -rf $DATA_DIR
+
+setup() {
+    ${SCRIPT_DIR}/setup.sh
+    # Install systemd services
+    echo "Installing FastEVM systemd services..."
+
+    if [ -f "$SCRIPT_DIR/service.sh" ]; then
+        if sudo bash "$SCRIPT_DIR/service.sh" install; then
+            echo "FastEVM services installed successfully!"
+        else
+            echo "Warning: Service installation failed. You can try installing manually with:"
+            echo "  sudo bash $SCRIPT_DIR/service.sh install"
         fi
-        
-        echo "✅ Old processes stopped"
     else
-        echo "No existing reth processes found"
+        echo "Warning: service.sh not found at $SCRIPT_DIR/service.sh"
+        echo "Service installation skipped. You can install services manually with:"
+        echo "  sudo bash $SCRIPT_DIR/service.sh install"
     fi
 }
 
 start() {
-    stop
-    ${SCRIPT_DIR}/../target/release/fastevm-execution node \
-    --datadir ${DATA_DIR} \
-    --chain ${SCRIPT_DIR}/genesis.json \
-    --dev \
-    --builder.gaslimit "$BUILDER_GAS_LIMIT" \
-    --http \
-    --http.api eth,net,web3,txpool,debug \
-    --http.port 8545 \
-    --http.addr 0.0.0.0 \
-    --engine.persistence-threshold "$ENGINE_PERSISTENCE_THRESHOLD" \
-    --gravity.pipe-block-gas-limit "$GRAVITY_PIPE_BLOCK_GAS_LIMIT" \
-    --gravity.cache.max-persist-gap "$GRAVITY_CACHE_MAX_PERSIST_GAP" \
-    --block-interval-ms $BLOCK_INTERVAL_MS \
-    --committed-subdags-per-block $COMMITTED_SUBDAGS_PER_BLOCK \
-    --metrics localhost:9001 \
-    --txpool.max-pending-txns 1000000 \
-    --txpool.pending-max-count 17592186044415 \
-    --txpool.pending-max-size 17592186044415 \
-    --txpool.basefee-max-count 17592186044415 \
-    --txpool.basefee-max-size 17592186044415 \
-    --txpool.queued-max-count 17592186044415 \
-    --txpool.queued-max-size 17592186044415 \
-    --rpc.max-connections 50000 \
-    --rpc.max-subscriptions-per-connection 50000 \
-    -vvv 
-    # > node.log 2>&1 &
+    echo "Starting FastEVM services via systemd..."
+    if [ -f "$SCRIPT_DIR/service.sh" ]; then
+        if sudo bash "$SCRIPT_DIR/service.sh" start; then
+            echo "✅ FastEVM services started successfully"
+            echo "Check status with: sudo systemctl status fastevm-execution fastevm-consensus"
+        else
+            echo "❌ Failed to start FastEVM services"
+            echo "Check logs with: sudo bash $SCRIPT_DIR/service.sh logs"
+            exit 1
+        fi
+    else
+        echo "❌ service.sh not found at $SCRIPT_DIR/service.sh"
+        echo "Cannot start services. Please ensure services are installed."
+        exit 1
+    fi
+}
+
+stop() {
+    echo "Stopping FastEVM services via systemd..."
+    if [ -f "$SCRIPT_DIR/service.sh" ]; then
+        if sudo bash "$SCRIPT_DIR/service.sh" stop; then
+            echo "✅ FastEVM services stopped successfully"
+        else
+            echo "⚠️  Warning: Some services may not have stopped cleanly"
+        fi
+    else
+        echo "⚠️  service.sh not found. Attempting to stop processes manually..."
+        # Fallback: Stop any existing processes
+        if pgrep -f "fastevm-execution" > /dev/null; then
+            echo "Stopping fastevm-execution processes..."
+            pkill -f "fastevm-execution" || true
+            sleep 2
+            pkill -9 -f "fastevm-execution" || true
+        fi
+        if pgrep -f "evm-consensus" > /dev/null; then
+            echo "Stopping evm-consensus processes..."
+            pkill -f "evm-consensus" || true
+            sleep 2
+            pkill -9 -f "evm-consensus" || true
+        fi
+    fi
+}
+
+status() {
+    echo "Checking FastEVM service status..."
+    if [ -f "$SCRIPT_DIR/service.sh" ]; then
+        sudo bash "$SCRIPT_DIR/service.sh" status
+    else
+        echo "⚠️  service.sh not found. Checking processes..."
+        if pgrep -f "fastevm-execution" > /dev/null; then
+            echo "✅ fastevm-execution is running"
+        else
+            echo "❌ fastevm-execution is not running"
+        fi
+        if pgrep -f "evm-consensus" > /dev/null; then
+            echo "✅ evm-consensus is running"
+        else
+            echo "❌ evm-consensus is not running"
+        fi
+    fi
 }
 
 $@

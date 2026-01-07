@@ -104,42 +104,6 @@ INITSCRIPT
     chmod +x /usr/local/bin/fastevm-init-db.sh
     chown ubuntu:ubuntu /usr/local/bin/fastevm-init-db.sh
     
-    # Prepare all required directories and files with proper permissions
-    log_info "Preparing all required directories and files..."
-    
-    # Create all data directories
-    mkdir -p "$DATA_DIR/logs"
-    mkdir -p "$DATA_DIR/config"
-    
-    # Create execution subdirectories
-    mkdir -p "$DATA_DIR/execution/db"
-    mkdir -p "$DATA_DIR/execution/p2p"
-    
-    # Set ownership for all directories
-    chown -R ubuntu:ubuntu "$DATA_DIR"
-    
-    # Create log files with proper permissions
-    touch "$DATA_DIR/logs/fastevm-execution.log"
-    touch "$DATA_DIR/logs/fastevm-consensus.log"
-    chown ubuntu:ubuntu "$DATA_DIR/logs"/*.log
-    chmod 664 "$DATA_DIR/logs"/*.log
-    
-    # Ensure JWT secret exists if not already present
-    if [ ! -f "$DATA_DIR/execution/jwt.hex" ]; then
-        openssl rand -hex 32 > "$DATA_DIR/execution/jwt.hex"
-        chown ubuntu:ubuntu "$DATA_DIR/execution/jwt.hex"
-        chmod 644 "$DATA_DIR/execution/jwt.hex"
-    fi
-    
-    # Ensure P2P secret key exists if not already present
-    if [ ! -f "$DATA_DIR/execution/p2p/secret.key" ]; then
-        openssl rand -hex 32 > "$DATA_DIR/execution/p2p/secret.key"
-        chown ubuntu:ubuntu "$DATA_DIR/execution/p2p/secret.key"
-        chmod 600 "$DATA_DIR/execution/p2p/secret.key"
-    fi
-    
-    log_success "All directories and files prepared with proper permissions"
-    
     # Load environment variables from node.env file
     log_info "Loading environment variables from node.env file..."
     if [ -f "$DATA_DIR/node.env" ]; then
