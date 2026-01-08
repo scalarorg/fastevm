@@ -11,9 +11,9 @@ path = "src/lib.rs"
 name = "fastevm-execution"
 path = "src/main.rs"
 
-# [[bin]]
-# name = "cli"
-# path = "src/cli.rs"
+[[bin]]
+name = "fastevm-cli"
+path = "src/cli.rs"
 
 # [[bin]]
 # name = "fastevm-bench"
@@ -93,11 +93,11 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
 
 # For cli
-# reth-network-peers = { workspace = true }
+reth-network-peers = { workspace = true }
 # bip39 = "2.0"
 # hdwallet = "0.3"
 # reqwest = { version = "0.12", features = ["json"] }
-# secp256k1 = { workspace = true }
+secp256k1 = { workspace = true }
 # sha2 = { version = "0.10", default-features = false }
 # End for cli
 

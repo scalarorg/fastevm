@@ -9,7 +9,7 @@
 //! ```
 
 use alloy_primitives::{Address, U256};
-use bip39::Mnemonic;
+// use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use reth_network_peers::pk2id;
 use secp256k1::SecretKey;
@@ -39,24 +39,24 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Allocate funds to generated accounts in genesis.json
-    AllocateFunds {
-        /// Path to input genesis.json file
-        #[arg(short, long)]
-        input: PathBuf,
-        /// Number of accounts to generate
-        #[arg(short, long, default_value = "100")]
-        count: u32,
-        /// Mnemonic phrase for account generation (optional, uses default if not provided)
-        #[arg(short, long)]
-        mnemonic: Option<String>,
-        /// Amount of funds to allocate to each account (in wei, default: 1000 ETH)
-        #[arg(short, long, default_value = "1000000000000000000000")]
-        amount: String,
-        /// Output directory to save modified genesis.json
-        #[arg(short, long)]
-        output: PathBuf,
-    },
+    // Allocate funds to generated accounts in genesis.json
+    // AllocateFunds {
+    //     /// Path to input genesis.json file
+    //     #[arg(short, long)]
+    //     input: PathBuf,
+    //     /// Number of accounts to generate
+    //     #[arg(short, long, default_value = "100")]
+    //     count: u32,
+    //     /// Mnemonic phrase for account generation (optional, uses default if not provided)
+    //     #[arg(short, long)]
+    //     mnemonic: Option<String>,
+    //     /// Amount of funds to allocate to each account (in wei, default: 1000 ETH)
+    //     #[arg(short, long, default_value = "1000000000000000000000")]
+    //     amount: String,
+    //     /// Output directory to save modified genesis.json
+    //     #[arg(short, long)]
+    //     output: PathBuf,
+    // },
 }
 
 fn show_peer_id(file_path: PathBuf, output_path: Option<PathBuf>) -> eyre::Result<()> {
@@ -102,94 +102,94 @@ fn show_peer_id(file_path: PathBuf, output_path: Option<PathBuf>) -> eyre::Resul
     Ok(())
 }
 
-fn allocate_funds(
-    input_path: PathBuf,
-    count: u32,
-    mnemonic: Option<String>,
-    amount: String,
-    output_path: PathBuf,
-) -> eyre::Result<()> {
-    // Parse the amount string to U256
-    let amount_wei = if amount.starts_with("0x") {
-        U256::from_str_radix(&amount[2..], 16)
-            .map_err(|e| eyre::eyre!("Invalid hex amount: {}", e))?
-    } else {
-        U256::from_str_radix(&amount, 10)
-            .map_err(|e| eyre::eyre!("Invalid decimal amount: {}", e))?
-    };
+// fn allocate_funds(
+//     input_path: PathBuf,
+//     count: u32,
+//     mnemonic: Option<String>,
+//     amount: String,
+//     output_path: PathBuf,
+// ) -> eyre::Result<()> {
+//     // Parse the amount string to U256
+//     let amount_wei = if amount.starts_with("0x") {
+//         U256::from_str_radix(&amount[2..], 16)
+//             .map_err(|e| eyre::eyre!("Invalid hex amount: {}", e))?
+//     } else {
+//         U256::from_str_radix(&amount, 10)
+//             .map_err(|e| eyre::eyre!("Invalid decimal amount: {}", e))?
+//     };
 
-    // Use default mnemonic if not provided
-    let mnemonic_phrase = mnemonic.unwrap_or_else(|| DEFAULT_MNEMONIC.to_string());
+//     // Use default mnemonic if not provided
+//     let mnemonic_phrase = mnemonic.unwrap_or_else(|| DEFAULT_MNEMONIC.to_string());
 
-    // Parse the mnemonic
-    let mnemonic =
-        Mnemonic::parse(&mnemonic_phrase).map_err(|e| eyre::eyre!("Invalid mnemonic: {}", e))?;
+//     // Parse the mnemonic
+//     let mnemonic =
+//         Mnemonic::parse(&mnemonic_phrase).map_err(|e| eyre::eyre!("Invalid mnemonic: {}", e))?;
 
-    // Generate seed from mnemonic
-    let seed = mnemonic.to_seed("");
-    let seed_bytes = &seed[..];
+//     // Generate seed from mnemonic
+//     let seed = mnemonic.to_seed("");
+//     let seed_bytes = &seed[..];
 
-    // Read and parse the input genesis.json
-    let genesis_content = fs::read_to_string(&input_path).map_err(|e| {
-        eyre::eyre!(
-            "Failed to read genesis file {}: {}",
-            input_path.display(),
-            e
-        )
-    })?;
+//     // Read and parse the input genesis.json
+//     let genesis_content = fs::read_to_string(&input_path).map_err(|e| {
+//         eyre::eyre!(
+//             "Failed to read genesis file {}: {}",
+//             input_path.display(),
+//             e
+//         )
+//     })?;
 
-    let mut genesis: Value = serde_json::from_str(&genesis_content)
-        .map_err(|e| eyre::eyre!("Failed to parse genesis.json: {}", e))?;
+//     let mut genesis: Value = serde_json::from_str(&genesis_content)
+//         .map_err(|e| eyre::eyre!("Failed to parse genesis.json: {}", e))?;
 
-    // Get the alloc section or create it if it doesn't exist
-    let alloc = genesis
-        .get_mut("alloc")
-        .ok_or_else(|| eyre::eyre!("Genesis file missing 'alloc' section"))?
-        .as_object_mut()
-        .ok_or_else(|| eyre::eyre!("'alloc' section is not an object"))?;
+//     // Get the alloc section or create it if it doesn't exist
+//     let alloc = genesis
+//         .get_mut("alloc")
+//         .ok_or_else(|| eyre::eyre!("Genesis file missing 'alloc' section"))?
+//         .as_object_mut()
+//         .ok_or_else(|| eyre::eyre!("'alloc' section is not an object"))?;
 
-    // Generate accounts and add them to the alloc section
-    for i in 0..count {
-        let account = generate_account_from_seed(&seed_bytes, i)?;
-        let address_hex = format!("0x{:x}", account.address);
-        // Create account entry with balance
-        let mut account_entry = Map::new();
-        account_entry.insert(
-            "balance".to_string(),
-            Value::String(format!("0x{:x}", amount_wei)),
-        );
+//     // Generate accounts and add them to the alloc section
+//     for i in 0..count {
+//         let account = generate_account_from_seed(&seed_bytes, i)?;
+//         let address_hex = format!("0x{:x}", account.address);
+//         // Create account entry with balance
+//         let mut account_entry = Map::new();
+//         account_entry.insert(
+//             "balance".to_string(),
+//             Value::String(format!("0x{:x}", amount_wei)),
+//         );
 
-        alloc.insert(address_hex, Value::Object(account_entry));
-    }
+//         alloc.insert(address_hex, Value::Object(account_entry));
+//     }
 
-    // Create output directory if it doesn't exist
-    fs::create_dir_all(&output_path).map_err(|e| {
-        eyre::eyre!(
-            "Failed to create output directory {}: {}",
-            output_path.display(),
-            e
-        )
-    })?;
+//     // Create output directory if it doesn't exist
+//     fs::create_dir_all(&output_path).map_err(|e| {
+//         eyre::eyre!(
+//             "Failed to create output directory {}: {}",
+//             output_path.display(),
+//             e
+//         )
+//     })?;
 
-    // Write the modified genesis.json to output directory
-    let output_file = output_path.join("genesis.json");
-    let genesis_json = serde_json::to_string_pretty(&genesis)
-        .map_err(|e| eyre::eyre!("Failed to serialize genesis.json: {}", e))?;
+//     // Write the modified genesis.json to output directory
+//     let output_file = output_path.join("genesis.json");
+//     let genesis_json = serde_json::to_string_pretty(&genesis)
+//         .map_err(|e| eyre::eyre!("Failed to serialize genesis.json: {}", e))?;
 
-    fs::write(&output_file, genesis_json).map_err(|e| {
-        eyre::eyre!(
-            "Failed to write genesis.json to {}: {}",
-            output_file.display(),
-            e
-        )
-    })?;
+//     fs::write(&output_file, genesis_json).map_err(|e| {
+//         eyre::eyre!(
+//             "Failed to write genesis.json to {}: {}",
+//             output_file.display(),
+//             e
+//         )
+//     })?;
 
-    println!("Successfully allocated funds to {} accounts", count);
-    println!("Modified genesis.json saved to: {}", output_file.display());
-    println!("Mnemonic used: {}", mnemonic_phrase);
+//     println!("Successfully allocated funds to {} accounts", count);
+//     println!("Modified genesis.json saved to: {}", output_file.display());
+//     println!("Mnemonic used: {}", mnemonic_phrase);
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 #[derive(Debug)]
 struct Account {
@@ -197,39 +197,39 @@ struct Account {
     private_key: [u8; 32],
 }
 
-fn generate_account_from_seed(seed: &[u8], index: u32) -> eyre::Result<Account> {
-    use sha2::{Digest, Sha256};
-    // Simple deterministic key generation using seed + index
-    let mut hasher = Sha256::new();
-    hasher.update(seed);
-    hasher.update(&index.to_le_bytes());
-    let hash = hasher.finalize();
+// fn generate_account_from_seed(seed: &[u8], index: u32) -> eyre::Result<Account> {
+//     use sha2::{Digest, Sha256};
+//     // Simple deterministic key generation using seed + index
+//     let mut hasher = Sha256::new();
+//     hasher.update(seed);
+//     hasher.update(&index.to_le_bytes());
+//     let hash = hasher.finalize();
 
-    // Use the hash as private key (first 32 bytes)
-    let mut private_key = [0u8; 32];
-    private_key.copy_from_slice(&hash[..32]);
+//     // Use the hash as private key (first 32 bytes)
+//     let mut private_key = [0u8; 32];
+//     private_key.copy_from_slice(&hash[..32]);
 
-    // Create secp256k1 secret key
-    let secp = secp256k1::Secp256k1::new();
-    let secret_key = SecretKey::from_slice(&private_key)
-        .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
+//     // Create secp256k1 secret key
+//     let secp = secp256k1::Secp256k1::new();
+//     let secret_key = SecretKey::from_slice(&private_key)
+//         .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
 
-    // Get the public key and derive address
-    let public_key = secret_key.public_key(&secp);
-    let public_key_bytes = public_key.serialize_uncompressed();
+//     // Get the public key and derive address
+//     let public_key = secret_key.public_key(&secp);
+//     let public_key_bytes = public_key.serialize_uncompressed();
 
-    // Ethereum address is the last 20 bytes of keccak256 hash of the public key
-    let hash = alloy_primitives::keccak256(&public_key_bytes[1..]);
-    let mut address_bytes = [0u8; 20];
-    address_bytes.copy_from_slice(&hash[12..]);
+//     // Ethereum address is the last 20 bytes of keccak256 hash of the public key
+//     let hash = alloy_primitives::keccak256(&public_key_bytes[1..]);
+//     let mut address_bytes = [0u8; 20];
+//     address_bytes.copy_from_slice(&hash[12..]);
 
-    let address = Address::from(address_bytes);
+//     let address = Address::from(address_bytes);
 
-    Ok(Account {
-        address,
-        private_key,
-    })
-}
+//     Ok(Account {
+//         address,
+//         private_key,
+//     })
+// }
 
 fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
@@ -237,16 +237,15 @@ fn main() -> eyre::Result<()> {
     match cli.command {
         Commands::ShowPeerId { file, output } => {
             show_peer_id(file, output)?;
-        }
-        Commands::AllocateFunds {
-            input,
-            count,
-            mnemonic,
-            amount,
-            output,
-        } => {
-            allocate_funds(input, count, mnemonic, amount, output)?;
-        }
+        } // Commands::AllocateFunds {
+          //     input,
+          //     count,
+          //     mnemonic,
+          //     amount,
+          //     output,
+          // } => {
+          //     allocate_funds(input, count, mnemonic, amount, output)?;
+          // }
     }
 
     Ok(())
@@ -371,40 +370,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_cli_allocate_funds_command() {
-        // Test AllocateFunds command parsing
-        let args = vec![
-            "fastevm-cli",
-            "allocate-funds",
-            "--input",
-            "/path/to/genesis.json",
-            "--count",
-            "5",
-            "--mnemonic",
-            "test mnemonic phrase",
-            "--amount",
-            "1000000000000000000",
-            "--output",
-            "/path/to/output",
-        ];
-        let cli = Cli::try_parse_from(args).unwrap();
+    // #[test]
+    // fn test_cli_allocate_funds_command() {
+    //     // Test AllocateFunds command parsing
+    //     let args = vec![
+    //         "fastevm-cli",
+    //         "allocate-funds",
+    //         "--input",
+    //         "/path/to/genesis.json",
+    //         "--count",
+    //         "5",
+    //         "--mnemonic",
+    //         "test mnemonic phrase",
+    //         "--amount",
+    //         "1000000000000000000",
+    //         "--output",
+    //         "/path/to/output",
+    //     ];
+    //     let cli = Cli::try_parse_from(args).unwrap();
 
-        match cli.command {
-            Commands::AllocateFunds {
-                input,
-                count,
-                mnemonic,
-                amount,
-                output,
-            } => {
-                assert_eq!(input, PathBuf::from("/path/to/genesis.json"));
-                assert_eq!(count, 5);
-                assert_eq!(mnemonic, Some("test mnemonic phrase".to_string()));
-                assert_eq!(amount, "1000000000000000000");
-                assert_eq!(output, PathBuf::from("/path/to/output"));
-            }
-            _ => panic!("Expected AllocateFunds command"),
-        }
-    }
+    //     match cli.command {
+    //         Commands::AllocateFunds {
+    //             input,
+    //             count,
+    //             mnemonic,
+    //             amount,
+    //             output,
+    //         } => {
+    //             assert_eq!(input, PathBuf::from("/path/to/genesis.json"));
+    //             assert_eq!(count, 5);
+    //             assert_eq!(mnemonic, Some("test mnemonic phrase".to_string()));
+    //             assert_eq!(amount, "1000000000000000000");
+    //             assert_eq!(output, PathBuf::from("/path/to/output"));
+    //         }
+    //         _ => panic!("Expected AllocateFunds command"),
+    //     }
+    // }
 }
