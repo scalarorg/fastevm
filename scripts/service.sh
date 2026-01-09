@@ -29,7 +29,7 @@ log_error() {
 
 # Set data directory - can be overridden via environment variable
 DATA_DIR="${DATA_DIR:-/data}"
-
+ENV_FILE="${DATA_DIR}/node.env"
 # Check if running as root or with sudo
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -37,51 +37,32 @@ check_root() {
         exit 1
     fi
 }
+# Update BOOTNODES in node.env file
+update-bootnodes() {
+    export BOOTNODES="$1"
+
+    if [ -z "$BOOTNODES" ]; then
+        echo "❌ bootnodes: enode URLs are empty"
+        exit 1
+    fi
+
+    echo "🔧 Updating BOOTNODES in $ENV_FILE"
+
+    # Ensure env file exists
+    touch "$ENV_FILE"
+
+    # Remove existing BOOTNODES line (idempotent)
+    sed -i '/^BOOTNODES=/d' "$ENV_FILE"
+
+    # Append new BOOTNODES
+    echo "BOOTNODES=\"$BOOTNODES\"" >> "$ENV_FILE"
+
+    echo "✅ BOOTNODES updated"
+}
 
 # Install systemd services
 install_services() {
     log_info "Installing FastEVM systemd services..."
-    
-    # Prepare all required directories and files with proper permissions
-    log_info "Preparing all required directories and files..."
-    
-    # Create all data directories
-    mkdir -p "$DATA_DIR/execution"
-    mkdir -p "$DATA_DIR/consensus"
-    mkdir -p "$DATA_DIR/logs"
-    mkdir -p "$DATA_DIR/config"
-    
-    # Create execution subdirectories
-    mkdir -p "$DATA_DIR/execution/db"
-    mkdir -p "$DATA_DIR/execution/p2p"
-    
-    # Set ownership for all directories
-    chown -R ubuntu:ubuntu "$DATA_DIR/execution"
-    chown -R ubuntu:ubuntu "$DATA_DIR/consensus"
-    chown -R ubuntu:ubuntu "$DATA_DIR/logs"
-    chown -R ubuntu:ubuntu "$DATA_DIR/config"
-    
-    # Create log files with proper permissions
-    touch "$DATA_DIR/logs/fastevm-execution.log"
-    touch "$DATA_DIR/logs/fastevm-consensus.log"
-    chown ubuntu:ubuntu "$DATA_DIR/logs"/*.log
-    chmod 664 "$DATA_DIR/logs"/*.log
-    
-    # Ensure JWT secret exists if not already present
-    if [ ! -f "$DATA_DIR/execution/jwt.hex" ]; then
-        openssl rand -hex 32 > "$DATA_DIR/execution/jwt.hex"
-        chown ubuntu:ubuntu "$DATA_DIR/execution/jwt.hex"
-        chmod 644 "$DATA_DIR/execution/jwt.hex"
-    fi
-    
-    # Ensure P2P secret key exists if not already present
-    if [ ! -f "$DATA_DIR/execution/p2p/secret.key" ]; then
-        openssl rand -hex 32 > "$DATA_DIR/execution/p2p/secret.key"
-        chown ubuntu:ubuntu "$DATA_DIR/execution/p2p/secret.key"
-        chmod 600 "$DATA_DIR/execution/p2p/secret.key"
-    fi
-    
-    log_success "All directories and files prepared with proper permissions"
     
     # Create systemd service for execution client
     log_info "Creating fastevm-execution.service..."
@@ -106,13 +87,13 @@ INITSCRIPT
     
     # Load environment variables from node.env file
     log_info "Loading environment variables from node.env file..."
-    if [ -f "$DATA_DIR/node.env" ]; then
-        source "$DATA_DIR/node.env"
+    if [ -f "$ENV_FILE" ]; then
+        source "$ENV_FILE"
         # Remove quotes from BOOTNODES if present
         log_success "Environment variables loaded from node.env"
         log_info "Node index: $NODE_INDEX"
     else
-        echo -e "${YELLOW}[WARNING]${NC} node.env file not found at $DATA_DIR/node.env"
+        echo -e "${YELLOW}[WARNING]${NC} node.env file not found at $ENV_FILE"
         # Set default values
         NODE_INDEX="0"
     fi
@@ -127,14 +108,15 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=$DATA_DIR
-EnvironmentFile=$DATA_DIR/node.env
+EnvironmentFile=$ENV_FILE
 Environment=HTTP_PORT=8545
 Environment=WS_PORT=8546
 Environment=ENGINE_PORT=8551
 Environment=P2P_PORT=30303
 Environment=DATA_DIR=$DATA_DIR
+Environment=LOG_LEVEL=${LOG_LEVEL:-vvv}
 # Ensure database is initialized before starting
-ExecStartPre=/usr/local/bin/fastevm-init-db.sh
+# ExecStartPre=/usr/local/bin/fastevm-init-db.sh
 ExecStart=/usr/local/bin/fastevm-execution node \
     --chain $DATA_DIR/config/genesis.json \
     --datadir $DATA_DIR/execution \
@@ -171,7 +153,7 @@ ExecStart=/usr/local/bin/fastevm-execution node \
     --enable-tx-subscription \
     --committed-subdags-per-block ${SUBDAGS_PER_BLOCK:-30} \
     --block-build-interval-ms ${BLOCK_BUILD_INTERVAL:-1000} \
-    -$LOG_LEVEL
+    -${LOG_LEVEL}
 Restart=always
 RestartSec=10
 StandardOutput=append:$DATA_DIR/logs/fastevm-execution.log

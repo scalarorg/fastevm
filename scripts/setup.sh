@@ -1,4 +1,10 @@
 #!/bin/bash
+#!/bin/bash
+set -euo pipefail
+
+: "${GITHUB_BRANCH:=gravity}"
+
+echo "Using GitHub branch: $GITHUB_BRANCH"
 
 sudo apt update
 sudo apt install -y build-essential clang gcc pkg-config libclang-dev llvm-dev libssl-dev libfontconfig1-dev
@@ -12,22 +18,34 @@ rustup default 1.88.0
 if [ -d "fastevm" ]; then
     echo "fastevm directory already exists. Updating repository..."
     cd fastevm
+
     git fetch origin
-    git checkout gravity
-    git pull origin gravity
+
+    if git show-ref --verify --quiet "refs/heads/$GITHUB_BRANCH"; then
+        git checkout "$GITHUB_BRANCH"
+    else
+        git checkout -b "$GITHUB_BRANCH" "origin/$GITHUB_BRANCH"
+    fi
+
+    git pull origin "$GITHUB_BRANCH"
+
     echo "Updating all submodules..."
     git submodule sync --recursive
     git submodule update --init --recursive
 else
     echo "Cloning fastevm repository..."
-    git clone https://github.com/scalarorg/fastevm.git 
+    git clone https://github.com/scalarorg/fastevm.git
     cd fastevm
-    git checkout gravity
+
+    git checkout "$GITHUB_BRANCH"
+
     echo "Initializing and updating all submodules..."
     git submodule update --init --recursive
 fi
+
 cargo build --release
 sudo cp target/release/fastevm-execution /usr/local/bin/fastevm-execution
+sudo cp target/release/fastevm-cli /usr/local/bin/fastevm-cli
 cargo clean
 cd modules/mysticeti
 # cargo build --release

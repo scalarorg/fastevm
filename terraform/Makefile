@@ -90,9 +90,9 @@ extract-deployment-info: apply
 	INTERNAL_IPS=$$(terraform output -json instance_ips | jq -r '.[]' | tr '\n' ' '); \
 	EXTERNAL_ARRAY=($$EXTERNAL_IPS); INTERNAL_ARRAY=($$INTERNAL_IPS); \
 	NODE_COUNT=$${#EXTERNAL_ARRAY[@]}; \
-	echo "# FastEVM Nodes - Local IPs Only" > nodes.remote.env; \
-	echo "# This file contains only local/internal IPs of all nodes" >> nodes.remote.env; \
+	cp node.env nodes.remote.env; \
 	echo "PEER_COUNT=$$NODE_COUNT" >> nodes.remote.env; \
+	echo "ENV_FILE=/opt/fastevm/node.env" >> nodes.remote.env; \
 	for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
 		idx=$$((i+1)); \
 		echo "PEER$${idx}_IP=$${INTERNAL_ARRAY[$$i]}" >> nodes.remote.env; \
@@ -122,7 +122,7 @@ copy-files: extract-deployment-info
 					FAILED=$$((FAILED + 1)); \
 				fi; \
 			done; \
-			if scp $(SSH_OPTS) -i "$$KEY" nodes.remote.env ubuntu@$$ip:/opt/fastevm/fastevm.env 2>&1; then \
+			if scp $(SSH_OPTS) -i "$$KEY" nodes.remote.env ubuntu@$$ip:/opt/fastevm/node.env 2>&1; then \
 				echo "    ✅ Files copied to node $$node_num"; \
 			else \
 				echo "    ❌ Failed to copy nodes.remote.env to node $$node_num"; \
@@ -141,99 +141,132 @@ copy-files: extract-deployment-info
 	true  # Ensure target always succeeds
 
 # Run setup on all nodes in parallel
-run-setup: copy-files
-	@echo ""
-	@echo "🚀 Starting setup on all nodes in parallel..."
-	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
-	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]' | tr '\n' ' '); \
-	IPS_ARRAY=($$IPS); \
-	NODE_COUNT=$${#IPS_ARRAY[@]}; \
-	PIDS=""; \
-	for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
-		ip=$${IPS_ARRAY[$$i]}; \
-		node_num=$$((i+1)); \
-		echo "  📦 Starting setup on node $$node_num ($$ip)..."; \
-		(ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip "cd /opt/fastevm && nohup bash node.sh setup > /tmp/fastevm-setup.log 2>&1 &" 2>&1 && \
-		 echo "    ✅ Setup process started on node $$node_num" || \
-		 echo "    ❌ Failed to start setup on node $$node_num") & \
-		PIDS="$$PIDS $$!"; \
-	done; \
-	for pid in $$PIDS; do \
-		wait $$pid || true; \
-	done; \
-	echo "✓ Setup started on all nodes (running in parallel)"
+# run-setup: copy-files
+# 	@echo ""
+# 	@echo "🚀 Starting setup on all nodes in parallel (tmux)..."
+# 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+# 	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+# 	NODE_COUNT=$$(echo "$$IPS" | wc -l | tr -d ' '); \
+# 	START_PIDS=""; \
+# 	for ip in $$IPS; do \
+# 		echo "  📦 Starting setup on node ($$ip)..."; \
+# 		(ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip '\
+# 			set -e; \
+# 			cd /opt/fastevm; \
+# 			tmux kill-session -t fastevm-setup 2>/dev/null || true; \
+# 			tmux new-session -d -s fastevm-setup "\
+# 				bash node.sh setup > /tmp/fastevm-setup.log 2>&1; \
+# 				echo SETUP_FINISHED >> /tmp/fastevm-setup.log"; \
+# 		' && \
+# 		 echo "    ✅ tmux session started on $$ip" || \
+# 		 echo "    ❌ Failed to start setup on $$ip") & \
+# 		START_PIDS="$$START_PIDS $$!"; \
+# 	done; \
+# 	for pid in $$START_PIDS; do \
+# 		wait $$pid || true; \
+# 	done; \
+# 	echo ""; \
+# 	echo "📡 Watching logs until all nodes finish setup..."; \
+# 	echo ""; \
+# 	TMP_DONE_FILE=$$(mktemp); \
+# 	trap 'rm -f $$TMP_DONE_FILE' EXIT; \
+# 	DONE_COUNT=0; \
+# 	for ip in $$IPS; do \
+# 		(ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip \
+# 			"tail -n 20 -f /tmp/fastevm-setup.log" | \
+# 			while IFS= read -r line; do \
+# 				echo "[$$ip] $$line"; \
+# 				if echo "$$line" | grep -q SETUP_FINISHED; then \
+# 					echo "$$ip" >> $$TMP_DONE_FILE; \
+# 					exit 0; \
+# 				fi; \
+# 			done) & \
+# 	done; \
+# 	while true; do \
+# 		DONE_COUNT=$$(sort -u $$TMP_DONE_FILE 2>/dev/null | wc -l | tr -d ' '); \
+# 		if [ "$$DONE_COUNT" -ge "$$NODE_COUNT" ]; then \
+# 			echo ""; \
+# 			echo "✅ All $$NODE_COUNT nodes finished setup"; \
+# 			break; \
+# 		fi; \
+# 		sleep 2; \
+# 	done
 
-# Wait for setup completion and verify services
-wait-for-setup: run-setup
-	@echo ""
-	@echo "⏳ Waiting for setup to complete on all nodes..."
+start-setup: copy-files
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
-	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]' | tr '\n' ' '); \
+	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+	for ip in $$IPS; do \
+		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip '\
+			cd /opt/fastevm && \
+			tmux kill-session -t fastevm-setup 2>/dev/null || true && \
+			tmux new-session -d -s fastevm-setup "bash node.sh setup > /tmp/fastevm-setup.log 2>&1" \
+		' & \
+	done; \
+	wait
+
+watch-setup: start-setup
+	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+	NODE_COUNT=$$(echo "$$IPS" | wc -l | tr -d ' '); \
+	TMP_DONE=$$(mktemp); \
+	trap 'rm -f $$TMP_DONE' EXIT; \
+	echo ""; \
+	echo "📡 Watching setup logs (auto-exit when all nodes finish)..."; \
+	echo ""; \
+	for ip in $$IPS; do \
+		ssh -T $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip \
+			"bash -lc 'tail -n 20 -f /tmp/fastevm-setup.log'" | \
+			while IFS= read -r line; do \
+				echo "[$$ip] $$line"; \
+				if echo "$$line" | grep -q SETUP_FINISHED; then \
+					echo "$$ip" >> $$TMP_DONE; \
+					break; \
+				fi; \
+			done & \
+	done; \
+	while [ $$(sort -u $$TMP_DONE 2>/dev/null | wc -l | tr -d ' ') -lt $$NODE_COUNT ]; do \
+		sleep 2; \
+	done; \
+	echo ""; \
+	echo "✅ All $$NODE_COUNT nodes finished setup"
+
+
+create-bootnodes: watch-setup
+	@echo "Collecting all peer ids (using private IPs)..."
+	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
 	IPS_ARRAY=($$IPS); \
 	NODE_COUNT=$${#IPS_ARRAY[@]}; \
-	ELAPSED=0; MAX_WAIT=1800; CHECK_INTERVAL=15; \
-	while [ $$ELAPSED -lt $$MAX_WAIT ]; do \
-		READY=0; \
-		RUNNING=0; \
-		echo ""; \
-		echo "📊 Status check at $$(date +%H:%M:%S) (elapsed: $$ELAPSEDs / $$MAX_WAITs)"; \
-		for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
-			ip=$${IPS_ARRAY[$$i]}; \
-			node_num=$$((i+1)); \
-			SETUP_RUNNING=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$ip \
-				"pgrep -f 'node.sh setup\|setup.sh' > /dev/null 2>&1 && echo 'yes' || echo 'no'" 2>/dev/null || echo "no"); \
-			BINARY_EXISTS=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$ip \
-				"test -f /usr/local/bin/fastevm-execution && echo 'yes' || echo 'no'" 2>/dev/null || echo "no"); \
-			CONSENSUS_EXISTS=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$ip \
-				"test -f /usr/local/bin/evm-consensus && echo 'yes' || echo 'no'" 2>/dev/null || echo "no"); \
-			if [ "$$BINARY_EXISTS" = "yes" ] && [ "$$CONSENSUS_EXISTS" = "yes" ] && [ "$$SETUP_RUNNING" = "no" ]; then \
-				echo "  ✅ Node $$node_num ($$ip): Binaries ready"; \
-				READY=$$((READY + 1)); \
-			elif [ "$$SETUP_RUNNING" = "yes" ]; then \
-				echo "  🔄 Node $$node_num ($$ip): Setup in progress..."; \
-				RUNNING=$$((RUNNING + 1)); \
-			else \
-				echo "  ⏸️  Node $$node_num ($$ip): Waiting..."; \
-			fi; \
-		done; \
-		echo "  Summary: $$READY/$$NODE_COUNT ready, $$RUNNING running"; \
-		if [ $$READY -eq $$NODE_COUNT ]; then \
-			echo ""; \
-			echo "✅ All nodes binaries ready! Verifying services..."; \
-			break; \
-		fi; \
-		sleep $$CHECK_INTERVAL; \
-		ELAPSED=$$((ELAPSED + CHECK_INTERVAL)); \
-	done; \
-	if [ $$ELAPSED -ge $$MAX_WAIT ]; then \
-		echo ""; \
-		echo "❌ Timeout waiting for setup to complete"; \
-		echo "Run 'make check-setup-logs' to see what's happening"; \
-		exit 1; \
-	fi; \
-	echo ""; \
-	echo "🔍 Verifying systemd services are installed and enabled..."; \
-	SERVICES_READY=0; \
+	enode_urls=""; \
 	for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
-		ip=$${IPS_ARRAY[$$i]}; \
+		public_ip=$${IPS_ARRAY[$$i]}; \
 		node_num=$$((i+1)); \
-		EXEC_SERVICE=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$ip \
-			"systemctl list-unit-files | grep -q 'fastevm-execution.service' && systemctl is-enabled fastevm-execution.service > /dev/null 2>&1 && echo 'yes' || echo 'no'" 2>/dev/null || echo "no"); \
-		if [ "$$EXEC_SERVICE" = "yes" ]; then \
-			echo "  ✅ Node $$node_num ($$ip): Services installed and enabled"; \
-			SERVICES_READY=$$((SERVICES_READY + 1)); \
+		peer_id=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
+			"cat /opt/fastevm/data/execution/p2p/peer-id.hex" 2>/dev/null | tr -d '\n'); \
+		private_ip=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
+			"hostname -I | awk '{print \$$1}'" 2>/dev/null | tr -d '\n'); \
+		if [ -n "$$peer_id" ] && [ -n "$$private_ip" ]; then \
+			enode_url="enode://$${peer_id}@$${private_ip}:30303"; \
+			enode_urls="$${enode_urls}$${enode_url},"; \
+			echo "   ✅ Node $$node_num (public $$public_ip, private $$private_ip): $$enode_url"; \
 		else \
-			echo "  ⚠️  Node $$node_num ($$ip): Services not ready (may need manual installation)"; \
+			echo "   ❌ Node $$node_num ($$public_ip): missing peer-id or private IP"; \
 		fi; \
 	done; \
-	if [ $$SERVICES_READY -eq $$NODE_COUNT ]; then \
-		echo "✅ All services verified and ready!"; \
-	else \
-		echo "⚠️  Some services may need manual installation. Continuing anyway..."; \
-	fi
+	enode_urls="$${enode_urls%,}"; \
+	echo ""; \
+	echo "Collected enode URLs:"; \
+	echo "$$enode_urls"
+	echo "📤 Updating bootnodes on all nodes..."; \
+	for public_ip in $$IPS; do \
+		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$public_ip \
+			"cd /opt/fastevm && bash service.sh update-bootnodes '$$enode_urls'" || exit 1; \
+	done; \
+	echo "✅ Bootnodes updated on all nodes"
+
 
 # Start services on all nodes
-start-services: wait-for-setup
+start-services: create-bootnodes
 	@echo ""
 	@echo "🚀 Starting services on all nodes..."
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
