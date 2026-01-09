@@ -1,5 +1,5 @@
 # FastEVM Terraform Deployment Makefile
-
+SHELL := /bin/bash
 .PHONY: help init plan apply destroy status logs clean validate format deploy ssh-node test-rpc restart health check-setup-status check-setup-logs
 
 # Load environment variables
@@ -17,7 +17,7 @@ DISK_TYPE ?= pd-standard
 PROJECT_NAME ?= fastevm
 GITHUB_REPO ?= https://github.com/scalarorg/fastevm.git
 GITHUB_BRANCH ?= main
-
+SETUP_SUCCESS_MSG := FastEVM services installed successfully!
 # Use terraform.tfvars if it exists (Terraform auto-loads it, but we can be explicit)
 # Otherwise fall back to environment variables from fastevm.env
 TF_VARS = $(if $(wildcard terraform.tfvars),-var-file=terraform.tfvars,\
@@ -109,27 +109,38 @@ copy-files: extract-deployment-info
 	IPS_ARRAY=($$IPS); \
 	NODE_COUNT=$${#IPS_ARRAY[@]}; \
 	FAILED=0; \
+	FILES_TO_COPY=( \
+		genesis.json \
+		systemd/fastevm-execution.service \
+		systemd/fastevm-consensus.service \
+		node.sh \
+		setup.sh \
+		service.sh \
+		run.sh \
+	); \
 	for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
 		ip=$${IPS_ARRAY[$$i]}; \
 		node_num=$$((i+1)); \
 		echo "  📤 Copying files to node $$node_num ($$ip)..."; \
-		if ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip "sudo mkdir -p /opt/fastevm && sudo chown ubuntu:ubuntu /opt/fastevm" 2>&1; then \
-			for f in genesis.json node.sh setup.sh service.sh; do \
-				if scp $(SSH_OPTS) -i "$$KEY" ../scripts/$$f ubuntu@$$ip:/opt/fastevm/ 2>&1; then \
-					[[ $$f == *.sh ]] && ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip "chmod +x /opt/fastevm/$$f" 2>&1 || true; \
+		if ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip "sudo mkdir -p /opt/fastevm && sudo chown ubuntu:ubuntu /opt/fastevm"; then \
+			for f in "$${FILES_TO_COPY[@]}"; do \
+				if scp $(SSH_OPTS) -i "$$KEY" "../scripts/$$f" "ubuntu@$$ip:/opt/fastevm/"; then \
+					if [[ "$$f" == *.sh ]]; then \
+						ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip "chmod +x /opt/fastevm/$$f" || true; \
+					fi; \
 				else \
 					echo "    ❌ Failed to copy $$f to node $$node_num"; \
 					FAILED=$$((FAILED + 1)); \
 				fi; \
 			done; \
-			if scp $(SSH_OPTS) -i "$$KEY" nodes.remote.env ubuntu@$$ip:/opt/fastevm/node.env 2>&1; then \
+			if scp $(SSH_OPTS) -i "$$KEY" nodes.remote.env ubuntu@$$ip:/opt/fastevm/node.env; then \
 				echo "    ✅ Files copied to node $$node_num"; \
 			else \
-				echo "    ❌ Failed to copy nodes.remote.env to node $$node_num"; \
+				echo "    ❌ Failed to copy node.env to node $$node_num"; \
 				FAILED=$$((FAILED + 1)); \
 			fi; \
 		else \
-			echo "    ❌ Failed to create directory on node $$node_num"; \
+			echo "    ❌ Failed to prepare directory on node $$node_num"; \
 			FAILED=$$((FAILED + 1)); \
 		fi; \
 	done; \
@@ -139,58 +150,6 @@ copy-files: extract-deployment-info
 		echo "⚠️  Files copied with $$FAILED error(s) - continuing anyway"; \
 	fi; \
 	true  # Ensure target always succeeds
-
-# Run setup on all nodes in parallel
-# run-setup: copy-files
-# 	@echo ""
-# 	@echo "🚀 Starting setup on all nodes in parallel (tmux)..."
-# 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
-# 	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
-# 	NODE_COUNT=$$(echo "$$IPS" | wc -l | tr -d ' '); \
-# 	START_PIDS=""; \
-# 	for ip in $$IPS; do \
-# 		echo "  📦 Starting setup on node ($$ip)..."; \
-# 		(ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip '\
-# 			set -e; \
-# 			cd /opt/fastevm; \
-# 			tmux kill-session -t fastevm-setup 2>/dev/null || true; \
-# 			tmux new-session -d -s fastevm-setup "\
-# 				bash node.sh setup > /tmp/fastevm-setup.log 2>&1; \
-# 				echo SETUP_FINISHED >> /tmp/fastevm-setup.log"; \
-# 		' && \
-# 		 echo "    ✅ tmux session started on $$ip" || \
-# 		 echo "    ❌ Failed to start setup on $$ip") & \
-# 		START_PIDS="$$START_PIDS $$!"; \
-# 	done; \
-# 	for pid in $$START_PIDS; do \
-# 		wait $$pid || true; \
-# 	done; \
-# 	echo ""; \
-# 	echo "📡 Watching logs until all nodes finish setup..."; \
-# 	echo ""; \
-# 	TMP_DONE_FILE=$$(mktemp); \
-# 	trap 'rm -f $$TMP_DONE_FILE' EXIT; \
-# 	DONE_COUNT=0; \
-# 	for ip in $$IPS; do \
-# 		(ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip \
-# 			"tail -n 20 -f /tmp/fastevm-setup.log" | \
-# 			while IFS= read -r line; do \
-# 				echo "[$$ip] $$line"; \
-# 				if echo "$$line" | grep -q SETUP_FINISHED; then \
-# 					echo "$$ip" >> $$TMP_DONE_FILE; \
-# 					exit 0; \
-# 				fi; \
-# 			done) & \
-# 	done; \
-# 	while true; do \
-# 		DONE_COUNT=$$(sort -u $$TMP_DONE_FILE 2>/dev/null | wc -l | tr -d ' '); \
-# 		if [ "$$DONE_COUNT" -ge "$$NODE_COUNT" ]; then \
-# 			echo ""; \
-# 			echo "✅ All $$NODE_COUNT nodes finished setup"; \
-# 			break; \
-# 		fi; \
-# 		sleep 2; \
-# 	done
 
 start-setup: copy-files
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
@@ -218,7 +177,7 @@ watch-setup: start-setup
 			"bash -lc 'tail -n 20 -f /tmp/fastevm-setup.log'" | \
 			while IFS= read -r line; do \
 				echo "[$$ip] $$line"; \
-				if echo "$$line" | grep -q SETUP_FINISHED; then \
+				if echo "$$line" | grep -q "$(SETUP_SUCCESS_MSG)"; then \
 					echo "$$ip" >> $$TMP_DONE; \
 					break; \
 				fi; \
@@ -232,37 +191,40 @@ watch-setup: start-setup
 
 
 create-bootnodes: watch-setup
-	@echo "Collecting all peer ids (using private IPs)..."
+	@echo "🔗 Collecting all peer IDs (using Terraform private IPs)..."
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
-	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
-	IPS_ARRAY=($$IPS); \
-	NODE_COUNT=$${#IPS_ARRAY[@]}; \
+	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+	PRIVATE_IPS=$$(terraform output -json instance_ips | jq -r '.[]'); \
+	PUBLIC_ARRAY=($$PUBLIC_IPS); \
+	PRIVATE_ARRAY=($$PRIVATE_IPS); \
+	NODE_COUNT=$${#PUBLIC_ARRAY[@]}; \
 	enode_urls=""; \
 	for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
-		public_ip=$${IPS_ARRAY[$$i]}; \
+		public_ip=$${PUBLIC_ARRAY[$$i]}; \
+		private_ip=$${PRIVATE_ARRAY[$$i]}; \
 		node_num=$$((i+1)); \
 		peer_id=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
-			"cat /opt/fastevm/data/execution/p2p/peer-id.hex" 2>/dev/null | tr -d '\n'); \
-		private_ip=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
-			"hostname -I | awk '{print \$$1}'" 2>/dev/null | tr -d '\n'); \
+			"cat /data/execution/p2p/peer-id.hex" 2>/dev/null | tr -d '\n'); \
 		if [ -n "$$peer_id" ] && [ -n "$$private_ip" ]; then \
 			enode_url="enode://$${peer_id}@$${private_ip}:30303"; \
 			enode_urls="$${enode_urls}$${enode_url},"; \
-			echo "   ✅ Node $$node_num (public $$public_ip, private $$private_ip): $$enode_url"; \
+			echo "   ✅ Node $$node_num (pub $$public_ip, priv $$private_ip): $$enode_url"; \
 		else \
 			echo "   ❌ Node $$node_num ($$public_ip): missing peer-id or private IP"; \
 		fi; \
 	done; \
 	enode_urls="$${enode_urls%,}"; \
 	echo ""; \
-	echo "Collected enode URLs:"; \
-	echo "$$enode_urls"
+	echo "📋 Collected enode URLs:"; \
+	echo "$$enode_urls"; \
+	echo ""; \
 	echo "📤 Updating bootnodes on all nodes..."; \
-	for public_ip in $$IPS; do \
+	for public_ip in $$PUBLIC_IPS; do \
 		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$public_ip \
 			"cd /opt/fastevm && bash service.sh update-bootnodes '$$enode_urls'" || exit 1; \
 	done; \
 	echo "✅ Bootnodes updated on all nodes"
+
 
 
 # Start services on all nodes

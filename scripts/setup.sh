@@ -46,20 +46,11 @@ fi
 cargo build --release
 sudo cp target/release/fastevm-execution /usr/local/bin/fastevm-execution
 sudo cp target/release/fastevm-cli /usr/local/bin/fastevm-cli
-cargo clean
+# cargo clean
 cd modules/mysticeti
 # cargo build --release
 cargo build --release -p evm-consensus --bin evm-consensus
 sudo cp target/release/evm-consensus /usr/local/bin/evm-consensus
-cargo clean
-# git clone https://github.com/paradigmxyz/reth.git
-# cd reth
-# git checkout tags/v1.8.2
-# #RUSTFLAGS="-C target-cpu=native" cargo build --profile profiling --features "jemalloc-prof,asm-keccak"
-# cargo build --profile profiling --features "jemalloc-prof,asm-keccak"
-# cargo build --release -p reth-bench
-# cd
-# git clone https://github.com/Galxe/gravity-reth.git
-# cd gravity-reth
-# cargo build --release
+# cargo clean
+
 

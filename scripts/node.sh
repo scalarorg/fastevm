@@ -52,11 +52,11 @@ GRAVITY_PIPE_BLOCK_GAS_LIMIT="${GRAVITY_PIPE_BLOCK_GAS_LIMIT:-5000000000}"
 GRAVITY_CACHE_MAX_PERSIST_GAP="${GRAVITY_CACHE_MAX_PERSIST_GAP:-64}"
 ENGINE_PERSISTENCE_THRESHOLD="${ENGINE_PERSISTENCE_THRESHOLD:-0}"
 
-# Clean up any stale lock files in the data directory
-sudo rm -rf "$DATA_DIR"
 
 setup() {
-    ${SCRIPT_DIR}/setup.sh
+    # Clean up any stale lock files in the data directory
+    sudo rm -rf "$DATA_DIR"
+    # ${SCRIPT_DIR}/setup.sh
     init-config
     init-services
 }
@@ -142,6 +142,34 @@ init-services() {
         echo "  sudo bash $SCRIPT_DIR/service.sh install"
     fi
 }
+
+init-db() {
+
+    DATA_DIR="${DATA_DIR:-/data}"
+
+    DB_DIR="$DATA_DIR/execution/db"
+    GENESIS="$DATA_DIR/config/genesis.json"
+
+    if [ ! -d "$DB_DIR" ] || [ -z "$(ls -A "$DB_DIR" 2>/dev/null)" ]; then
+    echo "Initializing execution DB..."
+    /usr/local/bin/fastevm-execution init \
+        --datadir "$DATA_DIR/execution" \
+        --chain "$GENESIS"
+    fi
+}
+health-check () {
+    HTTP_PORT=8545
+    ENGINE_PORT=8551
+
+    curl -sf "http://127.0.0.1:${HTTP_PORT}" >/dev/null \
+    || { echo "Execution client unhealthy"; exit 1; }
+
+    curl -sf "http://127.0.0.1:${ENGINE_PORT}" >/dev/null \
+    || { echo "Engine API unhealthy"; exit 1; }
+
+    echo "All services healthy"
+}
+
 start() {
     echo "Starting FastEVM services via systemd..."
     if [ -f "$SCRIPT_DIR/service.sh" ]; then
@@ -158,6 +186,24 @@ start() {
         echo "Cannot start services. Please ensure services are installed."
         exit 1
     fi
+}
+
+status() {
+
+    DATA_DIR="${DATA_DIR:-/data}"
+
+    echo "=== FastEVM Node Status ==="
+    systemctl status fastevm-execution --no-pager -l
+    echo
+    systemctl status fastevm-consensus --no-pager -l
+    echo
+
+    echo "=== Ports ==="
+    ss -tlnp | grep -E "8545|8546|8551|30303" || true
+    echo
+
+    echo "=== Logs ==="
+    ls -lh "$DATA_DIR/logs" || true
 }
 
 stop() {

@@ -47,7 +47,7 @@ update-bootnodes() {
     fi
 
     echo "🔧 Updating BOOTNODES in $ENV_FILE"
-
+    cat $ENV_FILE
     # Ensure env file exists
     touch "$ENV_FILE"
 
@@ -58,261 +58,21 @@ update-bootnodes() {
     echo "BOOTNODES=\"$BOOTNODES\"" >> "$ENV_FILE"
 
     echo "✅ BOOTNODES updated"
+    cat $ENV_FILE
 }
 
 # Install systemd services
 install_services() {
-    log_info "Installing FastEVM systemd services..."
-    
-    # Create systemd service for execution client
-    log_info "Creating fastevm-execution.service..."
-    
-    # Create database initialization script
-    log_info "Creating database initialization script..."
-    tee /usr/local/bin/fastevm-init-db.sh > /dev/null << INITSCRIPT
-#!/bin/bash
-# FastEVM Database Initialization Script
-# This script ensures the database is initialized before starting the service
+    log_info "Installing systemd services..."
+    sudo cp ./fastevm-*.service /etc/systemd/system/
 
-DATA_DIR="\${DATA_DIR:-/data}"
+    log_info "Reloading systemd..."
+    sudo systemctl daemon-reload
 
-if [ ! -d "\$DATA_DIR/execution/db" ] || [ -z "\$(ls -A \$DATA_DIR/execution/db 2>/dev/null)" ]; then
-    if [ -f "\$DATA_DIR/config/genesis.json" ] && [ -f /usr/local/bin/fastevm-execution ]; then
-        /usr/local/bin/fastevm-execution init --datadir "\$DATA_DIR/execution" --chain "\$DATA_DIR/config/genesis.json" || true
-    fi
-fi
-INITSCRIPT
-    chmod +x /usr/local/bin/fastevm-init-db.sh
-    chown ubuntu:ubuntu /usr/local/bin/fastevm-init-db.sh
-    
-    # Load environment variables from node.env file
-    log_info "Loading environment variables from node.env file..."
-    if [ -f "$ENV_FILE" ]; then
-        source "$ENV_FILE"
-        # Remove quotes from BOOTNODES if present
-        log_success "Environment variables loaded from node.env"
-        log_info "Node index: $NODE_INDEX"
-    else
-        echo -e "${YELLOW}[WARNING]${NC} node.env file not found at $ENV_FILE"
-        # Set default values
-        NODE_INDEX="0"
-    fi
-    
-    if ! tee /etc/systemd/system/fastevm-execution.service > /dev/null << EOF
-[Unit]
-Description=FastEVM Execution Client
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=$DATA_DIR
-EnvironmentFile=$ENV_FILE
-Environment=HTTP_PORT=8545
-Environment=WS_PORT=8546
-Environment=ENGINE_PORT=8551
-Environment=P2P_PORT=30303
-Environment=DATA_DIR=$DATA_DIR
-Environment=LOG_LEVEL=${LOG_LEVEL:-vvv}
-# Ensure database is initialized before starting
-# ExecStartPre=/usr/local/bin/fastevm-init-db.sh
-ExecStart=/usr/local/bin/fastevm-execution node \
-    --chain $DATA_DIR/config/genesis.json \
-    --datadir $DATA_DIR/execution \
-    --engine.always-process-payload-attributes-on-canonical-head \
-    --http \
-    --http.api eth,net,web3,admin,debug,txpool \
-    --http.addr 0.0.0.0 \
-    --http.port ${HTTP_PORT} \
-    --http.corsdomain "*" \
-    --ws \
-    --ws.api eth,net,web3,admin,debug,txpool \
-    --ws.addr 0.0.0.0 \
-    --ws.port ${WS_PORT} \
-    --ws.origins "*" \
-    --builder.gaslimit ${GAS_LIMIT} \
-    --txpool.max-new-txns 102400 \
-    --txpool.max-account-slots 102400 \
-    --txpool.max-pending-txns 102400 \
-    --txpool.pending-max-count 102400 \
-    --txpool.pending-max-size 128 \
-    --txpool.max-new-pending-txs-notifications 102400 \
-    --txpool.queued-max-count 102400 \
-    --txpool.queued-max-size 128 \
-    --gravity.disable-pipe-execution \
-    --authrpc.addr 0.0.0.0 \
-    --authrpc.port ${ENGINE_PORT} \
-    --authrpc.jwtsecret $DATA_DIR/execution/jwt.hex \
-    --addr 0.0.0.0 \
-    --port ${P2P_PORT} \
-    --discovery.addr 0.0.0.0 \
-    --discovery.port ${P2P_PORT} \
-    --p2p-secret-key $DATA_DIR/execution/p2p/secret.key \
-    --bootnodes ${BOOTNODES} \
-    --enable-tx-subscription \
-    --committed-subdags-per-block ${SUBDAGS_PER_BLOCK:-30} \
-    --block-build-interval-ms ${BLOCK_BUILD_INTERVAL:-1000} \
-    -${LOG_LEVEL}
-Restart=always
-RestartSec=10
-StandardOutput=append:$DATA_DIR/logs/fastevm-execution.log
-StandardError=append:$DATA_DIR/logs/fastevm-execution.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    then
-        log_error "Failed to create fastevm-execution.service file"
-        exit 1
-    fi
-    
-    # Verify service file was created
-    if [ ! -f "/etc/systemd/system/fastevm-execution.service" ]; then
-        log_error "Service file was not created: /etc/systemd/system/fastevm-execution.service"
-        exit 1
-    fi
-
-    # Create systemd service for consensus client
-    log_info "Creating fastevm-consensus.service..."
-    
-    if ! tee /etc/systemd/system/fastevm-consensus.service > /dev/null << EOF
-[Unit]
-Description=FastEVM Consensus Client
-After=network.target fastevm-execution.service
-
-[Service]
-Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=$DATA_DIR
-Environment=DATA_DIR=$DATA_DIR
-ExecStart=/usr/local/bin/fastevm-consensus start --config $DATA_DIR/config/node.yml
-Restart=always
-RestartSec=10
-StandardOutput=append:$DATA_DIR/logs/fastevm-consensus.log
-StandardError=append:$DATA_DIR/logs/fastevm-consensus.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    then
-        log_error "Failed to create fastevm-consensus.service file"
-        exit 1
-    fi
-    
-    # Verify service file was created
-    if [ ! -f "/etc/systemd/system/fastevm-consensus.service" ]; then
-        log_error "Service file was not created: /etc/systemd/system/fastevm-consensus.service"
-        exit 1
-    fi
-
-    # Create health check script
-    log_info "Creating fastevm-health-check.sh..."
-    tee /usr/local/bin/fastevm-health-check.sh > /dev/null << 'EOL'
-#!/bin/bash
-# Health check script for FastEVM nodes
-
-# Fixed ports for all nodes
-HTTP_PORT=8545
-ENGINE_PORT=8551
-
-# Check execution client
-if curl -s -f "http://localhost:$HTTP_PORT" > /dev/null; then
-    echo "Execution client healthy"
-else
-    echo "Execution client unhealthy"
-    exit 1
-fi
-
-# Check engine API
-if curl -s -f "http://localhost:$ENGINE_PORT" > /dev/null; then
-    echo "Engine API healthy"
-else
-    echo "Engine API unhealthy"
-    exit 1
-fi
-
-echo "All services healthy"
-exit 0
-EOL
-
-    chmod +x /usr/local/bin/fastevm-health-check.sh
-
-    # Create status script
-    log_info "Creating fastevm-status.sh..."
-    tee /usr/local/bin/fastevm-status.sh > /dev/null << 'EOL'
-#!/bin/bash
-# Status script for FastEVM nodes
-
-echo "=== FastEVM Node Status ==="
-echo "Node Index: $NODE_INDEX"
-echo "Node IP: $(hostname -I | awk '{print $1}')"
-echo ""
-
-echo "=== Service Status ==="
-systemctl status fastevm-execution --no-pager -l
-echo ""
-systemctl status fastevm-consensus --no-pager -l
-echo ""
-
-echo "=== Network Ports ==="
-netstat -tlnp | grep -E "(8545|8546|8551|30303|26657)"
-echo ""
-
-DATA_DIR="\${DATA_DIR:-/data}"
-echo "=== Log Files ==="
-if [ -f "\$DATA_DIR/logs/fastevm-execution.log" ]; then
-    echo "Execution log: \$DATA_DIR/logs/fastevm-execution.log (\$(wc -l < \$DATA_DIR/logs/fastevm-execution.log) lines, \$(du -h \$DATA_DIR/logs/fastevm-execution.log | cut -f1))"
-else
-    echo "Execution log: Not found"
-fi
-
-if [ -f "\$DATA_DIR/logs/fastevm-consensus.log" ]; then
-    echo "Consensus log: \$DATA_DIR/logs/fastevm-consensus.log (\$(wc -l < \$DATA_DIR/logs/fastevm-consensus.log) lines, \$(du -h \$DATA_DIR/logs/fastevm-consensus.log | cut -f1))"
-else
-    echo "Consensus log: Not found"
-fi
-echo ""
-
-echo "=== Recent Execution Logs ==="
-if [ -f "\$DATA_DIR/logs/fastevm-execution.log" ]; then
-    tail -n 5 "\$DATA_DIR/logs/fastevm-execution.log"
-else
-    echo "Execution log file not found"
-fi
-echo ""
-
-echo "=== Recent Consensus Logs ==="
-if [ -f "\$DATA_DIR/logs/fastevm-consensus.log" ]; then
-    tail -n 5 "\$DATA_DIR/logs/fastevm-consensus.log"
-else
-    echo "Consensus log file not found"
-fi
-EOL
-
-    chmod +x /usr/local/bin/fastevm-status.sh
-
-    # Reload systemd daemon
-    log_info "Reloading systemd daemon..."
-    if ! systemctl daemon-reload; then
-        log_error "Failed to reload systemd daemon"
-        exit 1
-    fi
-
-    # Enable services
     log_info "Enabling services..."
-    if ! systemctl enable fastevm-execution; then
-        log_error "Failed to enable fastevm-execution service"
-        exit 1
-    fi
-    
-    if ! systemctl enable fastevm-consensus; then
-        log_error "Failed to enable fastevm-consensus service"
-        exit 1
-    fi
+    sudo systemctl enable fastevm-execution fastevm-consensus
 
-    log_success "FastEVM services installed successfully!"
+    log_info "Done"
 }
 
 
@@ -463,51 +223,6 @@ follow_logs() {
     esac
 }
 
-# Update binaries
-update_binaries() {
-    local execution_binary="$1"
-    local consensus_binary="$2"
-    local cli_binary="$3"
-    
-    if [ -z "$execution_binary" ] || [ -z "$consensus_binary" ] || [ -z "$cli_binary" ]; then
-        log_error "All three binary paths are required"
-        echo "Usage: $0 update-binaries <execution> <consensus> <cli>"
-        return 1
-    fi
-    
-    log_info "Updating FastEVM binaries..."
-    
-    # Stop services first
-    log_info "Stopping services..."
-    if systemctl is-active --quiet fastevm-execution; then
-        systemctl stop fastevm-execution
-    fi
-    
-    if systemctl is-active --quiet fastevm-consensus; then
-        systemctl stop fastevm-consensus
-    fi
-    
-    # Wait for services to stop
-    sleep 5
-    
-    # Copy binaries directly to final location
-    log_info "Installing new binaries..."
-    cp "$execution_binary" /usr/local/bin/fastevm-execution
-    cp "$consensus_binary" /usr/local/bin/fastevm-consensus
-    cp "$cli_binary" /usr/local/bin/cli
-    
-    # Set permissions
-    chmod +x /usr/local/bin/fastevm-execution
-    chmod +x /usr/local/bin/fastevm-consensus
-    chmod +x /usr/local/bin/cli
-    
-    log_success "Binaries updated successfully!"
-    
-    # Restart services
-    log_info "Restarting services..."
-    start_services
-}
-
 # Rotate logs
 rotate_logs() {
     local service="$1"
@@ -584,12 +299,11 @@ main() {
             check_root
             rotate_logs "$1"
             ;;
-        "update-binaries")
-            check_root
-            update_binaries "$1" "$2" "$3"
+        "update-bootnodes")
+            update-bootnodes "$1"
             ;;
         "help"|"--help"|"-h")
-            echo "Usage: $0 {install|start|restart|stop|status|logs|follow|rotate|update-binaries} [args]"
+            echo "Usage: $0 {install|start|restart|stop|status|logs|follow|rotate|update-bootnodes} [args]"
             echo ""
             echo "Commands:"
             echo "  install              - Install systemd services"
@@ -600,14 +314,14 @@ main() {
             echo "  logs <service> [n]   - View logs (execution|consensus|all) [lines]"
             echo "  follow <service>     - Follow logs (execution|consensus|all)"
             echo "  rotate <service>     - Rotate logs (execution|consensus|all)"
-            echo "  update-binaries <exec> <cons> <cli> - Update binaries safely"
+            echo "  update-bootnodes <bootnodes> - Update bootnodes"
             echo "  help                 - Show this help"
             echo ""
             echo "Examples:"
             echo "  $0 logs execution 100    # Show last 100 lines of execution logs"
             echo "  $0 follow consensus      # Follow consensus logs in real-time"
             echo "  $0 rotate all            # Rotate all log files"
-            echo "  $0 update-binaries /path/to/exec /path/to/cons /path/to/cli"
+            echo "  $0 update-bootnodes <bootnodes>"
             ;;
         *)
             log_error "Unknown command: $command"
