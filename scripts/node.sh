@@ -1,4 +1,5 @@
 #!/bin/bash
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 set -e
 
@@ -55,13 +56,18 @@ ENGINE_PERSISTENCE_THRESHOLD="${ENGINE_PERSISTENCE_THRESHOLD:-0}"
 
 setup() {
     # Clean up any stale lock files in the data directory
+    local LOCAL_IP="$1"
+    local PUBLIC_IP="$2"
     sudo rm -rf "$DATA_DIR"
-    # ${SCRIPT_DIR}/setup.sh
-    init-config
+    ${SCRIPT_DIR}/setup.sh
+    init-folders
+    init-execution
+    init-consensus "$LOCAL_IP" "$PUBLIC_IP"
+    # Iinit-consensus is called when update ips
     init-services
 }
 # Prepare folders, generate keys and create config files
-init-config() {
+init-folders() {
     sudo mkdir -p $DATA_DIR
     sudo chown -R ubuntu:ubuntu $DATA_DIR
     sudo chmod -R 755 $DATA_DIR
@@ -90,9 +96,11 @@ init-config() {
     chown ubuntu:ubuntu "$DATA_DIR/logs"/*.log
     chmod 664 "$DATA_DIR/logs"/*.log
     
+}
+init-execution() {
     # Copy node.env and genesis.json to data directory
-    cp ./node.env $DATA_DIR/node.env
-    cp ./genesis.json $DATA_DIR/config/genesis.json
+    cp $SCRIPT_DIR/node.env $DATA_DIR/node.env
+    cp $SCRIPT_DIR/genesis.json $DATA_DIR/config/genesis.json
     chown ubuntu:ubuntu "$DATA_DIR/config/genesis.json"
     chmod 644 "$DATA_DIR/config/genesis.json"
     
@@ -123,7 +131,28 @@ init-config() {
     
     log_success "All directories and files prepared with proper permissions"
 }
-
+init-consensus() {
+    local LOCAL_IP=$1
+    local HOST_NAME=${2:-validator-$LOCAL_IP}
+    # Copy node.yml, committees.yml, parameters.yml to data directory
+    cp $SCRIPT_DIR/node.yml $DATA_DIR/config/node.yml
+    cp $SCRIPT_DIR/parameters.yml $DATA_DIR/config/parameters.yml
+    chown ubuntu:ubuntu "$DATA_DIR/config/node.yml"
+    chown ubuntu:ubuntu "$DATA_DIR/config/parameters.yml"
+    # Generate validator.yml
+    evm-consensus generate-validator \
+        --validator-path $DATA_DIR/config/validator.yml \
+        --authority-path $DATA_DIR/config/authority.yml \
+        --stake 1000 \
+        --hostname $HOST_NAME \
+        --ip-address $LOCAL_IP \
+        --port 26657
+    # Generate committees.yml
+    # /usr/local/bin/evm-consensus generate-committee \
+    #     --config-path "$SCRIPT_DIR/validators.yml" \
+    #     --committee-path "$DATA_DIR/config/committees.yml" \
+    #     --epoch "0"
+}
 # Initialize services
 init-services() {
     # Install systemd services
@@ -141,6 +170,35 @@ init-services() {
         echo "Service installation skipped. You can install services manually with:"
         echo "  sudo bash $SCRIPT_DIR/service.sh install"
     fi
+}
+
+update-ips() {
+    export NODE_IPS="$1"
+    # Split CSV into array
+    IFS=',' read -r -a IP_ARRAY <<< "$NODE_IPS"
+
+    IP_COUNT="${#IP_ARRAY[@]}"
+    VALIDATORS_FILE="$SCRIPT_DIR/validators.yml"
+    PLACEHOLDER_COUNT=$(grep -o 'CONSENSUS_IP[0-9]\+' "$VALIDATORS_FILE" | wc -l)
+
+    if [ "$IP_COUNT" -ne "$PLACEHOLDER_COUNT" ]; then
+    echo "❌ IP count ($IP_COUNT) does not match placeholder count ($PLACEHOLDER_COUNT)"
+    exit 1
+    fi
+
+    echo "🔁 Updating validators.yml with consensus IPs..."
+
+    for i in "${!IP_ARRAY[@]}"; do
+        idx=$((i + 1))
+        ip="${IP_ARRAY[$i]}"
+
+        echo "   → CONSENSUS_IP${idx} = ${ip}"
+
+        sed -i \
+            "s/CONSENSUS_IP${idx}/${ip}/g" \
+            "$VALIDATORS_FILE"
+    done
+    echo "✅ validators.yml updated"
 }
 
 init-db() {

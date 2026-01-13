@@ -18,7 +18,7 @@ rustup default 1.88.0
 if [ -d "fastevm" ]; then
     echo "fastevm directory already exists. Updating repository..."
     cd fastevm
-
+    git config pull.rebase true
     git fetch origin
 
     if git show-ref --verify --quiet "refs/heads/$GITHUB_BRANCH"; then
@@ -44,11 +44,13 @@ else
 fi
 
 cargo build --release
+sudo systemctl stop fastevm-execution || true
 sudo cp target/release/fastevm-execution /usr/local/bin/fastevm-execution
 sudo cp target/release/fastevm-cli /usr/local/bin/fastevm-cli
 # cargo clean
 cd modules/mysticeti
 # cargo build --release
+sudo systemctl stop fastevm-consensus || true
 cargo build --release -p evm-consensus --bin evm-consensus
 sudo cp target/release/evm-consensus /usr/local/bin/evm-consensus
 # cargo clean

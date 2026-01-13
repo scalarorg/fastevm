@@ -117,6 +117,9 @@ copy-files: extract-deployment-info
 		setup.sh \
 		service.sh \
 		run.sh \
+		node.yml \
+		validators.yml \
+		parameters.yml \
 	); \
 	for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
 		ip=$${IPS_ARRAY[$$i]}; \
@@ -153,15 +156,22 @@ copy-files: extract-deployment-info
 
 start-setup: copy-files
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
-	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
-	for ip in $$IPS; do \
-		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip '\
-			cd /opt/fastevm && \
+	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+	PRIVATE_IPS=$$(terraform output -json instance_ips | jq -r '.[]'); \
+	PUBLIC_ARRAY=($$PUBLIC_IPS); \
+	PRIVATE_ARRAY=($$PRIVATE_IPS); \
+	NODE_COUNT=$${#PUBLIC_ARRAY[@]}; \
+	for (( i=0; i<NODE_COUNT; i++ )); do \
+		public_ip=$${PUBLIC_ARRAY[$$i]}; \
+		private_ip=$${PRIVATE_ARRAY[$$i]}; \
+		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$public_ip \
+			"cd /opt/fastevm && \
 			tmux kill-session -t fastevm-setup 2>/dev/null || true && \
-			tmux new-session -d -s fastevm-setup "bash node.sh setup > /tmp/fastevm-setup.log 2>&1" \
-		' & \
+			tmux new-session -d -s fastevm-setup \"bash -x node.sh setup $$private_ip $$public_ip > /tmp/fastevm-setup.log 2>&1\"" & \
 	done; \
 	wait
+
+
 
 watch-setup: start-setup
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
@@ -190,7 +200,7 @@ watch-setup: start-setup
 	echo "✅ All $$NODE_COUNT nodes finished setup"
 
 
-create-bootnodes: watch-setup
+update-bootnodes: watch-setup
 	@echo "🔗 Collecting all peer IDs (using Terraform private IPs)..."
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
 	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
@@ -226,9 +236,48 @@ create-bootnodes: watch-setup
 	echo "✅ Bootnodes updated on all nodes"
 
 
+## Collect all authority keys and update committees.yml
+update-committees: watch-setup
+	@echo "🔗 Collecting authority.yml from all validators and building committees.yml"
+
+	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+	TMP_COMMITTEES=$$(mktemp); \
+	echo "epoch: 0" > $$TMP_COMMITTEES; \
+	echo "authorities:" >> $$TMP_COMMITTEES; \
+	INDEX=0; \
+	for public_ip in $$PUBLIC_IPS; do \
+		echo "  - index: $$INDEX" >> $$TMP_COMMITTEES; \
+		ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
+			"cat /data/config/authority.yml" \
+		| sed 's/^/    /' \
+		| grep -Ev '^(    index:|    epoch:)' \
+		>> $$TMP_COMMITTEES || exit 1; \
+		INDEX=$$((INDEX+1)); \
+	done; \
+	{ \
+		echo ""; \
+		echo "quorum_threshold: 2667"; \
+		echo "validity_threshold: 1334"; \
+	} >> $$TMP_COMMITTEES; \
+	echo "📄 Generated committees.yml:"; \
+	echo "--------------------------------"; \
+	cat $$TMP_COMMITTEES; \
+	echo "--------------------------------"; \
+	echo "🚀 Updating committees.yml on all nodes..."; \
+	for public_ip in $$PUBLIC_IPS; do \
+		scp $(SSH_OPTS) -i "$$KEY" $$TMP_COMMITTEES "ubuntu@$$public_ip:/data/config/committees.yml" || exit 1; \
+	done; \
+	rm -f $$TMP_COMMITTEES; \
+	echo "✅ Committees.yml updated on all nodes"
+
+
+
+update-envs: update-bootnodes update-committees
+	@echo "✅ Bootnodes and committees.yml updated on all nodes"
 
 # Start services on all nodes
-start-services: create-bootnodes
+start-services: update-envs
 	@echo ""
 	@echo "🚀 Starting services on all nodes..."
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
