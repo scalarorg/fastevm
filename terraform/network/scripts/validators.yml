@@ -1,0 +1,30 @@
+validators:
+- hostname: fastevm-consensus1
+  ip_address: CONSENSUS_IP1
+  port: 26657
+  stake: 1000
+  authority_private_key: 266f9708fd8d3b462b10cdbf5498076c021eb3acfdd47cb1fef647967fe194fb
+  protocol_private_key: 0564f879d27ae3c02ce82834acfa8c793a629f2ca0de6919610be82f411326be
+  network_private_key: 0bd58841203e74fe86fc71338ce0173dc628ebb719bdcbcc151585214cc089b4
+- hostname: fastevm-consensus2
+  ip_address: CONSENSUS_IP2
+  port: 26657
+  stake: 1000
+  authority_private_key: 04b9cd8ec42d4dbd6d9bdc00193179188a3dbb065ae911dcd52ec2e51f84d34d
+  protocol_private_key: b20cd67c4bdecc538e8be990c1b6425d68bfd3a6fe97693e4846351596cca8ab
+  network_private_key: f59fddd0b7f52dcc0c60a448cbf9511610b0a742f1e4d238a7a45cae054ec21c
+- hostname: fastevm-consensus3
+  ip_address: CONSENSUS_IP3
+  port: 26657
+  stake: 1000
+  authority_private_key: 02c6e34108de768debd7d65f9e61f98598096143750427e15441fd1b47eecad0
+  protocol_private_key: d202f5628b6cabe10d5ab83244e4b230efd4dcccefc4635892d35e9dcb7225df
+  network_private_key: f4b72cdf4b3c419a5842704b1fee794023a5eae0223956fb2c47016e107b844e
+- hostname: fastevm-consensus4
+  ip_address: CONSENSUS_IP4
+  port: 26657
+  stake: 1000
+  authority_private_key: 1dc9899f98c07e237e2e367d8604a1a93ecf8f5c4451975dcca011db923fa32c
+  protocol_private_key: 9d94d71c071c651a597155e152fbd07bb580077d80935bf23663425ff2a5f1a9
+  network_private_key: a73ceacbb5fbdb93619fe47144798f36653dec8192d787ed4056c4733c4f0076
+epoch: 0

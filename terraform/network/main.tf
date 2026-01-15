@@ -45,67 +45,19 @@ resource "local_file" "fastevm_public_key" {
   file_permission = "0644"
 }
 
-# Create VPC network
-resource "google_compute_network" "fastevm_network" {
-  name                    = "${var.project_name}-network"
-  auto_create_subnetworks = false
-  description             = "FastEVM network for blockchain nodes"
+# Reference existing network (created by client-node)
+data "google_compute_network" "fastevm_network" {
+  name = "fastevm-network"
 }
 
-# Create subnet
-resource "google_compute_subnetwork" "fastevm_subnet" {
-  name          = "${var.project_name}-subnet"
-  ip_cidr_range = var.subnet_cidr
-  region        = var.region
-  network       = google_compute_network.fastevm_network.id
-
-  secondary_ip_range {
-    range_name    = "pods"
-    ip_cidr_range = "10.0.1.0/24"
-  }
-
-  secondary_ip_range {
-    range_name    = "services"
-    ip_cidr_range = "10.0.2.0/24"
-  }
+# Reference existing subnet (created by client-node)
+data "google_compute_subnetwork" "fastevm_subnet" {
+  name   = "fastevm-subnet"
+  region = var.region
 }
 
-# Create firewall rules
-resource "google_compute_firewall" "fastevm_internal" {
-  name    = "${var.project_name}-internal"
-  network = google_compute_network.fastevm_network.name
-
-  allow {
-    protocol = "tcp"
-    ports    = ["22", "80", "443", "8545", "8546", "8551", "26657", "30303"]
-  }
-
-  allow {
-    protocol = "udp"
-    ports    = ["26657", "30303"]
-  }
-
-  source_ranges = [var.subnet_cidr]
-  target_tags   = ["fastevm-node"]
-}
-
-resource "google_compute_firewall" "fastevm_external" {
-  name    = "${var.project_name}-external"
-  network = google_compute_network.fastevm_network.name
-
-  allow {
-    protocol = "tcp"
-    ports    = ["22", "80", "443", "8545", "8546", "8551", "26657", "30303"]
-  }
-
-  allow {
-    protocol = "udp"
-    ports    = ["26657", "30303"]
-  }
-
-  source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["fastevm-node"]
-}
+# Firewall rules are created by client-node, so we don't need to create them here
+# They will be automatically available for all nodes in the network
 
 # No startup script - nodes will be initialized via deploy.sh after creation
 # This allows for better control, logging, and error handling during deployment
@@ -140,8 +92,8 @@ resource "google_compute_instance" "fastevm_nodes" {
   }
 
   network_interface {
-    network    = google_compute_network.fastevm_network.id
-    subnetwork = google_compute_subnetwork.fastevm_subnet.id
+    network    = data.google_compute_network.fastevm_network.id
+    subnetwork = data.google_compute_subnetwork.fastevm_subnet.id
     access_config {
       // Ephemeral public IP (automatically assigned)
     }

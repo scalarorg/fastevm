@@ -47,6 +47,459 @@ The deployment uses an optimized build process to avoid build failures:
 
 This approach is more reliable and faster than building on each node individually.
 
+## 📋 Deployment Flow to GCloud
+
+This section documents the complete deployment flow from infrastructure provisioning to service startup when deploying FastEVM to Google Cloud Platform using Terraform.
+
+### Overview
+
+The deployment process consists of several phases that work together to create a fully functional FastEVM network:
+
+1. **Infrastructure Provisioning** - Create GCP resources (VMs, networking, security)
+2. **Configuration Extraction** - Gather deployment information (IPs, keys)
+3. **File Distribution** - Copy scripts and configs to all nodes
+4. **Node Setup** - Install dependencies and build binaries on each node
+5. **Network Configuration** - Configure peer-to-peer networking and consensus
+6. **Service Startup** - Start all FastEVM services
+7. **Verification** - Validate deployment health
+
+### Detailed Deployment Flow
+
+#### Phase 1: Prerequisites and Initialization
+
+**Targets**: `check-prereqs`, `init`, `validate`
+
+```bash
+make check-prereqs  # Validates required tools are installed
+make init           # Initializes Terraform backend and providers
+make validate       # Validates Terraform configuration syntax
+```
+
+**What happens:**
+- Checks for required tools: `terraform`, `gcloud`, `jq`
+- Verifies `PROJECT_ID` is set (from `fastevm.env` or environment)
+- Initializes Terraform with GCP provider
+- Validates all `.tf` files for syntax errors
+
+**Infrastructure Created:**
+- None yet (preparation phase)
+
+---
+
+#### Phase 2: Infrastructure Planning
+
+**Target**: `plan`
+
+```bash
+make plan  # Creates Terraform execution plan
+```
+
+**What happens:**
+- Loads variables from `terraform.tfvars` or environment
+- Calculates infrastructure changes
+- Generates execution plan saved to `tfplan`
+- Shows what resources will be created/modified/destroyed
+
+**Infrastructure Created:**
+- None yet (planning phase)
+
+---
+
+#### Phase 3: Infrastructure Provisioning
+
+**Targets**: `apply`, `import-existing` (if needed)
+
+```bash
+make apply  # Creates all GCP resources
+```
+
+**What happens:**
+- Creates VPC network (`fastevm-network`) with subnet (`10.0.0.0/24`)
+- Creates firewall rules (internal and external access)
+- Generates SSH key pair (`fastevm-deploy-key`, `fastevm-deploy-key.pub`)
+- Creates service account with compute permissions
+- Provisions compute instances (default: 4x `e2-standard-4` VMs)
+- Creates load balancer with global IP address
+- Configures instance groups and health checks
+- If resources already exist, attempts to import them
+
+**Infrastructure Created:**
+- VPC Network: `fastevm-network`
+- Subnet: `fastevm-subnet` (10.0.0.0/24)
+- Firewall Rules: `fastevm-internal`, `fastevm-external`
+- Service Account: `fastevm-sa`
+- Compute Instances: `fastevm-node-1` through `fastevm-node-N`
+- Load Balancer: Global IP, health check, backend service
+- SSH Keys: `fastevm-deploy-key` (private), `fastevm-deploy-key.pub` (public)
+
+**Outputs Generated:**
+- `terraform.tfstate` - Current infrastructure state
+- `../deployment-info.json` - Deployment summary with IPs and endpoints
+
+---
+
+#### Phase 4: Deployment Information Extraction
+
+**Target**: `extract-deployment-info`
+
+```bash
+make extract-deployment-info  # Extracts IPs and creates environment files
+```
+
+**What happens:**
+- Reads Terraform outputs for instance IPs (external and internal)
+- Creates `nodes.remote.env` with:
+  - `PEER_COUNT` - Number of nodes
+  - `PEER1_IP`, `PEER2_IP`, etc. - Internal IPs for each node
+  - `ENV_FILE` - Path to environment file on remote nodes
+- Sets proper permissions on SSH private key (600)
+
+**Files Created:**
+- `nodes.remote.env` - Environment file for remote nodes with internal IPs
+
+---
+
+#### Phase 5: File Distribution
+
+**Target**: `copy-files`
+
+```bash
+make copy-files  # Copies scripts and configs to all nodes
+```
+
+**What happens:**
+- For each node:
+  - Creates `/opt/fastevm/` directory on remote node
+  - Copies files from `../scripts/` directory:
+    - `genesis.json` - Genesis block configuration
+    - `node.sh` - Node management script
+    - `setup.sh` - Setup script
+    - `service.sh` - Service management script
+    - `run.sh` - Runtime script
+    - `node.yml` - Node configuration
+    - `validators.yml` - Validator configuration
+    - `parameters.yml` - Consensus parameters
+    - Systemd service files (`fastevm-execution.service`, `fastevm-consensus.service`)
+  - Copies `nodes.remote.env` to `/opt/fastevm/node.env`
+  - Sets execute permissions on shell scripts
+
+**Files Copied to Each Node:**
+```
+/opt/fastevm/
+├── genesis.json
+├── node.sh
+├── setup.sh
+├── service.sh
+├── run.sh
+├── node.yml
+├── validators.yml
+├── parameters.yml
+├── fastevm-execution.service
+├── fastevm-consensus.service
+└── node.env
+```
+
+---
+
+#### Phase 6: Node Setup
+
+**Targets**: `start-setup`, `watch-setup`
+
+```bash
+make start-setup   # Starts setup on all nodes in parallel
+make watch-setup   # Monitors setup progress until completion
+```
+
+**What happens:**
+
+1. **Start Setup** (`start-setup`):
+   - For each node, creates a tmux session named `fastevm-setup`
+   - Runs `node.sh setup <private_ip> <public_ip>` in background
+   - Setup script:
+     - Installs system dependencies (Rust, build tools, etc.)
+     - Clones FastEVM repository from GitHub
+     - Builds Rust binaries (`fastevm-execution`, `evm-consensus`)
+     - Creates data directories (`/data/execution`, `/data/consensus`)
+     - Generates node-specific configurations
+     - Creates systemd service files
+   - Logs written to `/tmp/fastevm-setup.log` on each node
+
+2. **Watch Setup** (`watch-setup`):
+   - Tails setup logs from all nodes simultaneously
+   - Monitors for success message: `"FastEVM services installed successfully!"`
+   - Tracks completion status for each node
+   - Exits when all nodes complete setup
+
+**Setup Process on Each Node:**
+- Installs: Rust toolchain, build-essential, git, curl, jq
+- Clones repository: `https://github.com/scalarorg/fastevm.git`
+- Builds binaries: `cargo build --release`
+- Creates directories: `/data/execution`, `/data/consensus`, `/data/config`, `/data/logs`
+- Generates configurations: `authority.yml`, `validator.yml`, JWT secrets
+- Installs binaries: `/usr/local/bin/fastevm-execution`, `/usr/local/bin/evm-consensus`
+
+---
+
+#### Phase 7: Network Configuration
+
+**Targets**: `update-bootnodes`, `collect-validators`, `genesis-config`, `update-envs`
+
+```bash
+make update-bootnodes    # Collects peer IDs and updates bootnodes
+make collect-validators # Collects authority keys and builds committees.yml
+make genesis-config      # Builds genesis_config.json from all validators
+make update-envs         # Updates bootnodes and committees on all nodes
+```
+
+**What happens:**
+
+1. **Update Bootnodes** (`update-bootnodes`):
+   - Connects to each node and reads `/data/execution/p2p/peer-id.hex`
+   - Constructs enode URLs: `enode://<peer_id>@<private_ip>:30303`
+   - Updates bootnodes configuration on all nodes using `service.sh update-bootnodes`
+
+2. **Collect Validators** (`collect-validators`):
+   - Reads `/data/config/authority.yml` from each node
+   - Builds unified `committees.yml` with:
+     - `epoch: 0`
+     - `authorities:` array with all validator keys
+     - `quorum_threshold: 2667`
+     - `validity_threshold: 1334`
+   - Distributes `committees.yml` to `/data/config/committees.yml` on all nodes
+
+3. **Genesis Config** (`genesis-config`):
+   - Collects `authority.yml` from all nodes
+   - Extracts: validator addresses, consensus public keys, voting powers, network addresses
+   - Builds `genesis_config.json` with complete validator set
+   - Distributes to `/data/config/genesis_config.json` on all nodes
+
+4. **Update Environments** (`update-envs`):
+   - Runs both `update-bootnodes` and `collect-validators`
+   - Ensures all nodes have consistent network configuration
+
+**Configuration Files Updated:**
+- `/data/config/committees.yml` - Consensus committee configuration
+- `/data/config/genesis_config.json` - Genesis block configuration
+- Execution client bootnodes configuration
+
+---
+
+#### Phase 8: Service Startup
+
+**Target**: `start-services`
+
+```bash
+make start-services  # Starts all FastEVM services on all nodes
+```
+
+**What happens:**
+- For each node:
+  - Executes `cd /opt/fastevm && bash node.sh start`
+  - Starts systemd services:
+    - `fastevm-execution.service` - Execution client
+    - `fastevm-consensus.service` - Consensus client
+  - Waits 30 seconds for services to initialize
+
+**Services Started:**
+- **Execution Client** (`fastevm-execution`):
+  - HTTP RPC: Port 8545
+  - WebSocket RPC: Port 8546
+  - Engine API: Port 8551
+  - P2P: Port 30303
+- **Consensus Client** (`evm-consensus`):
+  - API: Port 26657
+  - P2P: Port 26657 (UDP)
+
+---
+
+#### Phase 9: Deployment Verification
+
+**Target**: `verify-deployment`
+
+```bash
+make verify-deployment  # Tests RPC endpoints on all nodes
+```
+
+**What happens:**
+- Waits 30 seconds for services to stabilize
+- For each node, sends JSON-RPC request:
+  ```json
+  {
+    "jsonrpc": "2.0",
+    "method": "eth_blockNumber",
+    "params": [],
+    "id": 1
+  }
+  ```
+- Validates response contains valid block number
+- Reports success/failure for each node
+
+**Verification Checks:**
+- HTTP RPC endpoint responding (port 8545)
+- Valid JSON-RPC response format
+- Block number retrieval successful
+
+---
+
+### Complete Deployment Command
+
+The `make deploy` target orchestrates all phases:
+
+```bash
+make deploy
+```
+
+**Execution Order:**
+1. `check-prereqs` - Validate prerequisites
+2. `init` - Initialize Terraform
+3. `plan` - Create execution plan
+4. `apply` - Provision infrastructure
+5. `extract-deployment-info` - Extract IPs and create env files
+6. `copy-files` - Copy scripts to all nodes
+7. `start-setup` - Start setup on all nodes
+8. `watch-setup` - Monitor setup completion
+9. `update-envs` - Configure network (bootnodes + committees)
+10. `start-services` - Start all services
+11. `verify-deployment` - Verify deployment health
+
+**Note**: The `deploy` target references `run-setup` and `wait-for-setup` which are aliases for `start-setup` and `watch-setup` respectively.
+
+---
+
+### Deployment Timeline
+
+Typical deployment times:
+
+- **Infrastructure Provisioning**: 2-5 minutes
+- **File Distribution**: 1-2 minutes
+- **Node Setup** (build binaries): 10-20 minutes per node (parallel)
+- **Network Configuration**: 1-2 minutes
+- **Service Startup**: 30 seconds
+- **Verification**: 1 minute
+
+**Total Time**: ~15-30 minutes depending on:
+- Number of nodes
+- Build time for Rust binaries
+- Network latency
+- GCP resource provisioning speed
+
+---
+
+### Deployment Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 1: Prerequisites & Initialization                     │
+│ - Check tools (terraform, gcloud, jq)                       │
+│ - Initialize Terraform                                       │
+│ - Validate configuration                                     │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 2: Infrastructure Planning                             │
+│ - Load variables                                             │
+│ - Generate execution plan                                    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 3: Infrastructure Provisioning                          │
+│ - Create VPC, subnet, firewall rules                         │
+│ - Generate SSH keys                                          │
+│ - Create service account                                     │
+│ - Provision compute instances                                │
+│ - Configure load balancer                                    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 4: Extract Deployment Info                             │
+│ - Read Terraform outputs                                     │
+│ - Create nodes.remote.env                                    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 5: File Distribution                                    │
+│ - Copy scripts to /opt/fastevm/ on all nodes                │
+│ - Copy node.env to each node                                 │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 6: Node Setup (Parallel)                               │
+│ - Install dependencies                                       │
+│ - Clone repository                                           │
+│ - Build Rust binaries                                        │
+│ - Generate configurations                                    │
+│ - Monitor completion                                         │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 7: Network Configuration                                │
+│ - Collect peer IDs → Update bootnodes                        │
+│ - Collect authority keys → Build committees.yml              │
+│ - Build genesis_config.json                                  │
+│ - Distribute to all nodes                                    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 8: Service Startup                                     │
+│ - Start execution client (systemd)                          │
+│ - Start consensus client (systemd)                          │
+│ - Wait for initialization                                    │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 9: Verification                                         │
+│ - Test RPC endpoints                                         │
+│ - Validate block number retrieval                            │
+│ - Report deployment status                                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Troubleshooting Deployment
+
+#### Check Setup Status
+```bash
+make check-setup-status  # Check if setup is running/completed on all nodes
+make check-setup-logs    # View setup logs from all nodes
+```
+
+#### Manual Steps
+If deployment fails at any phase:
+
+1. **Infrastructure Issues**:
+   ```bash
+   make instances        # Check GCP instance status
+   make outputs          # View Terraform outputs
+   ```
+
+2. **Setup Issues**:
+   ```bash
+   make ssh-node NODE=1  # SSH to node 1
+   tail -f /tmp/fastevm-setup.log  # View setup log
+   ```
+
+3. **Network Configuration Issues**:
+   ```bash
+   make update-bootnodes    # Retry bootnode update
+   make collect-validators  # Retry validator collection
+   ```
+
+4. **Service Issues**:
+   ```bash
+   make restart           # Restart all services
+   make health            # Check node health
+   make test-rpc          # Test RPC endpoints
+   ```
+
 ### Deployment
 
 The single deployment command handles everything:

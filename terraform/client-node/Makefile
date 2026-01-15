@@ -1,74 +1,130 @@
 # FastEVM Client Node Management Makefile
-# Standalone client node deployment and management
+# Simplified workflow: Deploy client node -> Setup -> Deploy network
 
-.PHONY: help init plan apply destroy status connect setup-config run-test run-scan run-batch run-all update-code clean-logs clean-all bootstrap quick-start prepare-binaries backup-binaries restore-binaries check-terraform
+.PHONY: help deploy setup-client deploy-network transfer-creds status connect destroy clean
 
 # Default target
 help: ## Show available commands
 	@echo "FastEVM Client Node Management"
 	@echo "=============================="
 	@echo ""
-	@echo "Deployment Commands:"
-	@echo "  check-terraform   Check if terraform is available"
-	@echo "  init              Initialize Terraform"
-	@echo "  plan              Plan deployment"
-	@echo "  apply             Deploy client node"
-	@echo "  destroy           Destroy client node"
-	@echo "  status            Show deployment status"
-	@echo ""
-	@echo "Configuration Commands:"
-	@echo "  prepare-configs   Prepare configurations locally"
-	@echo "  deploy-configs   Deploy configurations to remote client"
-	@echo "  setup            Run setup script on remote client (bootstrap + configure)"
-	@echo ""
-	@echo "Binary Management:"
-	@echo "  prepare-binaries Prepare and install binaries (backup/restore or build)"
-	@echo "  backup-binaries  Backup binaries from client to local storage"
-	@echo "  restore-binaries Restore binaries from local storage to client"
-	@echo ""
-	@echo "Client Management:"
-	@echo "  connect           Connect to client node via SSH"
-	@echo "  setup-config      Setup test configuration"
-	@echo "  run-test          Run specific test (usage: make run-test TEST=scan)"
-	@echo "  run-scan          Run block scan test (usage: make run-scan START_NUMBER=10 COUNTER=5)"
-	@echo "  run-batch         Run batch transaction test"
-	@echo "  run-all           Run all tests"
-	@echo ""
-	@echo "Maintenance Commands:"
-	@echo "  update-code       Update code and rebuild on client node"
-	@echo "  clean-logs        Clean logs on client node"
-	@echo "  quick-start       Quick start: complete client node setup"
+	@echo "Main Commands:"
+	@echo "  deploy           Deploy client node and setup (Step 1)"
+	@echo "  deploy-network   Deploy network from client node (Step 2)"
+	@echo "  transfer-creds   Transfer gcloud credentials to client node"
+	@echo "  status           Show deployment status"
+	@echo "  connect          Connect to client node via SSH"
+	@echo "  destroy          Destroy client node"
+	@echo "  clean            Clean local files"
 	@echo ""
 
 # Configuration
 CLIENT_SSH_KEY := client-deploy-key
 CLIENT_USER := ubuntu
-CLIENT_PROJECT_DIR := /home/$(CLIENT_USER)/fastevm
-CLIENT_CONFIG_DIR := /home/$(CLIENT_USER)/test-config
-ENV_FILE = ../fastevm.env
+CLIENT_SETUP_SCRIPT := scripts/setup.sh
+NETWORK_TERRAFORM_DIR := ../network
+
+# Use terraform.tfvars if it exists (Terraform auto-loads it, but we can be explicit)
+# Otherwise fall back to environment variables
+TF_VARS = $(if $(wildcard terraform.tfvars),-var-file=terraform.tfvars,\
+          -var="project_id=$(PROJECT_ID)" -var="region=$(REGION)" -var="zone=$(ZONE)" \
+          -var="project_name=$(PROJECT_NAME)" \
+          -var="github_repo=$(GITHUB_REPO)" -var="github_branch=$(GITHUB_BRANCH)"\
+          )
 
 # Initialize Terraform
 init: ## Initialize Terraform
-	@echo "🔧 Initializing Terraform..."
 	@terraform init
-	@echo "✅ Terraform initialized"
 
-# Plan deployment
-plan: ## Plan client node deployment
-	@echo "📋 Planning client node deployment..."
-	@terraform plan
-	@echo "✅ Plan completed"
+validate: ## Validate Terraform configuration
+	@terraform validate
 
-# Deploy client node
-apply: ## Deploy client node
-	@echo "🚀 Deploying FastEVM client node..."
+format: ## Format Terraform files
+	@terraform fmt -recursive
+
+plan: init validate format ## Plan client node deployment
+	@terraform plan $(TF_VARS) -out=tfplan
+
+# Step 1: Deploy client node, copy setup.sh and execute it
+deploy: plan ## Deploy client node and run initial setup
+	@echo "🚀 Step 1: Deploying FastEVM client node..."
 	@terraform apply -auto-approve
-	@echo "✅ Client node deployed successfully"
+	@echo "✅ Client node deployed"
 	@echo ""
-	@echo "📋 Next steps:"
-	@echo "  1. Wait for client setup to complete (2-3 minutes)"
-	@echo "  2. Run 'make setup-config' to configure test settings"
-	@echo "  3. Run 'make run-scan' to test the setup"
+	@echo "📦 Copying setup script to client node..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_SETUP_SCRIPT) $(CLIENT_USER)@$$CLIENT_IP:~/setup.sh || { \
+		echo "❌ Failed to copy setup.sh"; exit 1; \
+	}; \
+	echo "🔧 Executing setup script on client node..."; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "FASTEVM_BRANCH=$${FASTEVM_BRANCH:-main} bash ~/setup.sh"; \
+	echo "✅ Step 1 completed: Client node is ready"; \
+	echo "📝 Setup script is available at: ~/setup.sh"
+	@echo ""
+	@echo "📋 Next step: Run 'make deploy-network' to deploy the network from this client node"
+
+setup: deploy
+	@echo "🔧 Executing setup script on client node..."; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "FASTEVM_BRANCH=$${FASTEVM_BRANCH:-main} bash ~/setup.sh"; \
+	echo "✅ Step 1 completed: Client node is ready"; \
+	@echo "📋 Next step: Run 'make deploy-network' to deploy the network from this client node"
+
+# Transfer gcloud credentials to client node
+transfer-creds: deploy ## Transfer gcloud credentials to client node
+	@echo "🔐 Transferring gcloud credentials to client node..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	GCLOUD_CREDS=$$HOME/.config/gcloud/application_default_credentials.json; \
+	if [ -f "$$GCLOUD_CREDS" ]; then \
+		ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+			-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "mkdir -p ~/.config/gcloud"; \
+		scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+			-i $(CLIENT_SSH_KEY) $$GCLOUD_CREDS $(CLIENT_USER)@$$CLIENT_IP:~/.config/gcloud/application_default_credentials.json || { \
+			echo "❌ Failed to copy gcloud credentials"; exit 1; \
+		}; \
+		echo "✅ gcloud credentials transferred"; \
+		PROJECT_ID=$$(gcloud config get-value project 2>/dev/null || echo ""); \
+		if [ -n "$$PROJECT_ID" ]; then \
+			ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+				-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "gcloud config set project $$PROJECT_ID" || true; \
+			echo "✅ gcloud project set to $$PROJECT_ID"; \
+		fi; \
+	else \
+		echo "❌ gcloud credentials not found at $$GCLOUD_CREDS"; \
+		echo "   Please run 'gcloud auth application-default login' first."; \
+		exit 1; \
+	fi
+
+# Step 2: Deploy network from client node (after source code is cloned to /opt/fastevm)
+deploy-network: transfer-creds ## Deploy network from client node (Step 2)
+	@echo "🚀 Step 2: Deploying network from client node..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	echo "📡 Connecting to client node at $$CLIENT_IP..."; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	echo "🔧 Executing network deployment from /opt/fastevm/terraform/network..."; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP \
+		'cd /opt/workspace/fastevm/terraform/network && make deploy'; \
+	echo "✅ Step 2 completed: Network deployed from client node"
 
 # Destroy client node
 destroy: ## Destroy client node
@@ -88,7 +144,7 @@ status: ## Show deployment status
 	@if [ -f "terraform.tfstate" ]; then \
 		CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 		if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
-			echo "❌ Client node not found. Run 'make apply' first."; \
+			echo "❌ Client node not found. Run 'make deploy' first."; \
 		else \
 			echo "Client IP: $$CLIENT_IP"; \
 			echo "SSH Command: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP"; \
@@ -96,211 +152,48 @@ status: ## Show deployment status
 			echo "Setup Status:"; \
 			ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 			ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-			SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /home/ubuntu/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
-			if [ "$$SETUP_COMPLETE" = "yes" ]; then \
-				echo "✅ Setup completed"; \
-				echo ""; \
-				echo "Test Binary:"; \
-				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la /usr/local/bin/fastevm-test 2>/dev/null && echo "✅ Binary ready" || echo "❌ Binary not found"'; \
-				echo ""; \
-				echo "Configuration:"; \
-				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls -la $(ENV_FILE) 2>/dev/null && echo "✅ Config ready" || echo "❌ Config not found"'; \
+			SOURCE_CLONED=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'test -d /opt/fastevm && echo "yes" || echo "no"'); \
+			if [ "$$SOURCE_CLONED" = "yes" ]; then \
+				echo "✅ Source code cloned to /opt/fastevm"; \
+				NETWORK_READY=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'test -d /opt/fastevm/terraform/network && echo "yes" || echo "no"'); \
+				if [ "$$NETWORK_READY" = "yes" ]; then \
+					echo "✅ Network terraform directory ready"; \
+				else \
+					echo "⏳ Network terraform directory not found"; \
+				fi; \
 			else \
-				echo "⏳ Setup still running..."; \
-				echo "Recent setup log:"; \
-				ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -3 /var/log/client-bootstrap.log 2>/dev/null || echo "No log found"'; \
+				echo "⏳ Source code not yet cloned to /opt/fastevm"; \
 			fi; \
 		fi; \
 	else \
-		echo "❌ No Terraform state found. Run 'make apply' first."; \
+		echo "❌ No Terraform state found. Run 'make deploy' first."; \
 	fi
 
 # Terraform command detection - use PATH to find terraform
 TERRAFORM_CMD := $(shell which terraform 2>/dev/null || echo "terraform")
 
-# Check if terraform is available
-check-terraform:
-	@if ! command -v terraform >/dev/null 2>&1; then \
-		echo "❌ Terraform not found in PATH. Please install terraform first."; \
-		echo "   Visit: https://developer.hashicorp.com/terraform/downloads"; \
-		exit 1; \
-	fi
-	@echo "✅ Terraform found: $$(which terraform)"
-
-# Common variables
-TEST_SLEEP_DURATION = $(TEST_WAITING_TIME_SECONDS)
-
-# Get client IP and validate it exists
-define GET_CLIENT_IP
-	CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
-	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
-		echo "❌ Client node not found. Run 'make apply' first."; \
-		exit 1; \
-	fi
-endef
-
-
-# SSH connection helper - handles host key management
-define SSH_CONNECT
-	$(GET_CLIENT_IP); \
-	echo "🔑 Managing SSH host keys for $$CLIENT_IP..."; \
-	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
-	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP $(1)
-endef
-
 
 # Connect to client node
 connect: ## Connect to client node via SSH
 	@echo "🔗 Connecting to client node..."
-	$(call SSH_CONNECT)
-
-# Setup client configuration
-setup-config: ## Setup test configuration on client node
-	@echo "⚙️  Setting up client configuration..."
 	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
-		echo "❌ Client node not found. Run 'make apply' first."; \
-		exit 1; \
-	fi; \
-	echo "Setting up configuration on $$CLIENT_IP..."; \
-	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
-	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	SETUP_COMPLETE=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls /home/ubuntu/client-bootstrap-complete 2>/dev/null && echo "yes" || echo "no"'); \
-	if [ "$$SETUP_COMPLETE" = "no" ]; then \
-		echo "⏳ Client setup is still running. Please wait for it to complete."; \
-		echo "You can check progress with: make status"; \
-		echo "Or wait a few minutes and try again."; \
-		exit 1; \
-	fi; \
-	CONFIG_EXISTS=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'ls $(ENV_FILE) 2>/dev/null && echo "yes" || echo "no"'); \
-	
-	echo "✅ Configuration ready"; \
-	echo ""; \
-	echo "📝 Next steps:"; \
-	echo "  1. SSH to client: make connect"; \
-	echo "  2. Edit config: nano $(ENV_FILE)"; \
-	echo "  3. Update RPC URLs with actual node IPs from your FastEVM deployment"; \
-	echo "  4. Run tests: make run-scan START_NUMBER=10 COUNTER=5"
-
-# Run remote test
-run-test: ## Run specific test on client node (usage: make run-test TEST=scan-all)
-	@if [ -z "$(TEST)" ]; then \
-		echo "❌ Please specify TEST parameter"; \
-		echo "Usage: make run-test TEST=<test_type>"; \
-		echo "Available tests: scan-all, batch, range, all"; \
-		exit 1; \
-	fi
-	@echo "🧪 Running $(TEST) test on client node..."
-	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
-	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
-		echo "❌ Client node not found. Run 'make apply' first."; \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
 		exit 1; \
 	fi; \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && make test-$(TEST)'
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP
 
-# Run remote scan test
-run-scan: ## Run block scan test on client node (usage: make run-scan START_NUMBER=10 COUNTER=5, parameters optional)
-	@echo "🧪 Running scan test on client node..."
-	@if [ -n "$(START_NUMBER)" ] && [ -n "$(COUNTER)" ]; then \
-		echo "Using parameters: START_NUMBER=$(START_NUMBER) COUNTER=$(COUNTER)"; \
-	elif [ -n "$(START_NUMBER)" ]; then \
-		echo "Using START_NUMBER=$(START_NUMBER), COUNTER will use default or environment"; \
-	elif [ -n "$(COUNTER)" ]; then \
-		echo "Using COUNTER=$(COUNTER), START_NUMBER will use default or environment"; \
-	else \
-		echo "No parameters provided, will use defaults or environment variables"; \
-	fi
-	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
-	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
-		echo "❌ Client node not found. Run 'make apply' first."; \
-		exit 1; \
-	fi; \
-	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
-	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	./scripts/run-test.sh run-scan-direct "$(START_NUMBER)" "$(COUNTER)"
 
-# Run remote batch test
-run-batch: ## Run batch transaction test on client node
-	@$(MAKE) run-test TEST=batch
-
-# Run remote all tests
-run-all: ## Run all tests on client node
-	@$(MAKE) run-test TEST=all
-
-# Update client code
-update-code: ## Update code and rebuild on client node
-	@echo "🔄 Updating client code..."
-	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
-	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
-		echo "❌ Client node not found. Run 'make apply' first."; \
-		exit 1; \
-	fi; \
-	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
-	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'cd /home/$(CLIENT_USER) && make update-build'
-	@echo "✅ Client code updated successfully"
-
-# Clean client logs
-clean-logs: ## Clean logs on client node
-	@echo "🧹 Cleaning client logs..."
-	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
-	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
-		echo "❌ Client node not found. Run 'make apply' first."; \
-		exit 1; \
-	fi; \
-	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
-	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'make clean-logs'
-	@echo "✅ Client logs cleaned"
-
-# Clean all local files
-clean-all: ## Clean all local files
-	@echo "🧹 Cleaning all local files..."
+# Clean local files
+clean: ## Clean local files
+	@echo "🧹 Cleaning local files..."
 	@rm -f *.tfstate *.tfstate.backup .terraform.lock.hcl
 	@rm -f client-deploy-key client-deploy-key.pub
 	@rm -rf .terraform/
-	@echo "✅ All local files cleaned"
-
-# Prepare client configurations locally
-prepare-configs: ## Prepare client node configurations locally (auto-detects from main deployment)
-	@echo "🔧 Preparing client node configurations locally..."
-	@GITHUB_REPO="$(GITHUB_REPO)" GITHUB_BRANCH="$(GITHUB_BRANCH)" ./scripts/prepare-configs.sh
-	@echo "✅ Client configurations prepared successfully!"
-
-# Deploy configurations to remote client node
-deploy-configs: ## Deploy prepared configurations to remote client node
-	@echo "📦 Deploying configurations to remote client node..."
-	@if [ ! -d "config" ]; then echo "No config directory found. Run 'make prepare-configs' first."; exit 1; fi
-	@if [ ! -f "client-deploy-key" ]; then echo "SSH key not found. Run 'make apply' first."; exit 1; fi
-	@./scripts/deploy-configs.sh
-	@echo "✅ Configurations deployed successfully!"
-
-# Run setup script on remote client (bootstrap + configure)
-setup: ## Run setup script on remote client node (bootstrap + configure)
-	@echo "🚀 Running setup script on client node..."
-	@$(GET_CLIENT_IP); \
-	echo "Executing setup script on $$CLIENT_IP..."; \
-	if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP '/bin/chmod +x ~/client-config/setup.sh && bash ~/client-config/setup.sh'; then \
-		echo "✅ Setup script executed successfully"; \
-		echo "⏳ Waiting for setup to complete..."; \
-	else \
-		echo "❌ Setup script execution failed"; \
-		echo "📋 Checking setup log for errors..."; \
-		ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -50 /home/ubuntu/client-setup.log 2>/dev/null || echo "Log file not found"'; \
-		exit 1; \
-	fi
-
-
-# Automated test sequence (run after bootstrap)
-auto-test: ## Run automated test sequence (get block -> batch -> sleep -> scan)
-	./scripts/run-test.sh auto-test $(TEST_SLEEP_DURATION)
-
-# Quick start (init + apply + prepare-configs + deploy-configs + setup)
-deploy-client: init apply prepare-configs deploy-configs setup #auto-test ## Quick start: complete client node setup
-	@echo "🎉 Deploy client completed!"
+	@echo "✅ Local files cleaned"
 
 # Show outputs
 outputs: ## Show all outputs
@@ -308,80 +201,22 @@ outputs: ## Show all outputs
 	@echo "======================"
 	@$(TERRAFORM_CMD) output
 
-# Test targets (run on client node)
-test-scan-all: ## Run block scan all test
-	@echo "🔍 Running block scan all test..."
-	@if [ -f $(ENV_FILE) ]; then \
-		source $(ENV_FILE) && fastevm-test scan-all; \
-	else \
-		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
-		exit 1; \
-	fi
-
-test-batch: ## Run batch transaction test
-	@echo "📦 Running batch transaction test..."
-	@if [ -f $(ENV_FILE) ]; then \
-		source $(ENV_FILE) && fastevm-test batch; \
-	else \
-		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
-		exit 1; \
-	fi
-
-test-range: ## Run block range test
-	@echo "📊 Running block range test..."
-	@if [ -f $(ENV_FILE) ]; then \
-		source $(ENV_FILE) && fastevm-test range; \
-	else \
-		echo "❌ Configuration file not found. Run 'make setup-config' first."; \
-		exit 1; \
-	fi
-
-# Binary Management Commands
-prepare-binaries: ## Prepare and install binaries (backup/restore or build)
-	@echo "🔧 Preparing client binaries..."
-	@$(GET_CLIENT_IP)
-	@./scripts/prepare-binaries.sh
-	@echo "✅ Client binaries prepared successfully"
-
-backup-binaries: ## Backup binaries from client to local storage
-	@echo "💾 Backing up client binaries..."
-	@$(GET_CLIENT_IP)
+copy-files:
 	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
-	./scripts/prepare-binaries.sh backup $$CLIENT_IP
-	@echo "✅ Client binaries backed up successfully"
-
-restore-binaries: ## Restore binaries from local storage to client
-	@echo "📦 Restoring client binaries..."
-	@$(GET_CLIENT_IP)
-	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
-	./scripts/prepare-binaries.sh restore $$CLIENT_IP
-	@echo "✅ Client binaries restored successfully"
-
-# Quick start command - complete automated deployment
-quick-start: ## Quick start: complete client node setup with binary optimization
-	@echo "🚀 FastEVM Client Node Quick Start"
-	@echo "=================================="
-	@echo "This will deploy and configure a complete client node with optimized binary handling"
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_SETUP_SCRIPT) $(CLIENT_USER)@$$CLIENT_IP:~/setup.sh || { \
+		echo "❌ Failed to copy setup.sh"; exit 1; \
+	}; \
+	echo "🔧 Executing setup script on client node..."; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "FASTEVM_BRANCH=$${FASTEVM_BRANCH:-main} bash ~/setup.sh"; \
+	echo "✅ Step 1 completed: Client node is ready"; \
+	echo "📝 Setup script is available at: ~/setup.sh"
 	@echo ""
-	@echo "Step 1: Deploy infrastructure..."
-	@make apply
-	@echo ""
-	@echo "Step 2: Prepare configurations..."
-	@make prepare-configs
-	@echo ""
-	@echo "Step 3: Deploy configurations..."
-	@make deploy-configs
-	@echo ""
-	@echo "Step 4: Prepare binaries (backup/restore or build)..."
-	@make prepare-binaries
-	@echo ""
-	@echo "Step 5: Setup client node..."
-	@make setup
-	@echo ""
-	@echo "✅ Quick start completed successfully!"
-	@echo "Client node is ready for testing"
-	@echo ""
-	@echo "Next steps:"
-	@echo "  - Run 'make status' to check deployment status"
-	@echo "  - Run 'make run-scan' to test the setup"
-	@echo "  - Run 'make connect' to SSH into the client node"
+	@echo "📋 Next step: Run 'make deploy-network' to deploy the network from this client node"

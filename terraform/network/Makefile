@@ -110,7 +110,6 @@ copy-files: extract-deployment-info
 	NODE_COUNT=$${#IPS_ARRAY[@]}; \
 	FAILED=0; \
 	FILES_TO_COPY=( \
-		genesis.json \
 		systemd/fastevm-execution.service \
 		systemd/fastevm-consensus.service \
 		node.sh \
@@ -127,7 +126,7 @@ copy-files: extract-deployment-info
 		echo "  📤 Copying files to node $$node_num ($$ip)..."; \
 		if ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip "sudo mkdir -p /opt/fastevm && sudo chown ubuntu:ubuntu /opt/fastevm"; then \
 			for f in "$${FILES_TO_COPY[@]}"; do \
-				if scp $(SSH_OPTS) -i "$$KEY" "../scripts/$$f" "ubuntu@$$ip:/opt/fastevm/"; then \
+				if scp $(SSH_OPTS) -i "$$KEY" "scripts/$$f" "ubuntu@$$ip:/opt/fastevm/"; then \
 					if [[ "$$f" == *.sh ]]; then \
 						ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$ip "chmod +x /opt/fastevm/$$f" || true; \
 					fi; \
@@ -237,7 +236,7 @@ update-bootnodes: watch-setup
 
 
 ## Collect all authority keys and update committees.yml
-update-committees: watch-setup
+collect-validators: watch-setup
 	@echo "🔗 Collecting authority.yml from all validators and building committees.yml"
 
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
@@ -271,9 +270,63 @@ update-committees: watch-setup
 	rm -f $$TMP_COMMITTEES; \
 	echo "✅ Committees.yml updated on all nodes"
 
+genesis-config: watch-setup
+	@echo "🔗 Collecting authority.yml and building genesis_config.json"
+
+	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+	TMP_JSON=$$(mktemp); \
+	\
+	jq -n '{ \
+	  validatorAddresses: [], \
+	  consensusPublicKeys: [], \
+	  votingPowers: [], \
+	  validatorNetworkAddresses: [], \
+	  fullnodeNetworkAddresses: [], \
+	  aptosAddresses: [] \
+	}' > $$TMP_JSON; \
+	\
+	for public_ip in $$PUBLIC_IPS; do \
+	  AUTH_YML=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
+	    "cat /data/config/authority.yml") || exit 1; \
+	  \
+	  VALIDATOR_ADDR=$$(echo "$$AUTH_YML" | sed -n 's/^validator_address:[[:space:]]*//p'); \
+	  AUTHORITY_KEY=$$(echo "$$AUTH_YML" | sed -n 's/^authority_key:[[:space:]]*//p'); \
+	  STAKE=$$(echo "$$AUTH_YML" | sed -n 's/^stake:[[:space:]]*//p'); \
+	  BASE_ADDR=$$(echo "$$AUTH_YML" | sed -n 's/^address:[[:space:]]*//p'); \
+	  \
+	  CONS_PUBKEY=$$(echo "$$AUTHORITY_KEY" | cut -c1-96); \
+	  APTOS_ADDR=$$(echo "$$VALIDATOR_ADDR" | tr '[:upper:]' '[:lower:]'); \
+	  NET_ADDR="$$BASE_ADDR/noise-ik/$$APTOS_ADDR/handshake/0"; \
+	  \
+	  jq \
+	    --arg vaddr "0x$$APTOS_ADDR" \
+	    --arg cpk "$$CONS_PUBKEY" \
+	    --arg stake "$$STAKE" \
+	    --arg net "$$NET_ADDR" \
+	    --arg apt "$$APTOS_ADDR" \
+	    '.validatorAddresses += [$$vaddr] \
+	     | .consensusPublicKeys += [$$cpk] \
+	     | .votingPowers += [$$stake] \
+	     | .validatorNetworkAddresses += [$$net] \
+	     | .fullnodeNetworkAddresses += [$$net] \
+	     | .aptosAddresses += [$$apt]' \
+	    $$TMP_JSON > $$TMP_JSON.tmp && mv $$TMP_JSON.tmp $$TMP_JSON; \
+	done; \
+	\
+	echo "📄 Generated genesis_config.json:"; \
+	jq . $$TMP_JSON; \
+	\
+	for public_ip in $$PUBLIC_IPS; do \
+	  scp $(SSH_OPTS) -i "$$KEY" $$TMP_JSON \
+	    ubuntu@$$public_ip:/data/config/genesis_config.json || exit 1; \
+	done; \
+	\
+	rm -f $$TMP_JSON; \
+	echo "✅ genesis_config.json updated on all nodes"
 
 
-update-envs: update-bootnodes update-committees
+update-envs: update-bootnodes collect-validators
 	@echo "✅ Bootnodes and committees.yml updated on all nodes"
 
 # Start services on all nodes
@@ -453,3 +506,40 @@ clean: ## Clean local files
 
 outputs: ## Show Terraform outputs
 	@terraform output
+
+copy-configs: 
+	@echo "📦 Copying files to all nodes..."
+	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]' | tr '\n' ' '); \
+	IPS_ARRAY=($$IPS); \
+	NODE_COUNT=$${#IPS_ARRAY[@]}; \
+	FAILED=0; \
+	FILES_TO_COPY=( \
+		authority.yml \
+		validator.yml \
+	); \
+	for i in $$(seq 1 $$NODE_COUNT); do \
+		ip=$${IPS_ARRAY[$$i-1]}; \
+		node_num=$$i; \
+		echo "  📤 Copying files to node $$node_num ($$ip)..."; \
+		for f in "$${FILES_TO_COPY[@]}"; do \
+			if scp $(SSH_OPTS) -i "$$KEY" "../../.local-data/consensus$$i/$$f" "ubuntu@$$ip:/data/config/"; then \
+				echo "    ✅ Files copied to node $$node_num"; \
+			else \
+				echo "    ❌ Failed to copy $$f to node $$node_num"; \
+				FAILED=$$((FAILED + 1)); \
+			fi; \
+		done; \
+		if scp $(SSH_OPTS) -i "$$KEY" "./committees.yml" "ubuntu@$$ip:/data/config/committees.yml"; then \
+			echo "    ✅ Files copied to node $$node_num"; \
+		else \
+			echo "    ❌ Failed to copy $$f to node $$node_num"; \
+			FAILED=$$((FAILED + 1)); \
+		fi; \
+	done; \
+	if [ $$FAILED -eq 0 ]; then \
+		echo "✓ Files copied to all nodes successfully"; \
+	else \
+		echo "⚠️  Files copied with $$FAILED error(s) - continuing anyway"; \
+	fi; \
+	true  # Ensure target always succeeds

@@ -40,7 +40,7 @@ variable "client_disk_size" {
 variable "disk_type" {
   description = "Type of persistent disk"
   type        = string
-  default     = "pd-standard"
+  default     = "hyperdisk-balanced"
 }
 
 variable "image" {

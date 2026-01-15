@@ -1,6 +1,6 @@
 # FastEVM Client Node
 
-A standalone Terraform configuration for deploying a FastEVM client node that can test and interact with FastEVM blockchain networks. The client node is completely separate from the main FastEVM network and can be deployed independently.
+A standalone Terraform configuration for deploying a FastEVM client node that can deploy and manage FastEVM blockchain networks. The client node is used as a control plane to deploy the network infrastructure.
 
 ## 🚀 Quick Start
 
@@ -18,70 +18,35 @@ gcloud auth application-default login \
       --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,openid"
 ```
 
-### Complete Automated Deployment
+### Two-Step Deployment
 
+The deployment process consists of two simple steps:
+
+**Step 1: Deploy and setup client node**
 ```bash
-# Quick start (recommended) - Complete automation with binary optimization
-make quick-start
+make deploy
 ```
 
-This single command will:
-1. Deploy client node infrastructure
-2. Prepare configurations locally (auto-detects RPC URLs from main deployment)
-3. Deploy configurations to remote client
-4. **Prepare binaries (backup/restore or build)** - Optimized binary handling
-5. Run setup script (bootstrap + configuration + automated testing)
-6. Report completion status
+This will:
+1. Deploy the client node infrastructure on GCP
+2. Copy `scripts/setup.sh` to the client node
+3. Execute the setup script which:
+   - Installs dependencies (Rust, Foundry, etc.)
+   - Clones the FastEVM repository to `/opt/fastevm`
+   - Builds the FastEVM binaries
 
-**Alternative quick start:**
+**Step 2: Deploy network from client node**
+```bash
+make deploy-network
+```
+
+This will:
+1. Connect to the client node
+2. Execute terraform from `/opt/fastevm/terraform/network` to deploy the network
+
+**View all commands:**
 ```bash
 make help              # Show all available commands
-```
-
-## ⚡ Binary Optimization
-
-The client node deployment now includes **binary backup/restore optimization** similar to the network node deployment:
-
-### How It Works
-- **First deployment**: Builds binaries from source and backs them up locally
-- **Subsequent deployments**: Restores pre-built binaries (saves 5-10 minutes)
-- **Automatic fallback**: Falls back to building if binaries are missing
-
-### Binary Management Commands
-```bash
-# Prepare binaries (backup/restore or build)
-make prepare-binaries
-
-# Backup binaries from client to local storage
-make backup-binaries
-
-# Restore binaries from local storage to client
-make restore-binaries
-```
-
-### Benefits
-- **Faster deployments**: Skip compilation on subsequent deployments
-- **Consistent binaries**: Use the same tested binaries across deployments
-- **Reduced resource usage**: Less CPU/memory usage on client nodes
-- **Better reliability**: Avoid compilation issues on different environments
-
-### Step-by-Step Deployment
-
-```bash
-# Step 1: Deploy infrastructure
-make init
-make plan
-make apply
-
-# Step 2: Prepare and deploy configurations
-make prepare-configs  # Auto-detects RPC URLs from main deployment
-make deploy-configs   # Copies configs to remote client
-
-# Step 3: Prepare binaries (optimized)
-make prepare-binaries # Backup/restore or build binaries
-
-# Step 4: Setup client node
-make setup           # Runs bootstrap + configuration + automated tests
 ```
 
 ## 📁 Directory Structure
@@ -93,14 +58,8 @@ client-node/
 ├── terraform.tfvars.example   # Example variables file
 ├── Makefile                   # Management commands
 ├── README.md                  # This comprehensive guide
-├── scripts/
-│   ├── prepare-configs.sh    # Prepare configurations locally
-│   ├── deploy-configs.sh     # Deploy configurations to remote
-│   └── prepare-binaries.sh    # Binary backup/restore management
-├── config/                    # Generated configurations
-│   ├── test.env              # Test environment configuration
-│   └── setup.sh             # Combined setup script
-└── binaries/                 # Local binary storage (auto-created)
+└── scripts/
+    └── setup.sh               # Setup script (installs deps, clones repo, builds binaries)
 ```
 
 ## 🔧 Configuration
@@ -116,45 +75,32 @@ client-node/
 - `zone`: GCP zone (default: "us-central1-a")
 - `client_machine_type`: Machine type (default: "e2-standard-2")
 - `client_disk_size`: Disk size in GB (default: 50)
-- `client_subnet_cidr`: Subnet CIDR (default: "10.1.0.0/24")
+- `github_repo`: GitHub repository URL (default: "https://github.com/scalarorg/fastevm.git")
+- `github_branch`: GitHub branch to clone (default: "main")
 
-### Environment Configuration
+### Environment Variables
 
-The client node configuration can be customized by editing the `../fastevm.env` file:
+You can set these via environment variables or in `terraform.tfvars`:
 
 ```bash
-# Repository configuration
-GITHUB_REPO=https://github.com/scalarorg/fastevm.git
-GITHUB_BRANCH=terraform
-CHAIN_ID=202501
-
-# Test configuration defaults
-TEST_SENDER_COUNT=10000
-TEST_TRANSACTION_COUNT=10
-TEST_TRANSACTION_VALUE=1000000000000000
-TEST_MNEMONIC='abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
-TEST_FETCH_NONCE=true
-TEST_WAITING_TIME_SECONDS=30
-TEST_RPC_TIMEOUT=30
-TEST_MAX_RETRIES=3
-TEST_LOG_LEVEL=info
+export PROJECT_ID=your-gcp-project-id
+export REGION=us-central1
+export ZONE=us-central1-a
+export PROJECT_NAME=fastevm-client
+export GITHUB_REPO=https://github.com/scalarorg/fastevm.git
+export GITHUB_BRANCH=gravity
 ```
 
-**Key Configuration Variables:**
-- `GITHUB_REPO`: FastEVM repository URL
-- `GITHUB_BRANCH`: Branch to use for deployment
-- `CHAIN_ID`: Blockchain chain ID
-- `TEST_SENDER_COUNT`: Number of test accounts to create
-- `TEST_TRANSACTION_COUNT`: Number of transactions per test
-- `TEST_TRANSACTION_VALUE`: Value in wei for test transactions
-- `TEST_MNEMONIC`: Mnemonic phrase for test accounts
-- `TEST_FETCH_NONCE`: Whether to fetch nonce from network
-- `TEST_WAITING_TIME_SECONDS`: Wait time between operations
-- `TEST_RPC_TIMEOUT`: RPC request timeout in seconds
-- `TEST_MAX_RETRIES`: Maximum retry attempts
-- `TEST_LOG_LEVEL`: Logging level (debug, info, warn, error)
+Or create a `terraform.tfvars` file:
 
-The `prepare-configs.sh` script automatically loads these values from `../fastevm.env` and uses them as defaults when generating the client configuration.
+```hcl
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+zone       = "us-central1-a"
+project_name = "fastevm-client"
+github_repo = "https://github.com/scalarorg/fastevm.git"
+github_branch = "gravity"
+```
 
 ## 🏗️ Infrastructure Components
 
@@ -175,112 +121,67 @@ The `prepare-configs.sh` script automatically loads these values from `../fastev
 
 ## 🚦 Available Commands
 
-### Deployment Commands
+### Main Commands
 ```bash
-make init              # Initialize Terraform
-make plan              # Plan deployment
-make apply             # Deploy client node
-make destroy           # Destroy client node
+make deploy            # Step 1: Deploy client node and run initial setup
+make deploy-network    # Step 2: Deploy network from client node
 make status            # Show deployment status
-```
-
-### Configuration Commands
-```bash
-make prepare-configs   # Prepare configurations locally (auto-detects RPC URLs)
-make deploy-configs   # Deploy configurations to remote client
-make setup            # Run setup script on remote client (bootstrap + configure)
-```
-
-### Client Management
-```bash
 make connect           # Connect to client node via SSH
-make setup-config      # Setup test configuration on client node
-make run-test TEST=<type>  # Run specific test (scan-all, batch, range, all)
-make run-scan [START_NUMBER=X] [COUNTER=Y]  # Run block scan test with optional parameters
-make run-batch         # Run batch transaction test
-make run-all           # Run all tests
-```
-
-### Testing Commands (Local)
-```bash
-make test-scan-all     # Run block scan all test locally
-make test-batch        # Run batch transaction test locally
-make test-range        # Run block range test locally
-```
-
-### Automated Testing
-```bash
-make auto-test         # Run automated test sequence (get block -> batch -> sleep -> scan)
-```
-
-### Maintenance Commands
-```bash
-make update-code       # Update code and rebuild on client node
-make clean-logs        # Clean logs on client node
-make clean-all         # Clean all local files
+make destroy           # Destroy client node
+make clean             # Clean local files
 make outputs           # Show all outputs
-```
-
-### Quick Start Commands
-```bash
-make deploy-client     # Complete client node setup (init + apply + prepare-configs + deploy-configs + setup)
 make help              # Show all available commands
 ```
 
-## 🧪 Testing
-
-### Automatic Configuration Detection
-
-The system automatically detects RPC URLs from your main FastEVM deployment:
-
-1. **Primary**: Uses `../deployment-info.json` if available
-2. **Fallback**: Uses `../terraform.tfstate` if deployment-info.json not found
-3. **Preference**: Uses internal IPs first, falls back to external IPs
-
-### Automated Test Sequence
-
-The setup script automatically runs a comprehensive test sequence:
-
-1. **Block Scan Test** (60s timeout) - Verify network connectivity
-2. **Batch Transaction Test** (300s timeout) - Send multiple transactions
-3. **Final Block Scan Test** (60s timeout) - Verify transactions were processed
-
-### Manual Testing
-
-#### Remote Testing (on client node)
+### Terraform Commands
 ```bash
-# SSH into client node
-make connect
-
-# Run tests manually
-cd /home/ubuntu
-source /home/ubuntu/client-config/test.env
-
-# Individual tests
-fastevm-test scan      # Block scan test
-fastevm-test batch     # Batch transaction test
-fastevm-test range     # Block range test
+make init              # Initialize Terraform
+make validate          # Validate Terraform configuration
+make format            # Format Terraform files
+make plan              # Plan deployment (included in deploy)
 ```
 
-#### Local Testing (from your machine)
-```bash
-# Run tests remotely from local machine
-make run-scan [START_NUMBER=10] [COUNTER=5]  # Block scan test with optional parameters
-make run-batch         # Batch transaction test
-make run-all           # All tests
-make run-test TEST=scan-all  # Specific test type
+## 📊 Deployment Workflow
 
-# Automated test sequence
-make auto-test         # Get current block -> run batch -> wait -> run scan
+### Step 1: Deploy Client Node
+
+```bash
+make deploy
 ```
 
-#### Local Testing (if you have the binary locally)
+This command:
+1. Initializes and validates Terraform
+2. Plans the deployment
+3. Applies the Terraform configuration to create the GCP instance
+4. Copies `scripts/setup.sh` to the client node
+5. Executes the setup script which:
+   - Installs system dependencies (build tools, Rust, Foundry)
+   - Clones the FastEVM repository to `/opt/fastevm`
+   - Builds the FastEVM execution and consensus binaries
+
+### Step 2: Deploy Network
+
+After Step 1 completes and the source code is cloned to `/opt/fastevm`, run:
+
 ```bash
-# Run tests locally (requires local fastevm-test binary)
-make test-scan-all     # Block scan all test
-make test-batch        # Batch transaction test  
-make test-range        # Block range test
+make deploy-network
 ```
+
+This command:
+1. Connects to the client node via SSH
+2. Changes to `/opt/fastevm/terraform/network`
+3. Executes `make deploy` to deploy the network infrastructure
+
+### Check Status
+
+```bash
+make status
+```
+
+This shows:
+- Client node IP address
+- Whether source code is cloned to `/opt/fastevm`
+- Whether network terraform directory is ready
 
 ## 💰 Cost Estimation
 
@@ -291,18 +192,19 @@ make test-range        # Block range test
 
 *Costs may vary based on usage and GCP pricing*
 
-## 🔗 Integration with Main FastEVM Network
+## 🔗 Network Deployment
+
+The client node serves as a control plane for deploying the FastEVM network. After the client node is set up with the source code, you can deploy the network directly from it.
 
 ### Prerequisites
-1. **Deploy your FastEVM network** using the main Terraform configuration
-2. **Ensure deployment-info.json exists** in the main terraform directory
-3. **Deploy this client node** using `make quick-start`
+1. **Deploy client node** using `make deploy`
+2. **Wait for setup to complete** (source code cloned to `/opt/fastevm`)
+3. **Deploy network** using `make deploy-network`
 
-### Integration Steps
-1. **Automatic Detection**: Client node automatically detects RPC URLs from main deployment
-2. **Configuration**: Test configuration is generated with correct internal IPs
-3. **Testing**: Comprehensive automated testing validates the integration
-4. **Validation**: All tests must pass before considering the setup complete
+### Network Deployment Process
+1. **Client Setup**: Client node is deployed and configured with all dependencies
+2. **Source Code**: FastEVM repository is cloned to `/opt/fastevm`
+3. **Network Deployment**: Terraform is executed from `/opt/fastevm/terraform/network` to deploy the network infrastructure
 
 ## 🛠️ Troubleshooting
 
@@ -319,33 +221,36 @@ make test-range        # Block range test
    ```bash
    make status
    # If not found, deploy it
-   make apply
+   make deploy
    ```
 
-3. **RPC URL detection failed**
+3. **Setup script failed**
    ```bash
-   # Check if main deployment exists
-   ls ../deployment-info.json
-   ls ../terraform.tfstate
-   
-   # Manual configuration
-   make connect
-   nano /home/ubuntu/client-config/test.env
-   ```
-
-4. **Tests failing**
-   ```bash
+   # Check status
    make status
-   make connect
-   tail -f /var/log/client-setup.log
-   cat /home/ubuntu/client-config/test.env
    
-   # Try running tests manually
-   make run-scan
-   make auto-test
+   # Connect and check logs
+   make connect
+   tail -f ~/setup.sh.log  # or check the setup script output
    ```
 
-5. **Connection issues**
+4. **Source code not cloned**
+   ```bash
+   make connect
+   ls -la /opt/fastevm
+   # If missing, the setup script may have failed
+   # Check the setup script execution logs
+   ```
+
+5. **Network deployment failed**
+   ```bash
+   make connect
+   cd /opt/fastevm/terraform/network
+   # Check terraform state and logs
+   terraform show
+   ```
+
+6. **Connection issues**
    ```bash
    chmod 600 client-deploy-key
    make connect
@@ -353,45 +258,56 @@ make test-range        # Block range test
 
 ### Logs and Monitoring
 
-- **Setup logs**: `/var/log/client-setup.log` (on client node)
-- **Bootstrap logs**: `/var/log/client-bootstrap.log` (on client node)
-- **Configuration logs**: `/var/log/client-config.log` (on client node)
-- **Test output**: Displayed in terminal
-- **System logs**: Standard systemd journal
+- **Setup script**: Executed during `make deploy`, output visible in terminal
+- **Source code location**: `/opt/fastevm` (on client node)
+- **Network terraform**: `/opt/fastevm/terraform/network` (on client node)
+- **SSH access**: Use `make connect` to access the client node
 
 ### Debug Commands
 
 ```bash
-# Check network connectivity
-ping <node-ip>
+# Check client node status
+make status
 
-# Check RPC endpoint
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  http://<node-ip>:8545
-
-# View logs remotely
+# Connect to client node
 make connect
-tail -f /var/log/client-setup.log
+
+# Check if source code is cloned
+ls -la /opt/fastevm
+
+# Check network terraform directory
+ls -la /opt/fastevm/terraform/network
+
+# View terraform outputs
+make outputs
 ```
 
 ## 📚 Advanced Usage
 
 ### Custom Configuration
 
-If you need to customize the configuration:
+You can customize the deployment by:
 
-```bash
-# Prepare configurations
-make prepare-configs
+1. **Setting environment variables**:
+   ```bash
+   export GITHUB_BRANCH=your-branch
+   export PROJECT_NAME=my-fastevm-client
+   make deploy
+   ```
 
-# Edit the generated configuration
-nano config/test.env
+2. **Using terraform.tfvars**:
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   # Edit terraform.tfvars with your values
+   make deploy
+   ```
 
-# Deploy with custom configuration
-make deploy-configs
-make setup
-```
+3. **Modifying setup script**:
+   ```bash
+   # Edit scripts/setup.sh before running make deploy
+   nano scripts/setup.sh
+   make deploy
+   ```
 
 ### Integration with CI/CD
 
@@ -399,10 +315,16 @@ The client node can be integrated into CI/CD pipelines:
 
 ```bash
 # In your CI/CD pipeline
-make quick-start
+make deploy
 if [ $? -eq 0 ]; then
     echo "Client node deployment successful"
-    make run-all
+    make deploy-network
+    if [ $? -eq 0 ]; then
+        echo "Network deployment successful"
+    else
+        echo "Network deployment failed"
+        exit 1
+    fi
 else
     echo "Client node deployment failed"
     exit 1
@@ -425,8 +347,8 @@ fi
 
 ---
 
-**Ready to deploy?** Run `make deploy-client` to get started! 🚀
+**Ready to deploy?** Run `make deploy` to get started! 🚀
 
-**Need to test your FastEVM network?** This client node provides comprehensive testing capabilities! 🧪
+**Need to deploy the network?** After client setup, run `make deploy-network`! 🌐
 
 **Want to see all available commands?** Run `make help` for a complete list! 📋

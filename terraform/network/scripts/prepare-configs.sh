@@ -602,7 +602,7 @@ done
 \`\`\`bash
 # Generate docker-compose.yml from template
 cd config
-../scripts/replace-templates.sh
+../templates/replace-templates.sh
 # Deploy using Docker Compose
 docker-compose up -d
 \`\`\`
