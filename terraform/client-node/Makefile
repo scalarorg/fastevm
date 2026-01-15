@@ -1,7 +1,7 @@
 # FastEVM Client Node Management Makefile
 # Simplified workflow: Deploy client node -> Setup -> Deploy network
 
-.PHONY: help deploy setup-client deploy-network transfer-creds status connect destroy clean
+.PHONY: help deploy setup-client deploy-network transfer-creds status connect view-network network-logs view-setup destroy destroy_network clean
 
 # Default target
 help: ## Show available commands
@@ -10,11 +10,14 @@ help: ## Show available commands
 	@echo ""
 	@echo "Main Commands:"
 	@echo "  deploy           Deploy client node and setup (Step 1)"
-	@echo "  deploy-network   Deploy network from client node (Step 2)"
+	@echo "  deploy-network   Setup client node and deploy network in tmux (All-in-one)"
 	@echo "  transfer-creds   Transfer gcloud credentials to client node"
 	@echo "  status           Show deployment status"
 	@echo "  connect          Connect to client node via SSH"
-	@echo "  destroy          Destroy client node"
+	@echo "  view-network     Attach to network deployment tmux session"
+	@echo "  network-logs     View network deployment logs (tail -f)"
+	@echo "  view-setup       View setup script logs (tail -f)"
+	@echo "  destroy          Destroy client node (and network first)"
 	@echo "  clean            Clean local files"
 	@echo ""
 
@@ -22,6 +25,7 @@ help: ## Show available commands
 CLIENT_SSH_KEY := client-deploy-key
 CLIENT_USER := ubuntu
 CLIENT_SETUP_SCRIPT := scripts/setup.sh
+CLIENT_NETWORK_SCRIPT := scripts/network.sh
 NETWORK_TERRAFORM_DIR := ../network
 
 # Use terraform.tfvars if it exists (Terraform auto-loads it, but we can be explicit)
@@ -63,20 +67,8 @@ deploy: plan ## Deploy client node and run initial setup
 		-i $(CLIENT_SSH_KEY) $(CLIENT_SETUP_SCRIPT) $(CLIENT_USER)@$$CLIENT_IP:~/setup.sh || { \
 		echo "❌ Failed to copy setup.sh"; exit 1; \
 	}; \
-	echo "🔧 Executing setup script on client node..."; \
-	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "FASTEVM_BRANCH=$${FASTEVM_BRANCH:-main} bash ~/setup.sh"; \
 	echo "✅ Step 1 completed: Client node is ready"; \
 	echo "📝 Setup script is available at: ~/setup.sh"
-	@echo ""
-	@echo "📋 Next step: Run 'make deploy-network' to deploy the network from this client node"
-
-setup: deploy
-	@echo "🔧 Executing setup script on client node..."; \
-	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "FASTEVM_BRANCH=$${FASTEVM_BRANCH:-main} bash ~/setup.sh"; \
-	echo "✅ Step 1 completed: Client node is ready"; \
-	@echo "📋 Next step: Run 'make deploy-network' to deploy the network from this client node"
 
 # Transfer gcloud credentials to client node
 transfer-creds: deploy ## Transfer gcloud credentials to client node
@@ -109,25 +101,51 @@ transfer-creds: deploy ## Transfer gcloud credentials to client node
 		exit 1; \
 	fi
 
-# Step 2: Deploy network from client node (after source code is cloned to /opt/fastevm)
-deploy-network: transfer-creds ## Deploy network from client node (Step 2)
-	@echo "🚀 Step 2: Deploying network from client node..."
+startup: transfer-creds
 	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found. Run 'make deploy' first."; \
 		exit 1; \
 	fi; \
-	echo "📡 Connecting to client node at $$CLIENT_IP..."; \
+	echo "🔧 Starting setup script in tmux session on client node..."; \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-	echo "🔧 Executing network deployment from /opt/fastevm/terraform/network..."; \
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
 		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP \
-		'cd /opt/workspace/fastevm/terraform/network && make deploy'; \
-	echo "✅ Step 2 completed: Network deployed from client node"
+		"tmux new-session -d -s fastevm-setup 'FASTEVM_BRANCH=$${FASTEVM_BRANCH:-main} bash ~/setup.sh 2>&1 | tee ~/setup.log' || true"; \
+	echo "✅ Setup script started in tmux session 'fastevm-setup'"; \
+	echo "📝 Log file: ~/setup.log on client node"; \
+	echo ""; \
+	echo "📊 Showing progress (Ctrl+C to stop watching, session continues in background):"; \
+	sleep 2; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/setup.log 2>/dev/null || (echo "Waiting for log file..." && sleep 1 && tail -f ~/setup.log)' || true; \
+	echo ""; \
+	echo "✅ Setup script is running in tmux session 'fastevm-setup'"; \
+	echo "📋 To view progress: make view-setup"; \
+	echo "📋 To attach to session: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tmux attach -t fastevm-setup'"; \
+	echo "📋 To view log file: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/setup.log'"
+
+
+# Destroy network (from client node)
+destroy_network: ## Destroy network from client node
+	@echo "⚠️  Destroying network from client node..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	echo "Connecting to client node to destroy network..."; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP \
+		"cd /opt/workspace/fastevm/terraform/network && make destroy" || { \
+		echo "⚠️  Network destroy failed or network not deployed. Continuing..."; \
+	}
 
 # Destroy client node
-destroy: ## Destroy client node
+destroy: destroy_network ## Destroy client node (and network first)
 	@echo "⚠️  Destroying client node..."
 	@read -p "Are you sure? This will delete the client node and all data. (y/N): " confirm; \
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
@@ -152,17 +170,17 @@ status: ## Show deployment status
 			echo "Setup Status:"; \
 			ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 			ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
-			SOURCE_CLONED=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'test -d /opt/fastevm && echo "yes" || echo "no"'); \
+			SOURCE_CLONED=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'test -d /opt/workspace/fastevm && echo "yes" || echo "no"'); \
 			if [ "$$SOURCE_CLONED" = "yes" ]; then \
-				echo "✅ Source code cloned to /opt/fastevm"; \
-				NETWORK_READY=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'test -d /opt/fastevm/terraform/network && echo "yes" || echo "no"'); \
+				echo "✅ Source code cloned to /opt/workspace/fastevm"; \
+				NETWORK_READY=$$(ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'test -d /opt/workspace/fastevm/terraform/network && echo "yes" || echo "no"'); \
 				if [ "$$NETWORK_READY" = "yes" ]; then \
 					echo "✅ Network terraform directory ready"; \
 				else \
 					echo "⏳ Network terraform directory not found"; \
 				fi; \
 			else \
-				echo "⏳ Source code not yet cloned to /opt/fastevm"; \
+				echo "⏳ Source code not yet cloned to /opt/workspace/fastevm"; \
 			fi; \
 		fi; \
 	else \
@@ -185,6 +203,45 @@ connect: ## Connect to client node via SSH
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
 		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP
+
+# View network deployment tmux session
+view-network: ## Attach to network deployment tmux session
+	@echo "🔗 Attaching to network deployment tmux session..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tmux attach -t fastevm-network || echo "❌ Tmux session not found. Run make deploy-network first."'
+
+# View network deployment logs
+network-logs: ## View network deployment logs
+	@echo "📜 Viewing network deployment logs..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/network-deployment.log 2>/dev/null || echo "❌ Log file not found. Run make deploy-network first."'
+
+# View setup script logs
+view-setup: ## View setup script logs (tail -f)
+	@echo "📜 Viewing setup script logs..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/setup.log 2>/dev/null || echo "❌ Log file not found. Run make startup first."'
 
 
 # Clean local files

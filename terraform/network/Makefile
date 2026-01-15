@@ -1,6 +1,6 @@
 # FastEVM Terraform Deployment Makefile
 SHELL := /bin/bash
-.PHONY: help init plan apply destroy status logs clean validate format deploy ssh-node test-rpc restart health check-setup-status check-setup-logs
+.PHONY: help init plan apply destroy status logs clean validate format deploy ssh-node test-rpc restart health check-setup-status check-setup-logs import-existing import-existing-quiet
 
 # Load environment variables
 ifneq (,$(wildcard fastevm.env))
@@ -53,36 +53,91 @@ format: ## Format Terraform files
 	terraform fmt -recursive
 
 plan: init validate ## Plan Terraform deployment
-	terraform plan $(TF_VARS) -out=tfplan
+	@# Try to import existing resources before planning
+	@$(MAKE) import-existing-quiet || true
+	@terraform plan $(TF_VARS) -out=tfplan
 
 apply: plan ## Apply Terraform deployment
 	@terraform apply tfplan || { \
-		echo "Apply failed. Trying to import existing instances..."; \
+		echo "⚠️  Apply failed. Attempting to import existing resources (network, subnet, firewall rules, instances)..."; \
 		$(MAKE) import-existing || true; \
+		echo "Re-planning after import..."; \
 		terraform plan $(TF_VARS) -out=tfplan; \
 		terraform apply tfplan; \
 	}
 	@terraform output -json > ../deployment-info.json
 	@echo "✓ Deployment applied"
 
-import-existing: init ## Import existing instances
+import-existing: init ## Import existing resources (network, subnet, firewall rules, instances)
 	@echo "Importing existing resources..."
-	@# Import global address if it exists
-	@if gcloud compute addresses describe "$(PROJECT_NAME)-ip" --global --project="$(PROJECT_ID)" >/dev/null 2>&1; then \
+	@DETECTED_PROJECT=$$(gcloud config get-value project 2>/dev/null || echo ""); \
+	if [ -z "$$DETECTED_PROJECT" ] && [ -n "$(PROJECT_ID)" ]; then \
+		DETECTED_PROJECT="$(PROJECT_ID)"; \
+	fi; \
+	if [ -z "$$DETECTED_PROJECT" ]; then \
+		echo "⚠️  Cannot detect PROJECT_ID. Skipping import."; \
+		exit 0; \
+	fi; \
+	DETECTED_REGION="$(REGION)"; \
+	if [ -z "$$DETECTED_REGION" ]; then \
+		DETECTED_REGION="us-central1"; \
+	fi; \
+	echo "Using PROJECT_ID=$$DETECTED_PROJECT, REGION=$$DETECTED_REGION"; \
+	if gcloud compute networks describe "fastevm-network" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		echo "Importing network fastevm-network..."; \
+		terraform import "google_compute_network.fastevm_network" "projects/$$DETECTED_PROJECT/global/networks/fastevm-network" 2>/dev/null || echo "  (already imported or not found)"; \
+	fi; \
+	if gcloud compute networks subnets describe "fastevm-subnet" --region="$$DETECTED_REGION" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		echo "Importing subnet fastevm-subnet..."; \
+		terraform import "google_compute_subnetwork.fastevm_subnet" "projects/$$DETECTED_PROJECT/regions/$$DETECTED_REGION/subnetworks/fastevm-subnet" 2>/dev/null || echo "  (already imported or not found)"; \
+	fi; \
+	if gcloud compute firewall-rules describe "fastevm-internal" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		echo "Importing firewall rule fastevm-internal..."; \
+		terraform import "google_compute_firewall.fastevm_internal" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-internal" 2>/dev/null || echo "  (already imported or not found)"; \
+	fi; \
+	if gcloud compute firewall-rules describe "fastevm-external" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		echo "Importing firewall rule fastevm-external..."; \
+		terraform import "google_compute_firewall.fastevm_external" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-external" 2>/dev/null || echo "  (already imported or not found)"; \
+	fi; \
+	if gcloud compute addresses describe "$(PROJECT_NAME)-ip" --global --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
 		echo "Importing global address $(PROJECT_NAME)-ip..."; \
-		terraform import "google_compute_global_address.fastevm_ip" "projects/$(PROJECT_ID)/global/addresses/$(PROJECT_NAME)-ip" 2>/dev/null || true; \
-	fi
-	@# Import compute instances - detect actual zone dynamically
-	@for i in $$(seq 0 $$(($(NODE_COUNT) - 1))); do \
+		terraform import "google_compute_global_address.fastevm_ip" "projects/$$DETECTED_PROJECT/global/addresses/$(PROJECT_NAME)-ip" 2>/dev/null || echo "  (already imported or not found)"; \
+	fi; \
+	for i in $$(seq 0 $$(($(NODE_COUNT) - 1))); do \
 		name="$(PROJECT_NAME)-node-$$(($$i + 1))"; \
-		zone=$$(gcloud compute instances describe "$$name" --project="$(PROJECT_ID)" --format="value(zone)" 2>/dev/null | awk -F'/' '{print $$NF}'); \
+		zone=$$(gcloud compute instances describe "$$name" --project="$$DETECTED_PROJECT" --format="value(zone)" 2>/dev/null | awk -F'/' '{print $$NF}'); \
 		if [ -n "$$zone" ]; then \
-			path="projects/$(PROJECT_ID)/zones/$$zone/instances/$$name"; \
+			path="projects/$$DETECTED_PROJECT/zones/$$zone/instances/$$name"; \
 			echo "Importing instance $$name from zone $$zone..."; \
-			terraform import "google_compute_instance.fastevm_nodes[$$i]" "$$path" 2>/dev/null || true; \
+			terraform import "google_compute_instance.fastevm_nodes[$$i]" "$$path" 2>/dev/null || echo "  (already imported or not found)"; \
 		fi; \
-	done
-	@echo "Import complete"
+	done; \
+	echo "Import complete"
+
+import-existing-quiet: init ## Import existing resources quietly (for pre-plan check)
+	@DETECTED_PROJECT=$$(gcloud config get-value project 2>/dev/null || echo ""); \
+	if [ -z "$$DETECTED_PROJECT" ] && [ -n "$(PROJECT_ID)" ]; then \
+		DETECTED_PROJECT="$(PROJECT_ID)"; \
+	fi; \
+	if [ -z "$$DETECTED_PROJECT" ]; then \
+		exit 0; \
+	fi; \
+	DETECTED_REGION="$(REGION)"; \
+	if [ -z "$$DETECTED_REGION" ]; then \
+		DETECTED_REGION="us-central1"; \
+	fi; \
+	if gcloud compute networks describe "fastevm-network" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		terraform import "google_compute_network.fastevm_network" "projects/$$DETECTED_PROJECT/global/networks/fastevm-network" >/dev/null 2>&1 || true; \
+	fi; \
+	if gcloud compute networks subnets describe "fastevm-subnet" --region="$$DETECTED_REGION" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		terraform import "google_compute_subnetwork.fastevm_subnet" "projects/$$DETECTED_PROJECT/regions/$$DETECTED_REGION/subnetworks/fastevm-subnet" >/dev/null 2>&1 || true; \
+	fi; \
+	if gcloud compute firewall-rules describe "fastevm-internal" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		terraform import "google_compute_firewall.fastevm_internal" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-internal" >/dev/null 2>&1 || true; \
+	fi; \
+	if gcloud compute firewall-rules describe "fastevm-external" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
+		terraform import "google_compute_firewall.fastevm_external" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-external" >/dev/null 2>&1 || true; \
+	fi
 
 # Extract deployment info and create env file
 extract-deployment-info: apply

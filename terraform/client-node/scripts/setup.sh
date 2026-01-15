@@ -16,43 +16,7 @@ sudo apt install -y build-essential \
     python3-pip \
     make \
     git \
-    tmux \
-    jq \
-    curl \
-    gnupg \
-    unzip 
-
-# Install Terraform
-if ! command -v terraform &> /dev/null; then
-    echo "Installing Terraform..."
-    TERRAFORM_VERSION="1.6.0"
-    curl -fsSL -o /tmp/terraform_${TERRAFORM_VERSION}_linux_amd64.zip https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-    unzip -q /tmp/terraform_${TERRAFORM_VERSION}_linux_amd64.zip -d /tmp
-    sudo mv /tmp/terraform /usr/local/bin/
-    rm /tmp/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-    terraform --version
-else
-    echo "Terraform already installed: $(terraform --version)"
-fi
-
-# Install Google Cloud SDK
-if ! command -v gcloud &> /dev/null; then
-    echo "Installing Google Cloud SDK..."
-    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
-    sudo apt-get update && sudo apt-get install -y google-cloud-cli
-    gcloud --version
-else
-    echo "Google Cloud SDK already installed: $(gcloud --version | head -n 1)"
-fi
-
-# Verify jq installation
-if ! command -v jq &> /dev/null; then
-    echo "Error: jq installation failed"
-    exit 1
-else
-    echo "jq installed: $(jq --version)"
-fi
+    tmux 
 
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 . "$HOME/.cargo/env" 
@@ -137,6 +101,18 @@ build_gravity_genesis_contract() {
     cargo build --release
     sudo cp target/release/gravity-genesis /usr/local/bin/gravity-genesis
 }
+
+start_network() {
+    REPO_NAME=$(basename "$REPO_FASTEVM" .git)
+    cd $WORKSPACE_DIR/${REPO_NAME}/terraform/network
+    if [ -f Makefile ]; then
+        make start-services
+    else
+        echo "❌ Makefile not found. Running terraform directly..."
+        terraform init
+        terraform apply -auto-approve
+    fi
+}
 # Create /opt/fastevm directory
 sudo mkdir -p $WORKSPACE_DIR
 sudo chown $USER:$USER $WORKSPACE_DIR
@@ -145,6 +121,10 @@ clone_repository $REPO_FASTEVM $REPO_BRANCH_FASTEVM
 #build_fastevm
 clone_repository $REPO_GRAVITY_GENESIS_CONTRACT $REPO_BRANCH_GRAVITY_GENESIS_CONTRACT
 build_gravity_genesis_contract
+
+echo "Starting network with prepared terraform and gcloud credentials..."
+start_network
+echo "Network started successfully!"
 
 
 

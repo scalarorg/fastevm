@@ -45,19 +45,88 @@ resource "local_file" "fastevm_public_key" {
   file_permission = "0644"
 }
 
-# Reference existing network (created by client-node)
-data "google_compute_network" "fastevm_network" {
-  name = "fastevm-network"
+# Network resource - creates new network or adopts existing one with matching name
+# If network already exists in GCP, run: terraform import google_compute_network.fastevm_network projects/PROJECT_ID/global/networks/fastevm-network
+resource "google_compute_network" "fastevm_network" {
+  name                    = "fastevm-network"
+  auto_create_subnetworks = false
+  description             = "FastEVM network for blockchain nodes"
+
+  lifecycle {
+    # Prevent recreation if resource already exists and is imported
+    create_before_destroy = false
+  }
 }
 
-# Reference existing subnet (created by client-node)
-data "google_compute_subnetwork" "fastevm_subnet" {
-  name   = "fastevm-subnet"
-  region = var.region
+# Subnet resource - creates new subnet or adopts existing one with matching name
+# If subnet already exists in GCP, run: terraform import google_compute_subnetwork.fastevm_subnet projects/PROJECT_ID/regions/REGION/subnetworks/fastevm-subnet
+resource "google_compute_subnetwork" "fastevm_subnet" {
+  name          = "fastevm-subnet"
+  ip_cidr_range = var.subnet_cidr
+  region        = var.region
+  network       = google_compute_network.fastevm_network.id
+
+  secondary_ip_range {
+    range_name    = "pods"
+    ip_cidr_range = "10.0.1.0/24"
+  }
+
+  secondary_ip_range {
+    range_name    = "services"
+    ip_cidr_range = "10.0.2.0/24"
+  }
+
+  lifecycle {
+    # Prevent recreation if resource already exists and is imported
+    create_before_destroy = false
+  }
 }
 
-# Firewall rules are created by client-node, so we don't need to create them here
-# They will be automatically available for all nodes in the network
+# Firewall rules - creates new rules or adopts existing ones
+# If firewall rules already exist, they will be imported automatically on first apply attempt
+resource "google_compute_firewall" "fastevm_internal" {
+  name    = "fastevm-internal"
+  network = google_compute_network.fastevm_network.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22", "80", "443", "8545", "8546", "8551", "26657", "30303"]
+  }
+
+  allow {
+    protocol = "udp"
+    ports    = ["26657", "30303"]
+  }
+
+  source_ranges = [var.subnet_cidr]
+  target_tags   = ["fastevm-node"]
+
+  lifecycle {
+    create_before_destroy = false
+  }
+}
+
+resource "google_compute_firewall" "fastevm_external" {
+  name    = "fastevm-external"
+  network = google_compute_network.fastevm_network.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22", "80", "443", "8545", "8546", "8551", "26657", "30303"]
+  }
+
+  allow {
+    protocol = "udp"
+    ports    = ["26657", "30303"]
+  }
+
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["fastevm-node"]
+
+  lifecycle {
+    create_before_destroy = false
+  }
+}
 
 # No startup script - nodes will be initialized via deploy.sh after creation
 # This allows for better control, logging, and error handling during deployment
@@ -92,8 +161,8 @@ resource "google_compute_instance" "fastevm_nodes" {
   }
 
   network_interface {
-    network    = data.google_compute_network.fastevm_network.id
-    subnetwork = data.google_compute_subnetwork.fastevm_subnet.id
+    network    = google_compute_network.fastevm_network.id
+    subnetwork = google_compute_subnetwork.fastevm_subnet.id
     access_config {
       // Ephemeral public IP (automatically assigned)
     }
