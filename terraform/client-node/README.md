@@ -2,6 +2,8 @@
 
 A standalone Terraform configuration for deploying a FastEVM client node that can deploy and manage FastEVM blockchain networks. The client node is used as a control plane to deploy the network infrastructure.
 
+**Note:** This client node uses a **separate network configuration** from the main FastEVM network deployment. It has its own VPC network, subnet, and firewall rules with client-specific naming to avoid conflicts.
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -23,17 +25,31 @@ gcloud auth application-default login \
 The deployment process consists of two simple steps:
 
 **Step 1: Deploy and setup client node**
+
+Option A: Using `make deploy` (basic deployment)
 ```bash
 make deploy
 ```
 
-This will:
+Option B: Using `make startup` (recommended, with branch control)
+```bash
+# Use default branch (terraform-gravity)
+make startup
+
+# Or specify a custom branch
+FASTEVM_BRANCH=your-branch-name make startup
+```
+
+The `startup` command will:
 1. Deploy the client node infrastructure on GCP
-2. Copy `scripts/setup.sh` to the client node
-3. Execute the setup script which:
+2. Transfer gcloud credentials to the client node
+3. Start the setup script in a tmux session which:
    - Installs dependencies (Rust, Foundry, etc.)
-   - Clones the FastEVM repository to `/opt/fastevm`
+   - Clones the FastEVM repository to `/opt/fastevm` using the specified branch
    - Builds the FastEVM binaries
+   - Starts the network deployment
+
+**Note:** The `FASTEVM_BRANCH` variable controls which branch of the FastEVM repository is cloned and used. The default value is `terraform-gravity`. You can override it by setting the environment variable before running `make startup`.
 
 **Step 2: Deploy network from client node**
 ```bash
@@ -70,11 +86,13 @@ client-node/
 
 ### Optional Variables
 
-- `project_name`: Resource name prefix (default: "fastevm-client")
+- `client_project_name`: Resource name prefix for client node resources (default: "fastevm-client")
+- `client_network_name_prefix`: Name prefix for network resources (network, subnet, firewall rules) - separate from main network (default: "fastevm-client")
 - `region`: GCP region (default: "us-central1")
 - `zone`: GCP zone (default: "us-central1-a")
 - `client_machine_type`: Machine type (default: "e2-standard-2")
 - `client_disk_size`: Disk size in GB (default: 50)
+- `client_subnet_cidr`: CIDR block for client subnet - separate from main network (default: "10.1.0.0/24")
 - `github_repo`: GitHub repository URL (default: "https://github.com/scalarorg/fastevm.git")
 - `github_branch`: GitHub branch to clone (default: "main")
 
@@ -86,9 +104,11 @@ You can set these via environment variables or in `terraform.tfvars`:
 export PROJECT_ID=your-gcp-project-id
 export REGION=us-central1
 export ZONE=us-central1-a
-export PROJECT_NAME=fastevm-client
+export CLIENT_PROJECT_NAME=fastevm-client
+export CLIENT_NETWORK_NAME_PREFIX=fastevm-client
 export GITHUB_REPO=https://github.com/scalarorg/fastevm.git
 export GITHUB_BRANCH=gravity
+export FASTEVM_BRANCH=terraform-gravity  # FastEVM branch to use when running make startup (default: terraform-gravity)
 ```
 
 Or create a `terraform.tfvars` file:
@@ -97,7 +117,9 @@ Or create a `terraform.tfvars` file:
 project_id = "your-gcp-project-id"
 region     = "us-central1"
 zone       = "us-central1-a"
-project_name = "fastevm-client"
+client_project_name = "fastevm-client"
+client_network_name_prefix = "fastevm-client"
+client_subnet_cidr = "10.1.0.0/24"
 github_repo = "https://github.com/scalarorg/fastevm.git"
 github_branch = "gravity"
 ```
@@ -110,9 +132,13 @@ github_branch = "gravity"
 - **Service Account**: For client operations
 
 ### Networking
-- **VPC Network**: Isolated network for client node
-- **Subnet**: 10.1.0.0/24 CIDR block
+- **VPC Network**: Standalone network for client node (separate from main FastEVM network)
+  - Network name: `{client_network_name_prefix}-network` (default: `fastevm-client-network`)
+- **Subnet**: 10.1.0.0/24 CIDR block (separate from main network's 10.0.0.0/24)
+  - Subnet name: `{client_network_name_prefix}-subnet` (default: `fastevm-client-subnet`)
 - **Firewall Rules**: SSH access and external testing
+  - Internal rule: `{client_network_name_prefix}-internal`
+  - External rule: `{client_network_name_prefix}-external`
 
 ### Security
 - **SSH Key Pair**: Generated automatically (`client-deploy-key`)
@@ -124,6 +150,9 @@ github_branch = "gravity"
 ### Main Commands
 ```bash
 make deploy            # Step 1: Deploy client node and run initial setup
+make startup           # Deploy client node, transfer credentials, and start setup script in tmux
+                       # Use FASTEVM_BRANCH variable to specify branch (default: terraform-gravity)
+                       # Example: FASTEVM_BRANCH=terraform-gravity make startup
 make deploy-network    # Step 2: Deploy network from client node
 make status            # Show deployment status
 make connect           # Connect to client node via SSH
@@ -292,7 +321,10 @@ You can customize the deployment by:
    ```bash
    export GITHUB_BRANCH=your-branch
    export PROJECT_NAME=my-fastevm-client
+   export FASTEVM_BRANCH=gravity  # For make startup command
    make deploy
+   # or
+   make startup
    ```
 
 2. **Using terraform.tfvars**:

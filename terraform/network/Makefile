@@ -1,6 +1,6 @@
 # FastEVM Terraform Deployment Makefile
 SHELL := /bin/bash
-.PHONY: help init plan apply destroy status logs clean validate format deploy ssh-node test-rpc restart health check-setup-status check-setup-logs import-existing import-existing-quiet
+.PHONY: help init plan apply destroy status logs clean validate format deploy ssh-node test-rpc restart health check-setup-status check-setup-logs
 
 # Load environment variables
 ifneq (,$(wildcard fastevm.env))
@@ -18,6 +18,8 @@ PROJECT_NAME ?= fastevm
 GITHUB_REPO ?= https://github.com/scalarorg/fastevm.git
 GITHUB_BRANCH ?= main
 SETUP_SUCCESS_MSG := FastEVM services installed successfully!
+WORKSPACE_DIR ?= /opt/workspace
+
 # Use terraform.tfvars if it exists (Terraform auto-loads it, but we can be explicit)
 # Otherwise fall back to environment variables from fastevm.env
 TF_VARS = $(if $(wildcard terraform.tfvars),-var-file=terraform.tfvars,\
@@ -53,91 +55,13 @@ format: ## Format Terraform files
 	terraform fmt -recursive
 
 plan: init validate ## Plan Terraform deployment
-	@# Try to import existing resources before planning
-	@$(MAKE) import-existing-quiet || true
 	@terraform plan $(TF_VARS) -out=tfplan
 
 apply: plan ## Apply Terraform deployment
-	@terraform apply tfplan || { \
-		echo "⚠️  Apply failed. Attempting to import existing resources (network, subnet, firewall rules, instances)..."; \
-		$(MAKE) import-existing || true; \
-		echo "Re-planning after import..."; \
-		terraform plan $(TF_VARS) -out=tfplan; \
-		terraform apply tfplan; \
-	}
+	@terraform apply tfplan
 	@terraform output -json > ../deployment-info.json
 	@echo "✓ Deployment applied"
 
-import-existing: init ## Import existing resources (network, subnet, firewall rules, instances)
-	@echo "Importing existing resources..."
-	@DETECTED_PROJECT=$$(gcloud config get-value project 2>/dev/null || echo ""); \
-	if [ -z "$$DETECTED_PROJECT" ] && [ -n "$(PROJECT_ID)" ]; then \
-		DETECTED_PROJECT="$(PROJECT_ID)"; \
-	fi; \
-	if [ -z "$$DETECTED_PROJECT" ]; then \
-		echo "⚠️  Cannot detect PROJECT_ID. Skipping import."; \
-		exit 0; \
-	fi; \
-	DETECTED_REGION="$(REGION)"; \
-	if [ -z "$$DETECTED_REGION" ]; then \
-		DETECTED_REGION="us-central1"; \
-	fi; \
-	echo "Using PROJECT_ID=$$DETECTED_PROJECT, REGION=$$DETECTED_REGION"; \
-	if gcloud compute networks describe "fastevm-network" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		echo "Importing network fastevm-network..."; \
-		terraform import "google_compute_network.fastevm_network" "projects/$$DETECTED_PROJECT/global/networks/fastevm-network" 2>/dev/null || echo "  (already imported or not found)"; \
-	fi; \
-	if gcloud compute networks subnets describe "fastevm-subnet" --region="$$DETECTED_REGION" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		echo "Importing subnet fastevm-subnet..."; \
-		terraform import "google_compute_subnetwork.fastevm_subnet" "projects/$$DETECTED_PROJECT/regions/$$DETECTED_REGION/subnetworks/fastevm-subnet" 2>/dev/null || echo "  (already imported or not found)"; \
-	fi; \
-	if gcloud compute firewall-rules describe "fastevm-internal" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		echo "Importing firewall rule fastevm-internal..."; \
-		terraform import "google_compute_firewall.fastevm_internal" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-internal" 2>/dev/null || echo "  (already imported or not found)"; \
-	fi; \
-	if gcloud compute firewall-rules describe "fastevm-external" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		echo "Importing firewall rule fastevm-external..."; \
-		terraform import "google_compute_firewall.fastevm_external" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-external" 2>/dev/null || echo "  (already imported or not found)"; \
-	fi; \
-	if gcloud compute addresses describe "$(PROJECT_NAME)-ip" --global --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		echo "Importing global address $(PROJECT_NAME)-ip..."; \
-		terraform import "google_compute_global_address.fastevm_ip" "projects/$$DETECTED_PROJECT/global/addresses/$(PROJECT_NAME)-ip" 2>/dev/null || echo "  (already imported or not found)"; \
-	fi; \
-	for i in $$(seq 0 $$(($(NODE_COUNT) - 1))); do \
-		name="$(PROJECT_NAME)-node-$$(($$i + 1))"; \
-		zone=$$(gcloud compute instances describe "$$name" --project="$$DETECTED_PROJECT" --format="value(zone)" 2>/dev/null | awk -F'/' '{print $$NF}'); \
-		if [ -n "$$zone" ]; then \
-			path="projects/$$DETECTED_PROJECT/zones/$$zone/instances/$$name"; \
-			echo "Importing instance $$name from zone $$zone..."; \
-			terraform import "google_compute_instance.fastevm_nodes[$$i]" "$$path" 2>/dev/null || echo "  (already imported or not found)"; \
-		fi; \
-	done; \
-	echo "Import complete"
-
-import-existing-quiet: init ## Import existing resources quietly (for pre-plan check)
-	@DETECTED_PROJECT=$$(gcloud config get-value project 2>/dev/null || echo ""); \
-	if [ -z "$$DETECTED_PROJECT" ] && [ -n "$(PROJECT_ID)" ]; then \
-		DETECTED_PROJECT="$(PROJECT_ID)"; \
-	fi; \
-	if [ -z "$$DETECTED_PROJECT" ]; then \
-		exit 0; \
-	fi; \
-	DETECTED_REGION="$(REGION)"; \
-	if [ -z "$$DETECTED_REGION" ]; then \
-		DETECTED_REGION="us-central1"; \
-	fi; \
-	if gcloud compute networks describe "fastevm-network" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		terraform import "google_compute_network.fastevm_network" "projects/$$DETECTED_PROJECT/global/networks/fastevm-network" >/dev/null 2>&1 || true; \
-	fi; \
-	if gcloud compute networks subnets describe "fastevm-subnet" --region="$$DETECTED_REGION" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		terraform import "google_compute_subnetwork.fastevm_subnet" "projects/$$DETECTED_PROJECT/regions/$$DETECTED_REGION/subnetworks/fastevm-subnet" >/dev/null 2>&1 || true; \
-	fi; \
-	if gcloud compute firewall-rules describe "fastevm-internal" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		terraform import "google_compute_firewall.fastevm_internal" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-internal" >/dev/null 2>&1 || true; \
-	fi; \
-	if gcloud compute firewall-rules describe "fastevm-external" --project="$$DETECTED_PROJECT" >/dev/null 2>&1; then \
-		terraform import "google_compute_firewall.fastevm_external" "projects/$$DETECTED_PROJECT/global/firewalls/fastevm-external" >/dev/null 2>&1 || true; \
-	fi
 
 # Extract deployment info and create env file
 extract-deployment-info: apply
@@ -221,7 +145,7 @@ start-setup: copy-files
 		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$public_ip \
 			"cd /opt/fastevm && \
 			tmux kill-session -t fastevm-setup 2>/dev/null || true && \
-			tmux new-session -d -s fastevm-setup \"bash -x node.sh setup $$private_ip $$public_ip > /tmp/fastevm-setup.log 2>&1\"" & \
+			tmux new-session -d -s fastevm-setup \"GITHUB_BRANCH=$(GITHUB_BRANCH) bash -x node.sh setup $$private_ip $$public_ip > /tmp/fastevm-setup.log 2>&1\"" & \
 	done; \
 	wait
 
@@ -324,13 +248,13 @@ collect-validators: watch-setup
 	done; \
 	rm -f $$TMP_COMMITTEES; \
 	echo "✅ Committees.yml updated on all nodes"
-
+# Create genesis_config.json in the deloyment client node
 genesis-config: watch-setup
 	@echo "🔗 Collecting authority.yml and building genesis_config.json"
 
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
 	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
-	TMP_JSON=$$(mktemp); \
+	GENESIS_CONFIG_JSON=/tmp/genesis_config.json; \
 	\
 	jq -n '{ \
 	  validatorAddresses: [], \
@@ -339,7 +263,7 @@ genesis-config: watch-setup
 	  validatorNetworkAddresses: [], \
 	  fullnodeNetworkAddresses: [], \
 	  aptosAddresses: [] \
-	}' > $$TMP_JSON; \
+	}' > $$GENESIS_CONFIG_JSON; \
 	\
 	for public_ip in $$PUBLIC_IPS; do \
 	  AUTH_YML=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
@@ -370,24 +294,37 @@ genesis-config: watch-setup
 	done; \
 	\
 	echo "📄 Generated genesis_config.json:"; \
-	jq . $$TMP_JSON; \
+	jq . $$GENESIS_CONFIG_JSON; \
 	\
 	for public_ip in $$PUBLIC_IPS; do \
 	  scp $(SSH_OPTS) -i "$$KEY" $$TMP_JSON \
 	    ubuntu@$$public_ip:/data/config/genesis_config.json || exit 1; \
 	done; \
 	\
-	rm -f $$TMP_JSON; \
 	echo "✅ genesis_config.json updated on all nodes"
+# run on the deployment client node
+# within the workspace directory, gravity-genesis-contract folder
+create-genesis: genesis-config
+	@echo "🔗 Creating genesis.json in the deployment client node"
+	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
+	cp $$GENESIS_CONFIG_JSON $$WORKSPACE_DIR/gravity-genesis-contract/genesis_config.json; \
+	cd $$WORKSPACE_DIR/gravity-genesis-contract; \
+	bash ./generate_genesis.sh; \
+	echo "✅ genesis.json created in the deployment client node"; \
+	for public_ip in $$PUBLIC_IPS; do \
+	  scp $(SSH_OPTS) -i "$$KEY" ./genesis.json \
+	    ubuntu@$$public_ip:/data/config/genesis.json || exit 1; \
+	done; \
+	echo "✅ genesis.json is copied to all nodes"
 
-
-update-envs: update-bootnodes collect-validators
+update-envs: update-bootnodes collect-validators genesis-config
 	@echo "✅ Bootnodes and committees.yml updated on all nodes"
 
 # Start services on all nodes
 start-services: update-envs
 	@echo ""
-	@echo "🚀 Starting services on all nodes..."
+	@echo "🚀 Starting services on all nodes.... Branch: $(GITHUB_BRANCH)"
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
 	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]' | tr '\n' ' '); \
 	IPS_ARRAY=($$IPS); \

@@ -16,7 +16,57 @@ sudo apt install -y build-essential \
     python3-pip \
     make \
     git \
-    tmux 
+    tmux \
+    unzip \
+    curl \
+    jq
+
+# Install Terraform
+if ! command -v terraform &> /dev/null; then
+    echo "Installing Terraform..."
+    # Add HashiCorp GPG key (skip if already exists)
+    if [ ! -f /usr/share/keyrings/hashicorp-archive-keyring.gpg ]; then
+        wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+    fi
+    # Add HashiCorp repository (skip if already exists)
+    if [ ! -f /etc/apt/sources.list.d/hashicorp.list ]; then
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+    fi
+    sudo apt update && sudo apt install -y terraform
+    terraform version
+    echo "✅ Terraform installed"
+else
+    echo "✅ Terraform already installed: $(terraform version | head -n 1)"
+fi
+
+# if ! command -v terraform &> /dev/null; then
+#     echo "Installing Terraform..."
+#     TERRAFORM_VERSION="1.6.0"
+#     wget -q "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+#     unzip -q "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+#     sudo mv terraform /usr/local/bin/
+#     rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+#     terraform version
+#     echo "✅ Terraform installed"
+# else
+#     echo "✅ Terraform already installed: $(terraform version | head -n 1)"
+# fi
+
+# Install Google Cloud SDK if not already installed
+if ! command -v gcloud &> /dev/null; then
+    echo "Installing Google Cloud SDK..."
+    # Install gcloud SDK non-interactively
+    export CLOUDSDK_CORE_DISABLE_PROMPTS=1
+    curl https://sdk.cloud.google.com | bash -s -- --disable-prompts
+    # Add to PATH for current session
+    export PATH="$HOME/google-cloud-sdk/bin:$PATH"
+    # Add to .bashrc for future sessions
+    echo 'export PATH="$HOME/google-cloud-sdk/bin:$PATH"' >> ~/.bashrc
+    gcloud --version
+    echo "✅ Google Cloud SDK installed"
+else
+    echo "✅ Google Cloud SDK already installed: $(gcloud --version | head -n 1)"
+fi 
 
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 . "$HOME/.cargo/env" 
@@ -98,6 +148,7 @@ clone_repository() {
 build_gravity_genesis_contract() {
     REPO_NAME=$(basename "$REPO_GRAVITY_GENESIS_CONTRACT" .git)
     cd $WORKSPACE_DIR/$REPO_NAME
+    forge build
     cargo build --release
     sudo cp target/release/gravity-genesis /usr/local/bin/gravity-genesis
 }
@@ -105,13 +156,9 @@ build_gravity_genesis_contract() {
 start_network() {
     REPO_NAME=$(basename "$REPO_FASTEVM" .git)
     cd $WORKSPACE_DIR/${REPO_NAME}/terraform/network
-    if [ -f Makefile ]; then
-        make start-services
-    else
-        echo "❌ Makefile not found. Running terraform directly..."
-        terraform init
-        terraform apply -auto-approve
-    fi
+    echo "Starting network with branch: $FASTEVM_BRANCH"
+    GITHUB_BRANCH=$FASTEVM_BRANCH make start-services
+    echo "Network started successfully!"
 }
 # Create /opt/fastevm directory
 sudo mkdir -p $WORKSPACE_DIR
