@@ -19,6 +19,7 @@ GITHUB_REPO ?= https://github.com/scalarorg/fastevm.git
 GITHUB_BRANCH ?= main
 SETUP_SUCCESS_MSG := FastEVM services installed successfully!
 WORKSPACE_DIR ?= /opt/workspace
+GENESIS_CONFIG_JSON ?= /tmp/genesis_config.json
 
 # Use terraform.tfvars if it exists (Terraform auto-loads it, but we can be explicit)
 # Otherwise fall back to environment variables from fastevm.env
@@ -256,14 +257,7 @@ genesis-config: watch-setup
 	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
 	GENESIS_CONFIG_JSON=/tmp/genesis_config.json; \
 	\
-	jq -n '{ \
-	  validatorAddresses: [], \
-	  consensusPublicKeys: [], \
-	  votingPowers: [], \
-	  validatorNetworkAddresses: [], \
-	  fullnodeNetworkAddresses: [], \
-	  aptosAddresses: [] \
-	}' > $$GENESIS_CONFIG_JSON; \
+	jq -n '{validatorAddresses: [], consensusPublicKeys: [], votingPowers: [], validatorNetworkAddresses: [], fullnodeNetworkAddresses: [], aptosAddresses: []}' > $$GENESIS_CONFIG_JSON; \
 	\
 	for public_ip in $$PUBLIC_IPS; do \
 	  AUTH_YML=$$(ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$public_ip \
@@ -278,47 +272,40 @@ genesis-config: watch-setup
 	  APTOS_ADDR=$$(echo "$$VALIDATOR_ADDR" | tr '[:upper:]' '[:lower:]'); \
 	  NET_ADDR="$$BASE_ADDR/noise-ik/$$APTOS_ADDR/handshake/0"; \
 	  \
-	  jq \
-	    --arg vaddr "0x$$APTOS_ADDR" \
-	    --arg cpk "$$CONS_PUBKEY" \
-	    --arg stake "$$STAKE" \
-	    --arg net "$$NET_ADDR" \
-	    --arg apt "$$APTOS_ADDR" \
-	    '.validatorAddresses += [$$vaddr] \
-	     | .consensusPublicKeys += [$$cpk] \
-	     | .votingPowers += [$$stake] \
-	     | .validatorNetworkAddresses += [$$net] \
-	     | .fullnodeNetworkAddresses += [$$net] \
-	     | .aptosAddresses += [$$apt]' \
-	    $$TMP_JSON > $$TMP_JSON.tmp && mv $$TMP_JSON.tmp $$TMP_JSON; \
+	  jq --arg vaddr "0x$$APTOS_ADDR" --arg cpk "$$CONS_PUBKEY" --arg stake "$$STAKE" --arg net "$$NET_ADDR" --arg apt "$$APTOS_ADDR" '.validatorAddresses += [$$vaddr] | .consensusPublicKeys += [$$cpk] | .votingPowers += [$$stake] | .validatorNetworkAddresses += [$$net] | .fullnodeNetworkAddresses += [$$net] | .aptosAddresses += [$$apt]' $$GENESIS_CONFIG_JSON > $$GENESIS_CONFIG_JSON.tmp && mv $$GENESIS_CONFIG_JSON.tmp $$GENESIS_CONFIG_JSON; \
 	done; \
 	\
 	echo "📄 Generated genesis_config.json:"; \
-	jq . $$GENESIS_CONFIG_JSON; \
-	\
-	for public_ip in $$PUBLIC_IPS; do \
-	  scp $(SSH_OPTS) -i "$$KEY" $$TMP_JSON \
-	    ubuntu@$$public_ip:/data/config/genesis_config.json || exit 1; \
-	done; \
-	\
-	echo "✅ genesis_config.json updated on all nodes"
+	jq . $$GENESIS_CONFIG_JSON;
+
 # run on the deployment client node
 # within the workspace directory, gravity-genesis-contract folder
 create-genesis: genesis-config
 	@echo "🔗 Creating genesis.json in the deployment client node"
-	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	@KEY_PATH=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	MAKEFILE_DIR=$$(pwd); \
+	if [ "$${KEY_PATH#/}" = "$$KEY_PATH" ]; then \
+		KEY="$$MAKEFILE_DIR/$$KEY_PATH"; \
+	else \
+		KEY="$$KEY_PATH"; \
+	fi; \
+	if [ ! -f "$$KEY" ]; then \
+		echo "❌ SSH key not found: $$KEY"; \
+		exit 1; \
+	fi; \
 	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
-	cp $$GENESIS_CONFIG_JSON $$WORKSPACE_DIR/gravity-genesis-contract/genesis_config.json; \
-	cd $$WORKSPACE_DIR/gravity-genesis-contract; \
+	GENESIS_JSON_PATH=$(WORKSPACE_DIR)/gravity-genesis-contract/genesis.json; \
+	cp $$GENESIS_CONFIG_JSON $(WORKSPACE_DIR)/gravity-genesis-contract/generate/genesis_config.json; \
+	cd $(WORKSPACE_DIR)/gravity-genesis-contract; \
 	bash ./generate_genesis.sh; \
 	echo "✅ genesis.json created in the deployment client node"; \
 	for public_ip in $$PUBLIC_IPS; do \
-	  scp $(SSH_OPTS) -i "$$KEY" ./genesis.json \
+	  scp $(SSH_OPTS) -i "$$KEY" $$GENESIS_JSON_PATH \
 	    ubuntu@$$public_ip:/data/config/genesis.json || exit 1; \
 	done; \
 	echo "✅ genesis.json is copied to all nodes"
 
-update-envs: update-bootnodes collect-validators genesis-config
+update-envs: update-bootnodes collect-validators create-genesis
 	@echo "✅ Bootnodes and committees.yml updated on all nodes"
 
 # Start services on all nodes

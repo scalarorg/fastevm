@@ -100,9 +100,9 @@ init-folders() {
 init-execution() {
     # Copy node.env and genesis.json to data directory
     cp $SCRIPT_DIR/node.env $DATA_DIR/node.env
-    cp $SCRIPT_DIR/genesis.json $DATA_DIR/config/genesis.json
-    chown ubuntu:ubuntu "$DATA_DIR/config/genesis.json"
-    chmod 644 "$DATA_DIR/config/genesis.json"
+    # cp $SCRIPT_DIR/genesis.json $DATA_DIR/config/genesis.json
+    # chown ubuntu:ubuntu "$DATA_DIR/config/genesis.json"
+    # chmod 644 "$DATA_DIR/config/genesis.json"
     
     # Ensure JWT secret exists if not already present
     if [ ! -f "$JWT_KEY_FILE" ]; then
