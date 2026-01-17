@@ -115,7 +115,7 @@ copy-files: apply
 					FAILED=$$((FAILED + 1)); \
 				fi; \
 			done; \
-			if scp $(SSH_OPTS) -i "$$KEY" nodes.env ubuntu@$$ip:/opt/fastevm/node.env; then \
+			if scp $(SSH_OPTS) -i "$$KEY" node.env ubuntu@$$ip:/opt/fastevm/node.env; then \
 				echo "    ✅ Files copied to node $$node_num"; \
 			else \
 				echo "    ❌ Failed to copy node.env to node $$node_num"; \
@@ -255,7 +255,7 @@ genesis-config: watch-setup
 
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
 	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
-	GENESIS_CONFIG_JSON=/tmp/genesis_config.json; \
+	GENESIS_CONFIG_JSON="$(GENESIS_CONFIG_JSON)"; \
 	\
 	jq -n '{validatorAddresses: [], consensusPublicKeys: [], votingPowers: [], validatorNetworkAddresses: [], fullnodeNetworkAddresses: [], aptosAddresses: []}' > $$GENESIS_CONFIG_JSON; \
 	\
@@ -270,9 +270,10 @@ genesis-config: watch-setup
 	  \
 	  CONS_PUBKEY=$$(echo "$$AUTHORITY_KEY" | cut -c1-96); \
 	  APTOS_ADDR=$$(echo "$$VALIDATOR_ADDR" | tr '[:upper:]' '[:lower:]'); \
+	  APTOS_ADDR_LAST40=$$(echo "$$APTOS_ADDR" | rev | cut -c1-40 | rev); \
 	  NET_ADDR="$$BASE_ADDR/noise-ik/$$APTOS_ADDR/handshake/0"; \
 	  \
-	  jq --arg vaddr "0x$$APTOS_ADDR" --arg cpk "$$CONS_PUBKEY" --arg stake "$$STAKE" --arg net "$$NET_ADDR" --arg apt "$$APTOS_ADDR" '.validatorAddresses += [$$vaddr] | .consensusPublicKeys += [$$cpk] | .votingPowers += [$$stake] | .validatorNetworkAddresses += [$$net] | .fullnodeNetworkAddresses += [$$net] | .aptosAddresses += [$$apt]' $$GENESIS_CONFIG_JSON > $$GENESIS_CONFIG_JSON.tmp && mv $$GENESIS_CONFIG_JSON.tmp $$GENESIS_CONFIG_JSON; \
+	  jq --arg vaddr "0x$$APTOS_ADDR_LAST40" --arg cpk "$$CONS_PUBKEY" --arg stake "$$STAKE" --arg net "$$NET_ADDR" --arg apt "$$APTOS_ADDR" '.validatorAddresses += [$$vaddr] | .consensusPublicKeys += [$$cpk] | .votingPowers += [$$stake] | .validatorNetworkAddresses += [$$net] | .fullnodeNetworkAddresses += [$$net] | .aptosAddresses += [$$apt]' $$GENESIS_CONFIG_JSON > $$GENESIS_CONFIG_JSON.tmp && mv $$GENESIS_CONFIG_JSON.tmp $$GENESIS_CONFIG_JSON; \
 	done; \
 	\
 	echo "📄 Generated genesis_config.json:"; \
@@ -295,7 +296,8 @@ create-genesis: genesis-config
 	fi; \
 	PUBLIC_IPS=$$(terraform output -json instance_external_ips | jq -r '.[]'); \
 	GENESIS_JSON_PATH=$(WORKSPACE_DIR)/gravity-genesis-contract/genesis.json; \
-	cp $$GENESIS_CONFIG_JSON $(WORKSPACE_DIR)/gravity-genesis-contract/generate/genesis_config.json; \
+	mkdir -p $(WORKSPACE_DIR)/gravity-genesis-contract/generate; \
+	cp $(GENESIS_CONFIG_JSON) $(WORKSPACE_DIR)/gravity-genesis-contract/generate/genesis_config.json; \
 	cd $(WORKSPACE_DIR)/gravity-genesis-contract; \
 	bash ./generate_genesis.sh; \
 	echo "✅ genesis.json created in the deployment client node"; \
