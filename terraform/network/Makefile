@@ -82,7 +82,7 @@ extract-deployment-info: apply
 	echo "✓ Environment file created"
 
 # Copy files to all nodes
-copy-files: extract-deployment-info
+copy-files: apply
 	@echo "📦 Copying files to all nodes..."
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
 	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]' | tr '\n' ' '); \
@@ -115,7 +115,7 @@ copy-files: extract-deployment-info
 					FAILED=$$((FAILED + 1)); \
 				fi; \
 			done; \
-			if scp $(SSH_OPTS) -i "$$KEY" nodes.remote.env ubuntu@$$ip:/opt/fastevm/node.env; then \
+			if scp $(SSH_OPTS) -i "$$KEY" nodes.env ubuntu@$$ip:/opt/fastevm/node.env; then \
 				echo "    ✅ Files copied to node $$node_num"; \
 			else \
 				echo "    ❌ Failed to copy node.env to node $$node_num"; \
