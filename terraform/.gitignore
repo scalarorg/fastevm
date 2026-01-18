@@ -361,5 +361,3 @@ deploy/*
 !deploy/.gitkeep
 backups/*
 !backups/.gitkeep
-
-*.env
