@@ -108,6 +108,14 @@ clone_repository() {
             git checkout -b "$REPO_BRANCH" "origin/$REPO_BRANCH"
         fi
 
+        # Restore all changes if there are any unstaged or staged changes
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            echo "Restoring all changes before pulling..."
+            git restore .
+            git restore --staged . 2>/dev/null || true
+            git reset --hard HEAD
+        fi
+
         git pull origin "$REPO_BRANCH"
 
         echo "Updating all submodules..."
@@ -115,11 +123,7 @@ clone_repository() {
         git submodule update --init --recursive
     else
         echo "Cloning $REPO_NAME repository to $REPO_NAME..."
-        if [ "$REPO_NAME" = "fastevm" ]; then
-            git clone $REPO_URL "$REPO_NAME"
-        else
-            git clone $REPO_URL "$REPO_NAME"
-        fi
+        git clone $REPO_URL "$REPO_NAME"
         cd $REPO_NAME
 
         git checkout "$REPO_BRANCH"
