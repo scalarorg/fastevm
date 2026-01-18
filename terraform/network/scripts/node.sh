@@ -134,6 +134,7 @@ init-execution() {
 init-consensus() {
     local LOCAL_IP=$1
     local HOST_NAME=${2:-validator-$LOCAL_IP}
+    STAKE_AMOUNT=${STAKE_AMOUNT:-20000}
     # Copy node.yml, committees.yml, parameters.yml to data directory
     cp $SCRIPT_DIR/node.yml $DATA_DIR/config/node.yml
     cp $SCRIPT_DIR/parameters.yml $DATA_DIR/config/parameters.yml
@@ -143,7 +144,7 @@ init-consensus() {
     evm-consensus generate-validator \
         --validator-path $DATA_DIR/config/validator.yml \
         --authority-path $DATA_DIR/config/authority.yml \
-        --stake 1000 \
+        --stake $STAKE_AMOUNT \
         --hostname $HOST_NAME \
         --ip-address $LOCAL_IP \
         --port 26657
