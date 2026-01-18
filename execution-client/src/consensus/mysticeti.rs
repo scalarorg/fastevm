@@ -593,7 +593,10 @@ where
                     }
                 })
             });
-        info!("Build ordered block with number: {:?}, number of transactions: {:?}", block_number, signed_transactions.len());
+        info!("Build ordered block with number: {:?} proposer: {:?}, number of transactions: {:?}", 
+            block_number,  
+            proposer.as_ref().map(|bytes| format!("0x{}", hex::encode(bytes))), 
+            signed_transactions.len());
         let ordered_block = OrderedBlock {
             epoch,
             parent_id: parent_id,
