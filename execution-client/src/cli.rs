@@ -8,17 +8,78 @@
 //! cargo run -p execution-client --bin fastevm-cli -- show-peer-id --file /path/to/secret.key --output /path/to/output.txt
 //! ```
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::Bytes;
+use alloy_provider::ProviderBuilder;
+use alloy_sol_macro::sol;
 // use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
+use greth::reth_pipe_exec_layer_ext_v2::onchain_config::TIMESTAMP_ADDR;
+use greth::reth_pipe_exec_layer_ext_v2::onchain_config::VALIDATOR_MANAGER_ADDR;
 use reth_network_peers::pk2id;
 use secp256k1::SecretKey;
-use serde_json::{Map, Value};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 const DEFAULT_MNEMONIC: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+sol! {
+    #[sol(rpc)]
+    #[derive(Debug)]
+    enum ValidatorStatus {
+        PENDING_ACTIVE, // 0
+        ACTIVE, // 1
+        PENDING_INACTIVE, // 2
+        INACTIVE // 3
+    }
+
+    // Commission structure
+    #[sol(rpc)]
+    struct Commission {
+        uint64 rate; // the commission rate charged to delegators(10000 is 100%)
+        uint64 maxRate; // maximum commission rate which validator can ever charge
+        uint64 maxChangeRate; // maximum daily increase of the validator commission
+    }
+
+    /// Complete validator information (merged from multiple contracts)
+    /// #[sol(rpc)]
+    struct ValidatorInfo {
+        // Basic information (from ValidatorManager)
+        bytes consensusPublicKey;
+        Commission commission;
+        string moniker;
+        bool registered;
+        address stakeCreditAddress;
+        ValidatorStatus status;
+        uint256 votingPower; // Changed from uint64 to uint256 to prevent overflow
+        uint256 validatorIndex;
+        uint256 updateTime;
+        address operator;
+        bytes validatorNetworkAddresses; // BCS serialized Vec<NetworkAddress>
+        bytes fullnodeNetworkAddresses; // BCS serialized Vec<NetworkAddress>
+        bytes aptosAddress; // [u8; 32]
+    }
+    #[sol(rpc)]
+    struct ValidatorSet {
+        ValidatorInfo[] activeValidators; // Active validators for the current epoch
+        ValidatorInfo[] pendingInactive; // Pending validators to leave in next epoch (still active)
+        ValidatorInfo[] pendingActive; // Pending validators to join in next epoch
+        uint256 totalVotingPower; // Current total voting power
+        uint256 totalJoiningPower; // Total voting power waiting to join in the next epoch
+    }
+
+    #[sol(rpc)]
+    interface ValidatorManager {
+        function getValidatorSet() external view returns (ValidatorSet memory);
+        function getValidatorByProposer(bytes calldata proposer) external view returns (address, uint256);
+    }
+    #[sol(rpc)]
+    interface Timestamp {
+        function nowMicroseconds() external view returns (uint64);
+
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "fastevm-cli")]
@@ -39,24 +100,12 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    // Allocate funds to generated accounts in genesis.json
-    // AllocateFunds {
-    //     /// Path to input genesis.json file
-    //     #[arg(short, long)]
-    //     input: PathBuf,
-    //     /// Number of accounts to generate
-    //     #[arg(short, long, default_value = "100")]
-    //     count: u32,
-    //     /// Mnemonic phrase for account generation (optional, uses default if not provided)
-    //     #[arg(short, long)]
-    //     mnemonic: Option<String>,
-    //     /// Amount of funds to allocate to each account (in wei, default: 1000 ETH)
-    //     #[arg(short, long, default_value = "1000000000000000000000")]
-    //     amount: String,
-    //     /// Output directory to save modified genesis.json
-    //     #[arg(short, long)]
-    //     output: PathBuf,
-    // },
+    GetValidatorSet,
+    GetValidatorByProposer {
+        #[arg(short, long)]
+        proposer: String,
+    },
+    GetTimestamp,
 }
 
 fn show_peer_id(file_path: PathBuf, output_path: Option<PathBuf>) -> eyre::Result<()> {
@@ -102,150 +151,118 @@ fn show_peer_id(file_path: PathBuf, output_path: Option<PathBuf>) -> eyre::Resul
     Ok(())
 }
 
-// fn allocate_funds(
-//     input_path: PathBuf,
-//     count: u32,
-//     mnemonic: Option<String>,
-//     amount: String,
-//     output_path: PathBuf,
-// ) -> eyre::Result<()> {
-//     // Parse the amount string to U256
-//     let amount_wei = if amount.starts_with("0x") {
-//         U256::from_str_radix(&amount[2..], 16)
-//             .map_err(|e| eyre::eyre!("Invalid hex amount: {}", e))?
-//     } else {
-//         U256::from_str_radix(&amount, 10)
-//             .map_err(|e| eyre::eyre!("Invalid decimal amount: {}", e))?
-//     };
+pub async fn get_validator_set() -> eyre::Result<()> {
+    // RPC URL
+    let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
 
-//     // Use default mnemonic if not provided
-//     let mnemonic_phrase = mnemonic.unwrap_or_else(|| DEFAULT_MNEMONIC.to_string());
+    // Provider
+    let provider = ProviderBuilder::new().on_http(rpc_url.parse()?);
 
-//     // Parse the mnemonic
-//     let mnemonic =
-//         Mnemonic::parse(&mnemonic_phrase).map_err(|e| eyre::eyre!("Invalid mnemonic: {}", e))?;
+    // ✅ Correct: create contract instance
+    let contract = ValidatorManager::new(VALIDATOR_MANAGER_ADDR, provider);
 
-//     // Generate seed from mnemonic
-//     let seed = mnemonic.to_seed("");
-//     let seed_bytes = &seed[..];
+    // ✅ Correct: call returns ValidatorSet directly
+    let validator_set = contract.getValidatorSet().call().await?;
 
-//     // Read and parse the input genesis.json
-//     let genesis_content = fs::read_to_string(&input_path).map_err(|e| {
-//         eyre::eyre!(
-//             "Failed to read genesis file {}: {}",
-//             input_path.display(),
-//             e
-//         )
-//     })?;
+    println!("Validator Set:");
+    println!("  Total Voting Power: {}", validator_set.totalVotingPower);
+    println!("  Total Joining Power: {}", validator_set.totalJoiningPower);
+    println!(
+        "  Active Validators: {}",
+        validator_set.activeValidators.len()
+    );
+    println!(
+        "  Pending Inactive: {}",
+        validator_set.pendingInactive.len()
+    );
+    println!("  Pending Active: {}", validator_set.pendingActive.len());
 
-//     let mut genesis: Value = serde_json::from_str(&genesis_content)
-//         .map_err(|e| eyre::eyre!("Failed to parse genesis.json: {}", e))?;
+    for (idx, v) in validator_set.activeValidators.iter().enumerate() {
+        println!("Active Validator {}:", idx);
+        println!("  Moniker: {}", v.moniker);
+        println!("  Operator: {:?}", v.operator);
+        println!("  Aptos Address: {:?}", v.aptosAddress);
+        println!(
+            "  Validator Network Addresses: {:?}",
+            v.validatorNetworkAddresses
+        );
+        println!(
+            "  Fullnode Network Addresses: {:?}",
+            v.fullnodeNetworkAddresses
+        );
+        println!("  Voting Power: {}", v.votingPower);
+        println!("  Validator Index: {}", v.validatorIndex);
+    }
 
-//     // Get the alloc section or create it if it doesn't exist
-//     let alloc = genesis
-//         .get_mut("alloc")
-//         .ok_or_else(|| eyre::eyre!("Genesis file missing 'alloc' section"))?
-//         .as_object_mut()
-//         .ok_or_else(|| eyre::eyre!("'alloc' section is not an object"))?;
-
-//     // Generate accounts and add them to the alloc section
-//     for i in 0..count {
-//         let account = generate_account_from_seed(&seed_bytes, i)?;
-//         let address_hex = format!("0x{:x}", account.address);
-//         // Create account entry with balance
-//         let mut account_entry = Map::new();
-//         account_entry.insert(
-//             "balance".to_string(),
-//             Value::String(format!("0x{:x}", amount_wei)),
-//         );
-
-//         alloc.insert(address_hex, Value::Object(account_entry));
-//     }
-
-//     // Create output directory if it doesn't exist
-//     fs::create_dir_all(&output_path).map_err(|e| {
-//         eyre::eyre!(
-//             "Failed to create output directory {}: {}",
-//             output_path.display(),
-//             e
-//         )
-//     })?;
-
-//     // Write the modified genesis.json to output directory
-//     let output_file = output_path.join("genesis.json");
-//     let genesis_json = serde_json::to_string_pretty(&genesis)
-//         .map_err(|e| eyre::eyre!("Failed to serialize genesis.json: {}", e))?;
-
-//     fs::write(&output_file, genesis_json).map_err(|e| {
-//         eyre::eyre!(
-//             "Failed to write genesis.json to {}: {}",
-//             output_file.display(),
-//             e
-//         )
-//     })?;
-
-//     println!("Successfully allocated funds to {} accounts", count);
-//     println!("Modified genesis.json saved to: {}", output_file.display());
-//     println!("Mnemonic used: {}", mnemonic_phrase);
-
-//     Ok(())
-// }
-
-#[derive(Debug)]
-struct Account {
-    address: Address,
-    private_key: [u8; 32],
+    Ok(())
 }
 
-// fn generate_account_from_seed(seed: &[u8], index: u32) -> eyre::Result<Account> {
-//     use sha2::{Digest, Sha256};
-//     // Simple deterministic key generation using seed + index
-//     let mut hasher = Sha256::new();
-//     hasher.update(seed);
-//     hasher.update(&index.to_le_bytes());
-//     let hash = hasher.finalize();
+pub async fn get_validator_by_proposer(proposer: String) -> eyre::Result<()> {
+    // RPC URL
+    let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
 
-//     // Use the hash as private key (first 32 bytes)
-//     let mut private_key = [0u8; 32];
-//     private_key.copy_from_slice(&hash[..32]);
+    // Parse proposer hex → bytes
+    let proposer_hex = proposer.strip_prefix("0x").unwrap_or(&proposer);
 
-//     // Create secp256k1 secret key
-//     let secp = secp256k1::Secp256k1::new();
-//     let secret_key = SecretKey::from_slice(&private_key)
-//         .map_err(|e| eyre::eyre!("Invalid private key: {}", e))?;
+    let proposer_bytes = hex::decode(proposer_hex)
+        .map_err(|e| eyre::eyre!("Failed to parse proposer hex string: {}", e))?;
 
-//     // Get the public key and derive address
-//     let public_key = secret_key.public_key(&secp);
-//     let public_key_bytes = public_key.serialize_uncompressed();
+    let proposer_bytes = Bytes::from(proposer_bytes);
 
-//     // Ethereum address is the last 20 bytes of keccak256 hash of the public key
-//     let hash = alloy_primitives::keccak256(&public_key_bytes[1..]);
-//     let mut address_bytes = [0u8; 20];
-//     address_bytes.copy_from_slice(&hash[12..]);
+    // Provider
+    let provider = ProviderBuilder::new().on_http(rpc_url.parse()?);
 
-//     let address = Address::from(address_bytes);
+    // Contract
+    let contract = ValidatorManager::new(VALIDATOR_MANAGER_ADDR, provider);
 
-//     Ok(Account {
-//         address,
-//         private_key,
-//     })
-// }
+    // ✅ Call returns ValidatorInfo directly
+    let result = contract
+        .getValidatorByProposer(proposer_bytes)
+        .call()
+        .await?;
 
-fn main() -> eyre::Result<()> {
+    // Print result
+    println!("Validator Info:");
+    println!("  Operator: {:?}", result._0);
+    println!("  Validator Index: {}", result._1);
+
+    Ok(())
+}
+
+async fn get_timestamp() -> eyre::Result<()> {
+    // RPC URL
+    let rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
+
+    // Provider
+    let provider = ProviderBuilder::new().on_http(rpc_url.parse()?);
+
+    // Contract
+    let contract = Timestamp::new(TIMESTAMP_ADDR, provider);
+
+    // Call
+    let result = contract.nowMicroseconds().call().await?;
+
+    println!("Timestamp: {}", result);
+
+    Ok(())
+}
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::ShowPeerId { file, output } => {
             show_peer_id(file, output)?;
-        } // Commands::AllocateFunds {
-          //     input,
-          //     count,
-          //     mnemonic,
-          //     amount,
-          //     output,
-          // } => {
-          //     allocate_funds(input, count, mnemonic, amount, output)?;
-          // }
+        }
+        Commands::GetValidatorSet => {
+            get_validator_set().await?;
+        }
+        Commands::GetValidatorByProposer { proposer } => {
+            get_validator_by_proposer(proposer).await?;
+        }
+        Commands::GetTimestamp => {
+            get_timestamp().await?;
+        }
     }
 
     Ok(())

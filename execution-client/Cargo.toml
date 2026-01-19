@@ -24,15 +24,22 @@ path = "src/cli.rs"
 rpc-shared-api = { workspace = true }
 gravity-api-types = { workspace = true }
 # Ethereum
+alloy = { workspace = true, features = [
+    "providers",
+    "rpc"
+] }
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
 alloy-rpc-types-engine = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
+alloy-sol-macro = { workspace = true }
+alloy-sol-types = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 # alloy-evm = { workspace = true }
 
 alloy-rlp = { workspace = true }
-# alloy = { workspace = true, features = ["network", "rpc"] }
+alloy-provider = { workspace = true }
+alloy-contract = { workspace = true }
 # alloy-signer-local = { workspace = true }
 
 eyre = { workspace = true}

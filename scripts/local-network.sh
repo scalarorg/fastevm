@@ -207,8 +207,6 @@ init_execution_node() {
     
     # Generate P2P secret key
     generate_p2p_secret_key "$node_index" "$data_dir"
-    
-    cp $SCRIPT_DIR/genesis.json $data_dir/genesis.json
 
     # Copy prefunded genesis.json if it exists, otherwise fall back to original
     # local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
@@ -476,6 +474,7 @@ generate_genesis() {
     
     # Copy genesis.json to all consensus nodes
     GENESIS_JSON_PATH="$GRAVITY_GENESIS_CONTRACT_DIR/genesis.json"
+    jq . "$GENESIS_JSON_PATH"
     if [ ! -f "$GENESIS_JSON_PATH" ]; then
         log_error "Generated genesis.json not found at: $GENESIS_JSON_PATH"
         return 1
@@ -483,12 +482,12 @@ generate_genesis() {
     
     log_info "Copying genesis.json to all consensus nodes..."
     for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
-        DEST="$DATA_DIR/consensus${INDEX}/genesis.json"
+        DEST="$DATA_DIR/execution${INDEX}/genesis.json"
         cp "$GENESIS_JSON_PATH" "$DEST"
-        log_info "Copied genesis.json to consensus node $INDEX"
+        log_info "Copied genesis.json to execution node $INDEX"
     done
     
-    log_success "✅ genesis.json is copied to all consensus nodes"
+    log_success "✅ genesis.json is copied to all execution nodes"
 }
 # Step 3: Generate committees.yml configuration file from validators.yml (shared across all consensus nodes)
 generate_committees_config() {
@@ -546,27 +545,27 @@ generate_consensus_files() {
     mkdir -p "$data_dir"
     
     # Copy prefunded genesis.json if it exists, otherwise fall back to original
-    local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
-    local shared_genesis="$PROJECT_ROOT/execution-client/shared/genesis.json"
+    # local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
+    # local shared_genesis="$PROJECT_ROOT/execution-client/shared/genesis.json"
     
-    if [ -f "$prefunded_genesis" ]; then
-        if cp "$prefunded_genesis" "$data_dir/genesis.json"; then
-            log_info "Copied prefunded genesis.json to consensus node $node_index"
-        else
-            log_error "Failed to copy prefunded genesis.json to consensus node $node_index"
-            return 1
-        fi
-    elif [ -f "$shared_genesis" ]; then
-        if cp "$shared_genesis" "$data_dir/genesis.json"; then
-            log_info "Copied original genesis.json to consensus node $node_index"
-        else
-            log_error "Failed to copy genesis.json to consensus node $node_index"
-            return 1
-        fi
-    else
-        log_error "No genesis file found: $shared_genesis"
-        return 1
-    fi
+    # if [ -f "$prefunded_genesis" ]; then
+    #     if cp "$prefunded_genesis" "$data_dir/genesis.json"; then
+    #         log_info "Copied prefunded genesis.json to consensus node $node_index"
+    #     else
+    #         log_error "Failed to copy prefunded genesis.json to consensus node $node_index"
+    #         return 1
+    #     fi
+    # elif [ -f "$shared_genesis" ]; then
+    #     if cp "$shared_genesis" "$data_dir/genesis.json"; then
+    #         log_info "Copied original genesis.json to consensus node $node_index"
+    #     else
+    #         log_error "Failed to copy genesis.json to consensus node $node_index"
+    #         return 1
+    #     fi
+    # else
+    #     log_error "No genesis file found: $shared_genesis"
+    #     return 1
+    # fi
     
     # Copy parameters.yml from examples
     local parameters_template="$PROJECT_ROOT/consensus-client/examples/parameters.yml"
