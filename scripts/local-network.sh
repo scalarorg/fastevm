@@ -33,7 +33,7 @@ CONSENSUS_CLIENT=~/workspace/codelight/scalar-consensus/mysticeti/target/release
 
 GRAVITY_PIPE_BLOCK_GAS_LIMIT=10000000000
 GRAVITY_CACHE_MAX_PERSIST_GAP=64
-
+STAKE_AMOUNT=20000
 # Default values for account generation
 DEFAULT_ACCOUNT_NUMBER=100000
 DEFAULT_ACCOUNT_NUMBER=100000
@@ -275,7 +275,7 @@ generate_validators_config() {
             --output "$validators_output" \
             --authorities "$authorities_count" \
             --epoch "0" \
-            --stake "1000" \
+            --stake "$STAKE_AMOUNT" \
             --ip-addresses "$ip_addresses_str" \
             --network-ports "$network_ports_str" \
             --hostname-prefix "fastevm-consensus"; then
@@ -394,7 +394,102 @@ collect_validators_into_committees() {
 
     log_success "Committees.yml updated successfully"
 }
-    # Step 2: Generate genesis_config.json from validators.yml
+
+# Generate genesis.json by collecting authority.yml files and calling gravity-genesis-contract
+generate_genesis() {
+    log_info "🔗 Collecting authority.yml files and building genesis_config.json"
+    
+    # Location of gravity-genesis-contract project
+    GRAVITY_GENESIS_CONTRACT_DIR="${GRAVITY_GENESIS_CONTRACT_DIR:-${SCRIPT_DIR}/../../gravity-genesis-contract}"
+    
+    # Check if gravity-genesis-contract directory exists
+    if [ ! -d "$GRAVITY_GENESIS_CONTRACT_DIR" ]; then
+        log_error "Gravity genesis contract directory not found: $GRAVITY_GENESIS_CONTRACT_DIR"
+        log_error "Please set GRAVITY_GENESIS_CONTRACT_DIR environment variable or update the default path"
+        return 1
+    fi
+    
+    # Path for genesis_config.json
+    GENESIS_CONFIG_JSON="$DATA_DIR/genesis_config.json"
+    
+    # Initialize genesis_config.json with empty arrays
+    jq -n '{validatorAddresses: [], consensusPublicKeys: [], votingPowers: [], validatorNetworkAddresses: [], fullnodeNetworkAddresses: [], aptosAddresses: []}' > "$GENESIS_CONFIG_JSON"
+    
+    # Collect authority.yml files from all consensus nodes
+    for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+        AUTH_FILE="$DATA_DIR/consensus${INDEX}/authority.yml"
+        
+        if [[ ! -f "$AUTH_FILE" ]]; then
+            log_error "Missing authority file: $AUTH_FILE"
+            return 1
+        fi
+        
+        log_info "Processing authority file: $AUTH_FILE"
+        
+        # Extract values from authority.yml
+        VALIDATOR_ADDR=$(sed -n 's/^validator_address:[[:space:]]*//p' "$AUTH_FILE")
+        AUTHORITY_KEY=$(sed -n 's/^authority_key:[[:space:]]*//p' "$AUTH_FILE")
+        STAKE=$(sed -n 's/^stake:[[:space:]]*//p' "$AUTH_FILE")
+        BASE_ADDR=$(sed -n 's/^address:[[:space:]]*//p' "$AUTH_FILE")
+        
+        # Process the values
+        CONS_PUBKEY=$(echo "$AUTHORITY_KEY" | cut -c1-96)
+        APTOS_ADDR=$(echo "$VALIDATOR_ADDR" | tr '[:upper:]' '[:lower:]')
+        APTOS_ADDR_LAST40=$(echo "$APTOS_ADDR" | rev | cut -c1-40 | rev)
+        NET_ADDR="$BASE_ADDR/noise-ik/$APTOS_ADDR/handshake/0"
+        
+        # Add to genesis_config.json
+        jq --arg vaddr "0x$APTOS_ADDR_LAST40" \
+           --arg cpk "$CONS_PUBKEY" \
+           --arg stake "$STAKE" \
+           --arg net "$NET_ADDR" \
+           --arg apt "$APTOS_ADDR" \
+           '.validatorAddresses += [$vaddr] | .consensusPublicKeys += [$cpk] | .votingPowers += [$stake] | .validatorNetworkAddresses += [$net] | .fullnodeNetworkAddresses += [$net] | .aptosAddresses += [$apt]' \
+           "$GENESIS_CONFIG_JSON" > "$GENESIS_CONFIG_JSON.tmp" && mv "$GENESIS_CONFIG_JSON.tmp" "$GENESIS_CONFIG_JSON"
+    done
+    
+    log_success "📄 Generated genesis_config.json:"
+    jq . "$GENESIS_CONFIG_JSON"
+    
+    # Create genesis.json using gravity-genesis-contract
+    log_info "🔗 Creating genesis.json using gravity-genesis-contract"
+    
+    # Ensure generate directory exists in gravity-genesis-contract
+    mkdir -p "$GRAVITY_GENESIS_CONTRACT_DIR/generate"
+    
+    # Copy genesis_config.json to gravity-genesis-contract/generate/
+    cp "$GENESIS_CONFIG_JSON" "$GRAVITY_GENESIS_CONTRACT_DIR/generate/genesis_config.json"
+    log_info "Copied genesis_config.json to $GRAVITY_GENESIS_CONTRACT_DIR/generate/"
+    
+    # Save current directory and change to gravity-genesis-contract directory
+    local original_dir=$(pwd)
+    cd "$GRAVITY_GENESIS_CONTRACT_DIR"
+    if bash ./generate_genesis.sh; then
+        log_success "✅ genesis.json created in gravity-genesis-contract"
+    else
+        log_error "Failed to generate genesis.json"
+        cd "$original_dir"
+        return 1
+    fi
+    # Restore original directory
+    cd "$original_dir"
+    
+    # Copy genesis.json to all consensus nodes
+    GENESIS_JSON_PATH="$GRAVITY_GENESIS_CONTRACT_DIR/genesis.json"
+    if [ ! -f "$GENESIS_JSON_PATH" ]; then
+        log_error "Generated genesis.json not found at: $GENESIS_JSON_PATH"
+        return 1
+    fi
+    
+    log_info "Copying genesis.json to all consensus nodes..."
+    for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+        DEST="$DATA_DIR/consensus${INDEX}/genesis.json"
+        cp "$GENESIS_JSON_PATH" "$DEST"
+        log_info "Copied genesis.json to consensus node $INDEX"
+    done
+    
+    log_success "✅ genesis.json is copied to all consensus nodes"
+}
 # Step 3: Generate committees.yml configuration file from validators.yml (shared across all consensus nodes)
 generate_committees_config() {
     local validators_file="$DATA_DIR/validators.yml"
@@ -490,25 +585,11 @@ generate_consensus_files() {
     "$CONSENSUS_CLIENT" generate-validator \
         --validator-path $data_dir/validator.yml \
         --authority-path $data_dir/authority.yml \
-        --stake 1000 \
+        --stake $STAKE_AMOUNT \
         --hostname "fastevm-consensus$node_index" \
         --ip-address "${CONSENSUS_IPS[$((node_index-1))]}" \
         --port "${CONSENSUS_PORTS[$((node_index-1))]}"
-    # Copy shared committees.yml to this node's directory
-    # local shared_committees="$DATA_DIR/committees.yml"
-    # if [ -f "$shared_committees" ]; then
-    #     if cp "$shared_committees" "$data_dir/committees.yml"; then
-    #         log_info "Copied committees.yml to consensus node $node_index"
-    #     else
-    #         log_error "Failed to copy committees.yml to consensus node $node_index"
-    #         return 1
-    #     fi
-    # else
-    #     log_error "Shared committees.yml not found: $shared_committees"
-    #     log_error "Please run generate_committees_config first"
-    #     return 1
-    # fi
-    
+
     log_success "Generated consensus node $node_index files: genesis.json, committees.yml, parameters.yml"
 }
 
@@ -752,7 +833,7 @@ start_network() {
     stop_network
     
     # Generate committees.yml configuration (shared across all consensus nodes)
-    generate_committees_config
+    # generate_committees_config
     
     # Initialize all nodes
     for i in {1..4}; do
@@ -761,6 +842,7 @@ start_network() {
     done
     # Collect validator.yml into committees.yml
     collect_validators_into_committees
+    generate_genesis
     # Start execution nodes
     for i in {1..4}; do
         log_info "Starting execution node $i ..."
