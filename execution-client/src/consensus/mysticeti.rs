@@ -593,16 +593,18 @@ where
                     }
                 })
             });
-        info!("Build ordered block with number: {:?} proposer: {:?}, number of transactions: {:?}", 
+        info!("Build ordered block with number: {:?} proposer: {:?}, current timestamp: {:?} in second, number of transactions: {:?}", 
             block_number,  
             proposer.as_ref().map(|bytes| format!("0x{}", hex::encode(bytes))), 
+            timestamp,
             signed_transactions.len());
         let ordered_block = OrderedBlock {
             epoch,
             parent_id: parent_id,
             id: block_id,
             number: block_number,
-            timestamp_us: timestamp,
+            // Convert timestamp from seconds to microseconds
+            timestamp_us: timestamp * 1_000_000,
             coinbase,
             prev_randao,
             withdrawals,
