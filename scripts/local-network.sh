@@ -544,29 +544,6 @@ generate_consensus_files() {
     # Create data directory if it doesn't exist
     mkdir -p "$data_dir"
     
-    # Copy prefunded genesis.json if it exists, otherwise fall back to original
-    # local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
-    # local shared_genesis="$PROJECT_ROOT/execution-client/shared/genesis.json"
-    
-    # if [ -f "$prefunded_genesis" ]; then
-    #     if cp "$prefunded_genesis" "$data_dir/genesis.json"; then
-    #         log_info "Copied prefunded genesis.json to consensus node $node_index"
-    #     else
-    #         log_error "Failed to copy prefunded genesis.json to consensus node $node_index"
-    #         return 1
-    #     fi
-    # elif [ -f "$shared_genesis" ]; then
-    #     if cp "$shared_genesis" "$data_dir/genesis.json"; then
-    #         log_info "Copied original genesis.json to consensus node $node_index"
-    #     else
-    #         log_error "Failed to copy genesis.json to consensus node $node_index"
-    #         return 1
-    #     fi
-    # else
-    #     log_error "No genesis file found: $shared_genesis"
-    #     return 1
-    # fi
-    
     # Copy parameters.yml from examples
     local parameters_template="$PROJECT_ROOT/consensus-client/examples/parameters.yml"
     if [ -f "$parameters_template" ]; then
@@ -589,7 +566,7 @@ generate_consensus_files() {
         --ip-address "${CONSENSUS_IPS[$((node_index-1))]}" \
         --port "${CONSENSUS_PORTS[$((node_index-1))]}"
 
-    log_success "Generated consensus node $node_index files: genesis.json, committees.yml, parameters.yml"
+    log_success "Generated validator for node $node_index"
 }
 
 # Generate consensus node configuration from template
@@ -831,6 +808,9 @@ start_network() {
     log_info "Cleaning up any existing processes..."
     stop_network
     
+    # Initialize NODE_COUNT if not set
+    NODE_COUNT="${NODE_COUNT:-4}"
+    
     # Generate committees.yml configuration (shared across all consensus nodes)
     # generate_committees_config
     
@@ -840,8 +820,29 @@ start_network() {
         init_consensus_node "$i"
     done
     # Collect validator.yml into committees.yml
-    collect_validators_into_committees
-    generate_genesis
+    if [ -f "$SCRIPT_DIR/config/committees.yml" ]; then
+        log_info "Using existing committees.yml from $SCRIPT_DIR/committees.yml"
+        for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+            DEST="$DATA_DIR/consensus${INDEX}/"
+            cp "$SCRIPT_DIR/config/committees.yml" "$DEST/committees.yml"
+            cp "$SCRIPT_DIR/config/validator${INDEX}.yml" "$DEST/validator.yml"
+            cp "$SCRIPT_DIR/config/authority${INDEX}.yml" "$DEST/authority.yml"
+        done
+    else
+        log_info "Collecting validators into committees.yml from authority.yml files"
+        collect_validators_into_committees
+    fi
+    if [ -f "$SCRIPT_DIR/config/genesis.json" ]; then
+        log_info "Using existing genesis.json from $SCRIPT_DIR/genesis.json"
+        for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+            DEST="$DATA_DIR/execution${INDEX}/genesis.json"
+            cp "$SCRIPT_DIR/config/genesis.json" "$DEST"
+        done
+    else
+        log_info "Generating genesis.json from authority.yml files"
+        generate_genesis
+    fi
+   
     # Start execution nodes
     for i in {1..4}; do
         log_info "Starting execution node $i ..."

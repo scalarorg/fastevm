@@ -8,11 +8,12 @@
 //! cargo run -p execution-client --bin fastevm-cli -- show-peer-id --file /path/to/secret.key --output /path/to/output.txt
 //! ```
 
-use alloy_primitives::Bytes;
+use alloy_primitives::{Bytes, Uint};
 use alloy_provider::ProviderBuilder;
 use alloy_sol_macro::sol;
 // use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
+use greth::reth_pipe_exec_layer_ext_v2::onchain_config::BLOCK_ADDR;
 use greth::reth_pipe_exec_layer_ext_v2::onchain_config::TIMESTAMP_ADDR;
 use greth::reth_pipe_exec_layer_ext_v2::onchain_config::VALIDATOR_MANAGER_ADDR;
 use reth_network_peers::pk2id;
@@ -246,6 +247,7 @@ async fn get_timestamp() -> eyre::Result<()> {
 
     Ok(())
 }
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let cli = Cli::parse();

@@ -318,7 +318,7 @@ fn main() -> eyre::Result<()> {
                                             args.block_interval_ms,
                                         );
                                     if let Err(e) =
-                                        mysticeti_consensus.start_with_pipeline_api().await
+                                        mysticeti_consensus.start_with_pipeline_api(&eth_api).await
                                     {
                                         error!("Failed to start mysticeti consensus: {:?}", e);
                                     }

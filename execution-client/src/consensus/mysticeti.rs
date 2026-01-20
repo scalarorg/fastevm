@@ -10,12 +10,12 @@ use futures_util::StreamExt;
 // Import GravityEvent from gravity framework (same type used by ExecutionResult)
 use gravity_api_types::events::contract_event::GravityEvent;
 use greth::{
-    gravity_storage::{block_view_storage::BlockViewStorage, GravityStorage},
+    gravity_storage::{GravityStorage, block_view_storage::BlockViewStorage},
     reth_pipe_exec_layer_ext_v2::{
-        ExecutionResult, OrderedBlock, PipeExecLayerApi,
+        ExecutionResult, OrderedBlock, PipeExecLayerApi, onchain_config::OnchainConfigFetcher,
     },
     reth_primitives::TransactionSigned,
-    reth_rpc_api::eth::{helpers::EthCall, RpcTypes},
+    reth_rpc_api::eth::{RpcTypes, helpers::EthCall},
     reth_tasks::TaskExecutor,
 };
 use parking_lot::RwLock;
@@ -304,13 +304,12 @@ where
     ///
     /// Errors are logged but do not stop the loop. If building an ordered block fails, an error
     /// is logged and the loop continues.
-    pub async fn start_with_pipeline_api(&mut self) -> Result<()> {
+    pub async fn start_with_pipeline_api(&mut self, eth_api: &EthApi) -> Result<()> {
         //TODO: Add configurable interval
         let mut interval =
             tokio::time::interval(tokio::time::Duration::from_millis(self.block_interval_ms));
 
         let task_executor = self.task_executor.clone();
-
         if let Some(pipeline_api) = self.pipeline_api.as_ref() {
             // Task 2: Pull executed block hash from pipeline API and update canonical block number
             // This task continuously pulls execution results from the pipeline API and updates
@@ -319,6 +318,15 @@ where
             let canonical_block_number = self.canonical_block_number.clone();
             let arc_epoch = self.epoch.clone();
             let consensus_pool = self.consensus_pool.clone();
+            let current_block_number = *canonical_block_number.read();
+            let onchain_config_fetcher = OnchainConfigFetcher::new(eth_api.clone());
+            if let Some(epoch) = onchain_config_fetcher.fetch_epoch(current_block_number.into()) {
+                info!("Fetch epoch successfully: epoch={:?}", epoch);
+                *arc_epoch.write() = epoch;
+            } else {
+                error!("Fetch epoch failed: current_block_number={:?}", current_block_number);
+            }
+            
             task_executor.spawn(async move {
                 info!("Start pull executed block hash task");
                 loop {
@@ -593,7 +601,8 @@ where
                     }
                 })
             });
-        info!("Build ordered block with number: {:?} proposer: {:?}, current timestamp: {:?} in second, number of transactions: {:?}", 
+        info!("Build ordered block with epoch: {:?} number: {:?} proposer: {:?}, current timestamp: {:?} in second, number of transactions: {:?}", 
+            epoch,
             block_number,  
             proposer.as_ref().map(|bytes| format!("0x{}", hex::encode(bytes))), 
             timestamp,
