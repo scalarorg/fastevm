@@ -61,6 +61,7 @@ plan: init validate ## Plan Terraform deployment
 apply: plan ## Apply Terraform deployment
 	@terraform apply tfplan
 	@terraform output -json > ../deployment-info.json
+	@terraform output -json instance_external_ips | jq -r '.[]' > ../public_ips.txt
 	@echo "✓ Deployment applied"
 
 
@@ -146,7 +147,7 @@ start-setup: copy-files
 		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$public_ip \
 			"cd /opt/fastevm && \
 			tmux kill-session -t fastevm-setup 2>/dev/null || true && \
-			tmux new-session -d -s fastevm-setup \"GITHUB_BRANCH=$(GITHUB_BRANCH) bash -x node.sh setup $$private_ip $$public_ip > /tmp/fastevm-setup.log 2>&1\"" & \
+			tmux new-session -d -s fastevm-setup \"GITHUB_BRANCH=$(GITHUB_BRANCH) node.sh setup $$private_ip $$public_ip > /tmp/fastevm-setup.log 2>&1\"" & \
 	done; \
 	wait
 
