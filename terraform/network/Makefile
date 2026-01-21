@@ -82,8 +82,38 @@ extract-deployment-info: apply
 	chmod 600 "$$KEY" 2>/dev/null || true; \
 	echo "✓ Environment file created"
 
+# Wait for SSH to be available on all nodes
+wait-for-ssh: apply
+	@echo "⏳ Waiting for SSH to be available on all nodes..."
+	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
+	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]' | tr '\n' ' '); \
+	IPS_ARRAY=($$IPS); \
+	NODE_COUNT=$${#IPS_ARRAY[@]}; \
+	MAX_WAIT=300; \
+	WAIT_INTERVAL=10; \
+	for i in $$(seq 0 $$((NODE_COUNT - 1))); do \
+		ip=$${IPS_ARRAY[$$i]}; \
+		node_num=$$((i+1)); \
+		ELAPSED=0; \
+		echo "  🔍 Waiting for node $$node_num ($$ip) to be ready..."; \
+		while [ $$ELAPSED -lt $$MAX_WAIT ]; do \
+			if ssh $(SSH_OPTS) -o ConnectTimeout=5 -i "$$KEY" ubuntu@$$ip "echo 'SSH ready'" >/dev/null 2>&1; then \
+				echo "    ✅ Node $$node_num is ready"; \
+				break; \
+			fi; \
+			sleep $$WAIT_INTERVAL; \
+			ELAPSED=$$((ELAPSED + WAIT_INTERVAL)); \
+			echo "    ⏳ Still waiting... ($$ELAPSED/$$MAX_WAIT seconds)"; \
+		done; \
+		if [ $$ELAPSED -ge $$MAX_WAIT ]; then \
+			echo "    ❌ Timeout waiting for node $$node_num"; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "✓ All nodes are ready for SSH"
+
 # Copy files to all nodes
-copy-files: apply
+copy-files: wait-for-ssh
 	@echo "📦 Copying files to all nodes..."
 	@KEY=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \
 	IPS=$$(terraform output -json instance_external_ips | jq -r '.[]' | tr '\n' ' '); \
@@ -147,7 +177,7 @@ start-setup: copy-files
 		ssh $(SSH_OPTS) -i "$$KEY" ubuntu@$$public_ip \
 			"cd /opt/fastevm && \
 			tmux kill-session -t fastevm-setup 2>/dev/null || true && \
-			tmux new-session -d -s fastevm-setup \"GITHUB_BRANCH=$(GITHUB_BRANCH) node.sh setup $$private_ip $$public_ip > /tmp/fastevm-setup.log 2>&1\"" & \
+			tmux new-session -d -s fastevm-setup \"cd /opt/fastevm && GITHUB_BRANCH=$(GITHUB_BRANCH) bash node.sh setup $$private_ip $$public_ip > /tmp/fastevm-setup.log 2>&1\"" & \
 	done; \
 	wait
 
