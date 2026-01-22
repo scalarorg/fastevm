@@ -1,0 +1,24 @@
+[Unit]
+Description=FastEVM Consensus Client
+After=network.target fastevm-execution.service
+Requires=fastevm-execution.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/data
+Environment=DATA_DIR=/data
+
+ExecStart=/usr/local/bin/evm-consensus start \
+  --config ${DATA_DIR}/config/node.yml
+
+Restart=always
+RestartSec=10
+LimitNOFILE=1048576
+
+StandardOutput=append:/data/logs/fastevm-consensus.log
+StandardError=append:/data/logs/fastevm-consensus.log
+
+[Install]
+WantedBy=multi-user.target

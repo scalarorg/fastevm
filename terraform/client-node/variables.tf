@@ -1,5 +1,6 @@
 # FastEVM Client Node Variables
 # Configuration variables for standalone client node deployment
+# Note: This uses separate network naming from the main network deployment
 
 variable "project_id" {
   description = "The GCP project ID"
@@ -7,8 +8,14 @@ variable "project_id" {
   default     = "your-gcp-project-id"
 }
 
-variable "project_name" {
-  description = "Name prefix for all resources"
+variable "client_project_name" {
+  description = "Name prefix for client node resources (instance, service account, etc.)"
+  type        = string
+  default     = "fastevm-client"
+}
+
+variable "client_network_name_prefix" {
+  description = "Name prefix for client network resources (network, subnet, firewall rules). Separate from main network deployment."
   type        = string
   default     = "fastevm-client"
 }
@@ -40,7 +47,7 @@ variable "client_disk_size" {
 variable "disk_type" {
   description = "Type of persistent disk"
   type        = string
-  default     = "pd-standard"
+  default     = "hyperdisk-balanced"
 }
 
 variable "image" {
@@ -50,9 +57,9 @@ variable "image" {
 }
 
 variable "client_subnet_cidr" {
-  description = "CIDR block for the client subnet (same as main network)"
+  description = "CIDR block for the client subnet (separate from main network, use different range)"
   type        = string
-  default     = "10.0.0.0/24"
+  default     = "10.1.0.0/24"
 }
 
 variable "ssh_user" {

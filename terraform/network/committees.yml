@@ -1,0 +1,33 @@
+epoch: 0
+authorities:
+  - index: 1
+    stake: 1000
+    hostname: fastevm-consensus1
+    address: /ip4/10.0.0.2/udp/26657
+    authority_key: 88f585f1e4bb975c790aad1b1143a8710a1a3cd58b5419352e972b0e0669047a577dc9fe0fd3a83a639bde7d68dab8ab090125b5669c95ad397ec659b82cf1cbab6f5fb692d5e1686f240a7374d6997cfa3febe428c0d1a1d77e9d63cbb36090
+    protocol_key: 5b998ad932e117d630360bb8c531895877414cf181d147b30c3530910ce05f81
+    network_key: 9fd91ee34906214881542f2b807ca1359f1abf554a41c1d8697cb42a3736ea94
+  - index: 2
+    stake: 1000
+    hostname: fastevm-consensus2
+    address: /ip4/10.0.0.3/udp/26657
+    authority_key: 820102fc5a994f74d255ca8d6db7f89eeb2ebe634c87928e2c96e35675a27678c1396c5ea3bc22909af450ea1d9f5d4b0cad0a41f70af760d814ca90c775f1cf4952d87c3de46ec80961cc0fa7ad68d6c723c61a8192721fa959aa79385ce47d
+    protocol_key: 86b2ecec8b1e7d4c98832338a6cf6b7471ec944ebf1fdd135cdce4f37e54d97d
+    network_key: 92453addbc31da5efb03d65e621a162967248c6c06b05519c502015d4f894740
+  - index: 3
+    stake: 1000
+    hostname: fastevm-consensus3
+    address: /ip4/10.0.0.5/udp/26657
+    authority_key: 8f7af31eacf20776fd6a3e6625a89910ae3f9d2072cd88adf1b575d1e7c05d0eea2378c3d8230e0587b08cae8c6ada19163bb86bcd99703943b7b95b7a444c1392a15f84f25a74b77a2b00013b5aaed3b2497bf71532765c19c6023a0031ea27
+    protocol_key: 46abfedf850e8b6d9d7c21f3170210d57d1a01c5e769449dc7ac439a103b2e68
+    network_key: 775de5b4f0358407abe437a03c4ae21c88765a424ef0a4dba50af2d1a1c96296
+  - index: 4
+    stake: 1000
+    hostname: fastevm-consensus4
+    address: /ip4/10.0.0.4/udp/26657
+    authority_key: ad0b92b14e5fd40cd3e250758a148df7c5fe98b564730b275d21c7b89bc1af3eb297e61f186f7a9a2c6231c873ec213d0f5f04dcac08f409b92ad361e8af82fd9fe0c5f5a277dba5f6cfdceb2517e6a4eb1730cb75874c71f33e9b336d71471b
+    protocol_key: d0058f502398b9b9846cde3cc906dd4b0ed28346c47ed8c8a9e4494e2964402c
+    network_key: bb0eba9b8ea74d04ad62238d65c1e978ee2b30e1e3e2b200f0dbf5c51c4a67ad
+
+quorum_threshold: 2667
+validity_threshold: 1334

@@ -31,11 +31,6 @@ output "instance_external_ips" {
   value       = google_compute_instance.fastevm_nodes[*].network_interface[0].access_config[0].nat_ip
 }
 
-output "load_balancer_ip" {
-  description = "External IP address of the load balancer"
-  value       = google_compute_global_address.fastevm_ip.address
-}
-
 output "service_account_email" {
   description = "Email of the service account"
   value       = google_service_account.fastevm_sa.email
@@ -107,7 +102,6 @@ output "execution_bootnodes" {
 output "monitoring_endpoints" {
   description = "Monitoring and health check endpoints"
   value = {
-    load_balancer_health = "http://${google_compute_global_address.fastevm_ip.address}/health"
     node_health_checks = [
       for i in range(var.node_count) :
       "http://${google_compute_instance.fastevm_nodes[i].network_interface[0].access_config[0].nat_ip}:8545"
@@ -133,7 +127,6 @@ output "deployment_summary" {
     machine_type          = var.machine_type
     total_disk_size       = var.disk_size * var.node_count
     network_cidr          = var.subnet_cidr
-    load_balancer_enabled = var.enable_load_balancer
     monitoring_enabled    = var.enable_monitoring
   }
 }
@@ -145,7 +138,6 @@ output "next_steps" {
     "2. Check node status: gcloud compute instances list --filter='name~fastevm-node'",
     "3. SSH to nodes to verify FastEVM is running",
     "4. Test RPC endpoints using the node_endpoints output",
-    "5. Configure monitoring if enabled",
-    "6. Update DNS records to point to load balancer IP if needed"
+    "5. Configure monitoring if enabled"
   ]
 }

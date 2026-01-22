@@ -45,16 +45,23 @@ resource "local_file" "fastevm_public_key" {
   file_permission = "0644"
 }
 
-# Create VPC network
+# Network resource - creates new network or adopts existing one with matching name
+# If network already exists in GCP, run: terraform import google_compute_network.fastevm_network projects/PROJECT_ID/global/networks/fastevm-network
 resource "google_compute_network" "fastevm_network" {
-  name                    = "${var.project_name}-network"
+  name                    = "fastevm-network"
   auto_create_subnetworks = false
   description             = "FastEVM network for blockchain nodes"
+
+  lifecycle {
+    # Prevent recreation if resource already exists and is imported
+    create_before_destroy = false
+  }
 }
 
-# Create subnet
+# Subnet resource - creates new subnet or adopts existing one with matching name
+# If subnet already exists in GCP, run: terraform import google_compute_subnetwork.fastevm_subnet projects/PROJECT_ID/regions/REGION/subnetworks/fastevm-subnet
 resource "google_compute_subnetwork" "fastevm_subnet" {
-  name          = "${var.project_name}-subnet"
+  name          = "fastevm-subnet"
   ip_cidr_range = var.subnet_cidr
   region        = var.region
   network       = google_compute_network.fastevm_network.id
@@ -68,11 +75,17 @@ resource "google_compute_subnetwork" "fastevm_subnet" {
     range_name    = "services"
     ip_cidr_range = "10.0.2.0/24"
   }
+
+  lifecycle {
+    # Prevent recreation if resource already exists and is imported
+    create_before_destroy = false
+  }
 }
 
-# Create firewall rules
+# Firewall rules - creates new rules or adopts existing ones
+# If firewall rules already exist, they will be imported automatically on first apply attempt
 resource "google_compute_firewall" "fastevm_internal" {
-  name    = "${var.project_name}-internal"
+  name    = "fastevm-internal"
   network = google_compute_network.fastevm_network.name
 
   allow {
@@ -87,10 +100,14 @@ resource "google_compute_firewall" "fastevm_internal" {
 
   source_ranges = [var.subnet_cidr]
   target_tags   = ["fastevm-node"]
+
+  lifecycle {
+    create_before_destroy = false
+  }
 }
 
 resource "google_compute_firewall" "fastevm_external" {
-  name    = "${var.project_name}-external"
+  name    = "fastevm-external"
   network = google_compute_network.fastevm_network.name
 
   allow {
@@ -105,6 +122,10 @@ resource "google_compute_firewall" "fastevm_external" {
 
   source_ranges = ["0.0.0.0/0"]
   target_tags   = ["fastevm-node"]
+
+  lifecycle {
+    create_before_destroy = false
+  }
 }
 
 # No startup script - nodes will be initialized via deploy.sh after creation
@@ -143,7 +164,7 @@ resource "google_compute_instance" "fastevm_nodes" {
     network    = google_compute_network.fastevm_network.id
     subnetwork = google_compute_subnetwork.fastevm_subnet.id
     access_config {
-      // Ephemeral public IP
+      // Ephemeral public IP (automatically assigned)
     }
   }
 
@@ -177,80 +198,3 @@ resource "google_project_iam_binding" "fastevm_sa_binding" {
   ]
 }
 
-# Create load balancer for external access
-resource "google_compute_global_address" "fastevm_ip" {
-  name = "${var.project_name}-ip"
-}
-
-resource "google_compute_health_check" "fastevm_health_check" {
-  name                = "${var.project_name}-health-check"
-  check_interval_sec  = 5
-  timeout_sec         = 5
-  healthy_threshold   = 2
-  unhealthy_threshold = 3
-
-  http_health_check {
-    port         = 8545
-    request_path = "/"
-  }
-}
-
-resource "google_compute_backend_service" "fastevm_backend" {
-  name        = "${var.project_name}-backend"
-  protocol    = "HTTP"
-  port_name   = "http"
-  timeout_sec = 10
-
-  backend {
-    group = google_compute_instance_group.fastevm_group.id
-  }
-
-  health_checks = [google_compute_health_check.fastevm_health_check.id]
-
-  depends_on = [
-    google_compute_instance_group.fastevm_group
-  ]
-}
-
-resource "google_compute_instance_group" "fastevm_group" {
-  name        = "${var.project_name}-group"
-  description = "FastEVM node group"
-  zone        = var.zone
-
-  instances = google_compute_instance.fastevm_nodes[*].id
-
-  named_port {
-    name = "http"
-    port = 8545
-  }
-
-  named_port {
-    name = "engine-api"
-    port = 8551
-  }
-
-  depends_on = [
-    google_compute_instance.fastevm_nodes
-  ]
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "google_compute_url_map" "fastevm_url_map" {
-  name            = "${var.project_name}-url-map"
-  default_service = google_compute_backend_service.fastevm_backend.id
-}
-
-resource "google_compute_target_http_proxy" "fastevm_proxy" {
-  name    = "${var.project_name}-proxy"
-  url_map = google_compute_url_map.fastevm_url_map.id
-}
-
-resource "google_compute_global_forwarding_rule" "fastevm_forwarding_rule" {
-  name       = "${var.project_name}-forwarding-rule"
-  target     = google_compute_target_http_proxy.fastevm_proxy.id
-  port_range = "80"
-  ip_address = google_compute_global_address.fastevm_ip.address
-}

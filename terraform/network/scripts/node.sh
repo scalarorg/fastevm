@@ -100,9 +100,9 @@ init-folders() {
 init-execution() {
     # Copy node.env and genesis.json to data directory
     cp $SCRIPT_DIR/node.env $DATA_DIR/node.env
-    cp $SCRIPT_DIR/genesis.json $DATA_DIR/config/genesis.json
-    chown ubuntu:ubuntu "$DATA_DIR/config/genesis.json"
-    chmod 644 "$DATA_DIR/config/genesis.json"
+    # cp $SCRIPT_DIR/genesis.json $DATA_DIR/config/genesis.json
+    # chown ubuntu:ubuntu "$DATA_DIR/config/genesis.json"
+    # chmod 644 "$DATA_DIR/config/genesis.json"
     
     # Ensure JWT secret exists if not already present
     if [ ! -f "$JWT_KEY_FILE" ]; then
@@ -134,6 +134,7 @@ init-execution() {
 init-consensus() {
     local LOCAL_IP=$1
     local HOST_NAME=${2:-validator-$LOCAL_IP}
+    STAKE_AMOUNT=${STAKE_AMOUNT:-20000}
     # Copy node.yml, committees.yml, parameters.yml to data directory
     cp $SCRIPT_DIR/node.yml $DATA_DIR/config/node.yml
     cp $SCRIPT_DIR/parameters.yml $DATA_DIR/config/parameters.yml
@@ -143,7 +144,7 @@ init-consensus() {
     evm-consensus generate-validator \
         --validator-path $DATA_DIR/config/validator.yml \
         --authority-path $DATA_DIR/config/authority.yml \
-        --stake 1000 \
+        --stake $STAKE_AMOUNT \
         --hostname $HOST_NAME \
         --ip-address $LOCAL_IP \
         --port 26657

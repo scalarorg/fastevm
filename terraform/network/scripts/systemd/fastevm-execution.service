@@ -1,0 +1,59 @@
+[Unit]
+Description=FastEVM Execution Client
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/data
+
+EnvironmentFile=/data/node.env
+Environment=DATA_DIR=/data
+Environment=HTTP_PORT=8545
+Environment=WS_PORT=8546
+Environment=ENGINE_PORT=8551
+Environment=P2P_PORT=30303
+Environment=LOG_LEVEL=vvv
+
+# Optional DB init
+# ExecStartPre=/usr/local/bin/fastevm-init-db.sh
+
+ExecStart=/usr/local/bin/fastevm-execution node \
+  --chain ${DATA_DIR}/config/genesis.json \
+  --datadir ${DATA_DIR}/execution \
+  --engine.always-process-payload-attributes-on-canonical-head \
+  --http \
+  --http.addr 0.0.0.0 \
+  --http.port ${HTTP_PORT} \
+  --http.corsdomain "*" \
+  --ws \
+  --ws.addr 0.0.0.0 \
+  --ws.port ${WS_PORT} \
+  --ws.origins "*" \
+  --builder.gaslimit ${GAS_LIMIT} \
+  --gravity.pipe-block-gas-limit ${GRAVITY_PIPE_BLOCK_GAS_LIMIT} \
+  --gravity.cache.max-persist-gap ${GRAVITY_CACHE_MAX_PERSIST_GAP} \
+  --authrpc.addr 0.0.0.0 \
+  --authrpc.port ${ENGINE_PORT} \
+  --authrpc.jwtsecret ${DATA_DIR}/execution/jwt.hex \
+  --addr 0.0.0.0 \
+  --port ${P2P_PORT} \
+  --discovery.addr 0.0.0.0 \
+  --discovery.port ${P2P_PORT} \
+  --p2p-secret-key ${DATA_DIR}/execution/p2p/secret.key \
+  --bootnodes ${BOOTNODES} \
+  --committed-subdags-per-block ${SUBDAGS_PER_BLOCK} \
+  --block-interval-ms ${BLOCK_BUILD_INTERVAL} \
+  -${LOG_LEVEL}
+
+Restart=always
+RestartSec=10
+LimitNOFILE=1048576
+
+StandardOutput=append:/data/logs/fastevm-execution.log
+StandardError=append:/data/logs/fastevm-execution.log
+
+[Install]
+WantedBy=multi-user.target

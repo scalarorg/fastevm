@@ -1,0 +1,33 @@
+# Node 2 configuration for FastEVM Consensus Client
+# This file contains all the configuration needed to run consensus node 2
+
+# chain definition can be predefined: "mainnet", "sepolia", "holesky", "hoodi", "dev"
+# or a custom genesis file
+chain: "/data/config/genesis.json"
+# validator configuration
+validator_path: "/data/config/validator.yml"
+# Committee configuration
+committee_path: "/data/config/committees.yml"
+# Consensus parameters configuration
+parameters_path: "/data/config/parameters.yml"
+
+# Execution client configuration
+execution_http_url: "http://127.0.0.1:8545"  # URL of the execution client within Docker network
+execution_ws_url: "ws://127.0.0.1:8546"  # URL of the execution client within Docker network
+jwt_secret: "0xe58276cdae11bf786246355fa02d99c951a4ae03f10b11e50f4f2fab334eaaf9"  # JWT secret for authentication
+genesis_block_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"  # Genesis block hash for chain validation
+genesis_time: 1755000000  # Genesis time for chain validation
+fee_recipient: "0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6"  # Fee recipient address
+
+# Network configuration
+poll_interval: 30000  # Polling interval in milliseconds
+max_retries: 3       # Maximum retries for failed requests
+timeout: 30          # Request timeout in seconds
+
+# Node configuration
+working_directory: "."  # Working directory for node data (relative to config file)
+
+log_level: "info"    # Log level (trace, debug, info, warn, error)
+
+# Peer addresses will be automatically populated from committee config
+peer_addresses: []

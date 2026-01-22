@@ -26,15 +26,14 @@ ENABLE_WS=true
 # Genesis configuration
 GENESIS_FILE=$PROJECT_ROOT/execution-client/shared/genesis.json
 GENESIS_OUTPUT_DIR="$DATA_DIR/genesis"
-CLI=$PROJECT_ROOT/target/release/cli
+CLI=$PROJECT_ROOT/target/release/fastevm-cli
 EXECUTION_CLIENT=$PROJECT_ROOT/target/release/fastevm-execution
-#CONSENSUS_CLIENT=$PROJECT_ROOT/target/release/fastevm-consensus
-#CONSENSUS_CLIENT=evm-consensus
+# CONSENSUS_CLIENT=$PROJECT_ROOT/modules/mysticeti/target/release/evm-consensus
 CONSENSUS_CLIENT=~/workspace/codelight/scalar-consensus/mysticeti/target/release/evm-consensus
 
 GRAVITY_PIPE_BLOCK_GAS_LIMIT=10000000000
 GRAVITY_CACHE_MAX_PERSIST_GAP=64
-
+STAKE_AMOUNT=20000
 # Default values for account generation
 DEFAULT_ACCOUNT_NUMBER=100000
 DEFAULT_ACCOUNT_NUMBER=100000
@@ -133,50 +132,6 @@ setup_directories() {
     log_success "Directories created!"
 }
 
-# Generate and prefund accounts in genesis.json
-prefund_genesis() {
-    local account_count="${1:-$ACCOUNT_COUNT}"
-    local account_amount="${2:-$ACCOUNT_AMOUNT}"
-    local mnemonic="${3:-$MNEMONIC}"
-    
-    log_info "Generating prefunded genesis.json with $account_count accounts..."
-    log_info "Each account will be funded with $account_amount wei"
-    
-    # Check if CLI is built
-    if [ ! -f "$CLI" ]; then
-        log_error "CLI not found at $CLI. Please build the project first."
-        return 1
-    fi
-    
-    # Check if input genesis exists
-    if [ ! -f "$GENESIS_FILE" ]; then
-        log_error "Input genesis file not found: $GENESIS_FILE"
-        return 1
-    fi
-    
-    # Generate prefunded genesis
-    if "$CLI" allocate-funds \
-        --input "$GENESIS_FILE" \
-        --count "$account_count" \
-        --mnemonic "$mnemonic" \
-        --amount "$account_amount" \
-        --output "$GENESIS_OUTPUT_DIR"; then
-        log_success "Generated prefunded genesis.json with $account_count accounts"
-        log_info "Genesis file saved to: $GENESIS_OUTPUT_DIR/genesis.json"
-        
-        # Show some account addresses for reference
-        log_info "Sample prefunded accounts:"
-        jq -r '.alloc | keys[0:5] | .[]' "$GENESIS_OUTPUT_DIR/genesis.json" | while read -r addr; do
-            local balance=$(jq -r ".alloc[\"$addr\"].balance" "$GENESIS_OUTPUT_DIR/genesis.json")
-            log_info "  $addr: $balance wei"
-        done
-        
-        return 0
-    else
-        log_error "Failed to generate prefunded genesis.json"
-        return 1
-    fi
-}
 
 # Build the project
 build_project() {
@@ -252,8 +207,6 @@ init_execution_node() {
     
     # Generate P2P secret key
     generate_p2p_secret_key "$node_index" "$data_dir"
-    
-    cp $SCRIPT_DIR/genesis.json $data_dir/genesis.json
 
     # Copy prefunded genesis.json if it exists, otherwise fall back to original
     # local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
@@ -313,14 +266,14 @@ generate_validators_config() {
     log_info "  Authorities: $authorities_count"
     log_info "  IP addresses: $ip_addresses_str"
     log_info "  Network ports: $network_ports_str"
-    
+
     # Step 1: Generate validators.yml using consensus client generate-validators command
     if command -v "$CONSENSUS_CLIENT" >/dev/null 2>&1; then
         if "$CONSENSUS_CLIENT" generate-validators \
             --output "$validators_output" \
             --authorities "$authorities_count" \
             --epoch "0" \
-            --stake "1000" \
+            --stake "$STAKE_AMOUNT" \
             --ip-addresses "$ip_addresses_str" \
             --network-ports "$network_ports_str" \
             --hostname-prefix "fastevm-consensus"; then
@@ -376,7 +329,166 @@ generate_genesis_config() {
         return 1
     fi
 }
+collect_validators_into_committees() {
 
+    EPOCH="${EPOCH:-0}"
+    QUORUM_THRESHOLD="${QUORUM_THRESHOLD:-2667}"
+    VALIDITY_THRESHOLD="${VALIDITY_THRESHOLD:-1334}"
+    NODE_COUNT="${NODE_COUNT:-4}"
+    # ==========================
+    # Build committees.yml
+    # ==========================
+    echo "🔗 Building committees.yml from local authority.yml files"
+
+    TMP_COMMITTEES="$(mktemp)"
+
+    cleanup() {
+        rm -f "$TMP_COMMITTEES"
+    }
+    trap cleanup EXIT
+
+    echo "epoch: $EPOCH" > "$TMP_COMMITTEES"
+    echo "authorities:" >> "$TMP_COMMITTEES"
+
+    for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+        AUTH_FILE="$DATA_DIR/consensus${INDEX}/authority.yml"
+
+        if [[ ! -f "$AUTH_FILE" ]]; then
+            echo "❌ Missing authority file: $AUTH_FILE" >&2
+            exit 1
+        fi
+
+        echo "  - index: $INDEX" >> "$TMP_COMMITTEES"
+
+        # Indent authority.yml and strip index/epoch if present
+        sed 's/^/    /' "$AUTH_FILE" \
+            | grep -Ev '^(    index:|    epoch:)' \
+            >> "$TMP_COMMITTEES"
+    done
+
+    {
+        echo
+        echo "quorum_threshold: $QUORUM_THRESHOLD"
+        echo "validity_threshold: $VALIDITY_THRESHOLD"
+    } >> "$TMP_COMMITTEES"
+
+    # ==========================
+    # Show result
+    # ==========================
+    echo "📄 Generated committees.yml"
+    echo "--------------------------------"
+    cat "$TMP_COMMITTEES"
+    echo "--------------------------------"
+
+    # ==========================
+    # Distribute to nodes
+    # ==========================
+    log_info "Copying committees.yml to all consensus directories"
+
+    for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+        DEST="$DATA_DIR/consensus${INDEX}/committees.yml"
+        cp "$TMP_COMMITTEES" "$DEST"
+    done
+
+    log_success "Committees.yml updated successfully"
+}
+
+# Generate genesis.json by collecting authority.yml files and calling gravity-genesis-contract
+generate_genesis() {
+    log_info "🔗 Collecting authority.yml files and building genesis_config.json"
+    
+    # Location of gravity-genesis-contract project
+    GRAVITY_GENESIS_CONTRACT_DIR="${GRAVITY_GENESIS_CONTRACT_DIR:-${SCRIPT_DIR}/../../gravity-genesis-contract}"
+    
+    # Check if gravity-genesis-contract directory exists
+    if [ ! -d "$GRAVITY_GENESIS_CONTRACT_DIR" ]; then
+        log_error "Gravity genesis contract directory not found: $GRAVITY_GENESIS_CONTRACT_DIR"
+        log_error "Please set GRAVITY_GENESIS_CONTRACT_DIR environment variable or update the default path"
+        return 1
+    fi
+    
+    # Path for genesis_config.json
+    GENESIS_CONFIG_JSON="$DATA_DIR/genesis_config.json"
+    
+    # Initialize genesis_config.json with empty arrays
+    jq -n '{validatorAddresses: [], consensusPublicKeys: [], votingPowers: [], validatorNetworkAddresses: [], fullnodeNetworkAddresses: [], aptosAddresses: []}' > "$GENESIS_CONFIG_JSON"
+    
+    # Collect authority.yml files from all consensus nodes
+    for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+        AUTH_FILE="$DATA_DIR/consensus${INDEX}/authority.yml"
+        
+        if [[ ! -f "$AUTH_FILE" ]]; then
+            log_error "Missing authority file: $AUTH_FILE"
+            return 1
+        fi
+        
+        log_info "Processing authority file: $AUTH_FILE"
+        
+        # Extract values from authority.yml
+        VALIDATOR_ADDR=$(sed -n 's/^validator_address:[[:space:]]*//p' "$AUTH_FILE")
+        AUTHORITY_KEY=$(sed -n 's/^authority_key:[[:space:]]*//p' "$AUTH_FILE")
+        STAKE=$(sed -n 's/^stake:[[:space:]]*//p' "$AUTH_FILE")
+        BASE_ADDR=$(sed -n 's/^address:[[:space:]]*//p' "$AUTH_FILE")
+        
+        # Process the values
+        CONS_PUBKEY=$(echo "$AUTHORITY_KEY" | cut -c1-96)
+        APTOS_ADDR=$(echo "$VALIDATOR_ADDR" | tr '[:upper:]' '[:lower:]')
+        APTOS_ADDR_LAST40=$(echo "$APTOS_ADDR" | rev | cut -c1-40 | rev)
+        NET_ADDR="$BASE_ADDR/noise-ik/$APTOS_ADDR/handshake/0"
+        
+        # Add to genesis_config.json
+        jq --arg vaddr "0x$APTOS_ADDR_LAST40" \
+           --arg cpk "$CONS_PUBKEY" \
+           --arg stake "$STAKE" \
+           --arg net "$NET_ADDR" \
+           --arg apt "$APTOS_ADDR" \
+           '.validatorAddresses += [$vaddr] | .consensusPublicKeys += [$cpk] | .votingPowers += [$stake] | .validatorNetworkAddresses += [$net] | .fullnodeNetworkAddresses += [$net] | .aptosAddresses += [$apt]' \
+           "$GENESIS_CONFIG_JSON" > "$GENESIS_CONFIG_JSON.tmp" && mv "$GENESIS_CONFIG_JSON.tmp" "$GENESIS_CONFIG_JSON"
+    done
+    
+    log_success "📄 Generated genesis_config.json:"
+    jq . "$GENESIS_CONFIG_JSON"
+    
+    # Create genesis.json using gravity-genesis-contract
+    log_info "🔗 Creating genesis.json using gravity-genesis-contract"
+    
+    # Ensure generate directory exists in gravity-genesis-contract
+    mkdir -p "$GRAVITY_GENESIS_CONTRACT_DIR/generate"
+    
+    # Copy genesis_config.json to gravity-genesis-contract/generate/
+    cp "$GENESIS_CONFIG_JSON" "$GRAVITY_GENESIS_CONTRACT_DIR/generate/genesis_config.json"
+    log_info "Copied genesis_config.json to $GRAVITY_GENESIS_CONTRACT_DIR/generate/"
+    
+    # Save current directory and change to gravity-genesis-contract directory
+    local original_dir=$(pwd)
+    cd "$GRAVITY_GENESIS_CONTRACT_DIR"
+    if bash ./generate_genesis.sh; then
+        log_success "✅ genesis.json created in gravity-genesis-contract"
+    else
+        log_error "Failed to generate genesis.json"
+        cd "$original_dir"
+        return 1
+    fi
+    # Restore original directory
+    cd "$original_dir"
+    
+    # Copy genesis.json to all consensus nodes
+    GENESIS_JSON_PATH="$GRAVITY_GENESIS_CONTRACT_DIR/genesis.json"
+    jq . "$GENESIS_JSON_PATH"
+    if [ ! -f "$GENESIS_JSON_PATH" ]; then
+        log_error "Generated genesis.json not found at: $GENESIS_JSON_PATH"
+        return 1
+    fi
+    
+    log_info "Copying genesis.json to all consensus nodes..."
+    for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+        DEST="$DATA_DIR/execution${INDEX}/genesis.json"
+        cp "$GENESIS_JSON_PATH" "$DEST"
+        log_info "Copied genesis.json to execution node $INDEX"
+    done
+    
+    log_success "✅ genesis.json is copied to all execution nodes"
+}
 # Step 3: Generate committees.yml configuration file from validators.yml (shared across all consensus nodes)
 generate_committees_config() {
     local validators_file="$DATA_DIR/validators.yml"
@@ -432,29 +544,6 @@ generate_consensus_files() {
     # Create data directory if it doesn't exist
     mkdir -p "$data_dir"
     
-    # Copy prefunded genesis.json if it exists, otherwise fall back to original
-    local prefunded_genesis="$GENESIS_OUTPUT_DIR/genesis.json"
-    local shared_genesis="$PROJECT_ROOT/execution-client/shared/genesis.json"
-    
-    if [ -f "$prefunded_genesis" ]; then
-        if cp "$prefunded_genesis" "$data_dir/genesis.json"; then
-            log_info "Copied prefunded genesis.json to consensus node $node_index"
-        else
-            log_error "Failed to copy prefunded genesis.json to consensus node $node_index"
-            return 1
-        fi
-    elif [ -f "$shared_genesis" ]; then
-        if cp "$shared_genesis" "$data_dir/genesis.json"; then
-            log_info "Copied original genesis.json to consensus node $node_index"
-        else
-            log_error "Failed to copy genesis.json to consensus node $node_index"
-            return 1
-        fi
-    else
-        log_error "No genesis file found: $shared_genesis"
-        return 1
-    fi
-    
     # Copy parameters.yml from examples
     local parameters_template="$PROJECT_ROOT/consensus-client/examples/parameters.yml"
     if [ -f "$parameters_template" ]; then
@@ -468,23 +557,16 @@ generate_consensus_files() {
         log_error "Parameters template not found: $parameters_template"
         return 1
     fi
-    
-    # Copy shared committees.yml to this node's directory
-    local shared_committees="$DATA_DIR/committees.yml"
-    if [ -f "$shared_committees" ]; then
-        if cp "$shared_committees" "$data_dir/committees.yml"; then
-            log_info "Copied committees.yml to consensus node $node_index"
-        else
-            log_error "Failed to copy committees.yml to consensus node $node_index"
-            return 1
-        fi
-    else
-        log_error "Shared committees.yml not found: $shared_committees"
-        log_error "Please run generate_committees_config first"
-        return 1
-    fi
-    
-    log_success "Generated consensus node $node_index files: genesis.json, committees.yml, parameters.yml"
+    # Copy validator.yml
+    "$CONSENSUS_CLIENT" generate-validator \
+        --validator-path $data_dir/validator.yml \
+        --authority-path $data_dir/authority.yml \
+        --stake $STAKE_AMOUNT \
+        --hostname "fastevm-consensus$node_index" \
+        --ip-address "${CONSENSUS_IPS[$((node_index-1))]}" \
+        --port "${CONSENSUS_PORTS[$((node_index-1))]}"
+
+    log_success "Generated validator for node $node_index"
 }
 
 # Generate consensus node configuration from template
@@ -726,18 +808,41 @@ start_network() {
     log_info "Cleaning up any existing processes..."
     stop_network
     
-    # Generate prefunded genesis.json first
-    prefund_genesis
+    # Initialize NODE_COUNT if not set
+    NODE_COUNT="${NODE_COUNT:-4}"
     
     # Generate committees.yml configuration (shared across all consensus nodes)
-    generate_committees_config
+    # generate_committees_config
     
     # Initialize all nodes
     for i in {1..4}; do
         init_execution_node "$i"
         init_consensus_node "$i"
     done
-    
+    # Collect validator.yml into committees.yml
+    if [ -f "$SCRIPT_DIR/config/committees.yml" ]; then
+        log_info "Using existing committees.yml from $SCRIPT_DIR/committees.yml"
+        for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+            DEST="$DATA_DIR/consensus${INDEX}/"
+            cp "$SCRIPT_DIR/config/committees.yml" "$DEST/committees.yml"
+            cp "$SCRIPT_DIR/config/validator${INDEX}.yml" "$DEST/validator.yml"
+            cp "$SCRIPT_DIR/config/authority${INDEX}.yml" "$DEST/authority.yml"
+        done
+    else
+        log_info "Collecting validators into committees.yml from authority.yml files"
+        collect_validators_into_committees
+    fi
+    if [ -f "$SCRIPT_DIR/config/genesis.json" ]; then
+        log_info "Using existing genesis.json from $SCRIPT_DIR/genesis.json"
+        for ((INDEX=1; INDEX<=NODE_COUNT; INDEX++)); do
+            DEST="$DATA_DIR/execution${INDEX}/genesis.json"
+            cp "$SCRIPT_DIR/config/genesis.json" "$DEST"
+        done
+    else
+        log_info "Generating genesis.json from authority.yml files"
+        generate_genesis
+    fi
+   
     # Start execution nodes
     for i in {1..4}; do
         log_info "Starting execution node $i ..."

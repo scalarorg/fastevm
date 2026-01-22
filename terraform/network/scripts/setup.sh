@@ -1,8 +1,12 @@
 #!/bin/bash
-#!/bin/bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-: "${GITHUB_BRANCH:=gravity}"
+if [ -z "${GITHUB_BRANCH:-}" ]; then
+    GITHUB_BRANCH="gravity"
+    echo "GITHUB_BRANCH is undefined, setting to default: $GITHUB_BRANCH"
+else
+    echo "Using input GITHUB_BRANCH: $GITHUB_BRANCH"
+fi
 
 echo "Using GitHub branch: $GITHUB_BRANCH"
 
@@ -17,9 +21,9 @@ rustup toolchain install 1.88.0
 rustup default 1.88.0
 
 REPO_FASTEVM="https://github.com/scalarorg/fastevm.git"
-REPO_GRAVITY_GENESIS_CONTRACT="https://github.com/scalarorg/gravity-genesis-contract.git"
 REPO_BRANCH_FASTEVM=$GITHUB_BRANCH
-REPO_BRANCH_GRAVITY_GENESIS_CONTRACT="main"
+# REPO_GRAVITY_GENESIS_CONTRACT="https://github.com/scalarorg/gravity-genesis-contract.git"
+# REPO_BRANCH_GRAVITY_GENESIS_CONTRACT="main"
 
 clone_repository() {
     REPO_URL=$1
@@ -76,8 +80,8 @@ build_gravity_genesis_contract() {
 }
 
 clone_repository $REPO_FASTEVM $REPO_BRANCH_FASTEVM
-clone_repository $REPO_GRAVITY_GENESIS_CONTRACT $REPO_BRANCH_GRAVITY_GENESIS_CONTRACT
 build_fastevm
-build_gravity_genesis_contract
+# clone_repository $REPO_GRAVITY_GENESIS_CONTRACT $REPO_BRANCH_GRAVITY_GENESIS_CONTRACT
+
 
 

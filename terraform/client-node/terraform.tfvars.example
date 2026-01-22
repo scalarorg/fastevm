@@ -1,21 +1,33 @@
 # FastEVM Client Node Configuration
 # Copy this file to terraform.tfvars and update with your values
+# 
+# Note: This creates a standalone client node with its own network configuration
+# separate from the main FastEVM network deployment. This node is used for:
+# - Deploying FastEVM networks
+# - Executing client code and tests
 
 # Required: Your GCP project ID
 project_id = "your-gcp-project-id"
 
-# Optional: Customize these as needed
-project_name = "fastevm-client"
-region       = "us-central1"
-zone         = "us-central1-a"
+# Client node resource naming
+client_project_name = "fastevm-client"
 
-# Client node configuration
+# Client network naming (separate from main network deployment)
+# This prefix is used for: network, subnet, firewall rules
+client_network_name_prefix = "fastevm-client"
+
+# GCP region and zone
+region = "us-central1"
+zone   = "us-central1-a"
+
+# Client node instance configuration
 client_machine_type = "e2-standard-2"
 client_disk_size    = 50
-disk_type          = "pd-standard"
-image              = "ubuntu-os-cloud/ubuntu-2204-lts"
+disk_type           = "hyperdisk-balanced"
+image               = "ubuntu-os-cloud/ubuntu-2204-lts"
 
-# Network configuration
+# Network configuration (separate CIDR from main network)
+# Main network typically uses 10.0.0.0/24, so client uses 10.1.0.0/24
 client_subnet_cidr = "10.1.0.0/24"
 
 # SSH configuration

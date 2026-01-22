@@ -11,9 +11,9 @@ path = "src/lib.rs"
 name = "fastevm-execution"
 path = "src/main.rs"
 
-# [[bin]]
-# name = "cli"
-# path = "src/cli.rs"
+[[bin]]
+name = "fastevm-cli"
+path = "src/cli.rs"
 
 # [[bin]]
 # name = "fastevm-bench"
@@ -24,15 +24,22 @@ path = "src/main.rs"
 rpc-shared-api = { workspace = true }
 gravity-api-types = { workspace = true }
 # Ethereum
+alloy = { workspace = true, features = [
+    "providers",
+    "rpc"
+] }
 alloy-primitives = { workspace = true, default-features = false, features = ["map-foldhash"] }
 alloy-rpc-types-engine = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
+alloy-sol-macro = { workspace = true }
+alloy-sol-types = { workspace = true }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 # alloy-evm = { workspace = true }
 
 alloy-rlp = { workspace = true }
-# alloy = { workspace = true, features = ["network", "rpc"] }
+alloy-provider = { workspace = true }
+alloy-contract = { workspace = true }
 # alloy-signer-local = { workspace = true }
 
 eyre = { workspace = true}
@@ -93,11 +100,11 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
 
 # For cli
-# reth-network-peers = { workspace = true }
+reth-network-peers = { workspace = true }
 # bip39 = "2.0"
 # hdwallet = "0.3"
 # reqwest = { version = "0.12", features = ["json"] }
-# secp256k1 = { workspace = true }
+secp256k1 = { workspace = true }
 # sha2 = { version = "0.10", default-features = false }
 # End for cli
 
