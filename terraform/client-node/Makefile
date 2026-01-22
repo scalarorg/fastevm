@@ -124,10 +124,13 @@ startup: transfer-creds
 	echo "🔧 Starting setup script in tmux session on client node..."; \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	echo "Killing all tmux sessions..."; \
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
 		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP \
-		"tmux kill-session -t fastevm-setup 2>/dev/null || true; \
-		tmux new-session -d -s fastevm-setup 'FASTEVM_BRANCH=$(FASTEVM_BRANCH) bash ~/setup.sh 2>&1 | tee ~/setup.log' || true"; \
+		"tmux kill-server 2>/dev/null || true; pkill -9 tmux 2>/dev/null || true; sleep 1" || true; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP \
+		"tmux new-session -d -s fastevm-setup 'FASTEVM_BRANCH=$(FASTEVM_BRANCH) bash ~/setup.sh 2>&1 | tee ~/setup.log' || true"; \
 	echo "✅ Setup script started in tmux session 'fastevm-setup'"; \
 	echo "📝 Log file: ~/setup.log on client node"; \
 	echo ""; \

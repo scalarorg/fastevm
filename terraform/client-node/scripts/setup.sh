@@ -144,21 +144,6 @@ clone_repository() {
     fi
 }
 
-# build_fastevm() {
-#     REPO_NAME=$(basename "$REPO_FASTEVM" .git)
-#     cd $WORKSPACE_DIR/$REPO_NAME
-#     cargo build --release
-#     sudo systemctl stop fastevm-execution || true
-#     sudo cp target/release/fastevm-execution /usr/local/bin/fastevm-execution
-#     sudo cp target/release/fastevm-cli /usr/local/bin/fastevm-cli
-#     # cargo clean
-#     cd modules/mysticeti
-#     # cargo build --release
-#     sudo systemctl stop fastevm-consensus || true
-#     cargo build --release -p evm-consensus --bin evm-consensus
-#     sudo cp target/release/evm-consensus /usr/local/bin/evm-consensus
-#     # cargo clean
-# }
 
 build_gravity_genesis_contract() {
     REPO_NAME=$(basename "$REPO_GRAVITY_GENESIS_CONTRACT" .git)
@@ -166,12 +151,16 @@ build_gravity_genesis_contract() {
     forge build
     cargo build --release
     sudo cp target/release/gravity-genesis /usr/local/bin/gravity-genesis
+    echo "✅ gravity-genesis installed successfully"
 }
 build_gravity_bench() {
     local REPO_NAME=$(basename "$REPO_GRAVITY_BENCH" .git)
     cd $WORKSPACE_DIR/$REPO_NAME
     cargo build --release
+    
+    echo "Copying gravity_bench to /usr/local/bin..."
     sudo cp target/release/gravity_bench /usr/local/bin/gravity_bench
+    echo "✅ gravity_bench installed successfully"
 }
 start_network() {
     local REPO_NAME=$(basename "$REPO_FASTEVM" .git)
