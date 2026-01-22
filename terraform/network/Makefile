@@ -61,7 +61,9 @@ plan: init validate ## Plan Terraform deployment
 apply: plan ## Apply Terraform deployment
 	@terraform apply tfplan
 	@terraform output -json > ../deployment-info.json
-	@terraform output -json instance_external_ips | jq -r '.[]' > ../public_ips.txt
+	@terraform output -json instance_external_ips | jq -r '.[]' > $(WORKSPACE_DIR)/public_ips.txt
+	@FIRST_IP=$$(terraform output -json instance_external_ips | jq -r '.[0]'); \
+	echo "RPC_URL=http://$$FIRST_IP:8545" > $(WORKSPACE_DIR)/.env
 	@echo "✓ Deployment applied"
 
 

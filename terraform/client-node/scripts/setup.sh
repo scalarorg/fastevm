@@ -171,6 +171,7 @@ build_gravity_bench() {
     local REPO_NAME=$(basename "$REPO_GRAVITY_BENCH" .git)
     cd $WORKSPACE_DIR/$REPO_NAME
     cargo build --release
+    sudo cp target/release/gravity_bench /usr/local/bin/gravity_bench
 }
 start_network() {
     local REPO_NAME=$(basename "$REPO_FASTEVM" .git)
