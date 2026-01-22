@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="/opt/workspace"
 
@@ -67,7 +68,7 @@ if ! command -v gcloud &> /dev/null; then
 else
     echo "✅ Google Cloud SDK already installed: $(gcloud --version | head -n 1)"
 fi 
-
+# Install rust
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 . "$HOME/.cargo/env" 
 cargo --version
@@ -80,6 +81,14 @@ export PATH="$HOME/.foundry/bin:$PATH"
 foundryup
 # Verify installation
 forge --version
+
+# Install node.js
+export DEBIAN_FRONTEND=noninteractive && \
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - && \
+sudo -E apt-get install -y nodejs
+
+# Install python env
+sudo -E apt-get install -y python3-venv python-is-python3
 
 : "${FASTEVM_BRANCH:=gravity}"
 echo "Using FastEVM branch: $FASTEVM_BRANCH"
@@ -100,6 +109,7 @@ clone_repository() {
     if [ -d "$REPO_NAME/.git" ] || [ -d "$REPO_NAME" ]; then
         echo "$REPO_NAME directory already exists. Updating repository..."
         cd $REPO_NAME
+        git restore .
         git config pull.rebase true
         git fetch origin
 
@@ -185,11 +195,9 @@ start_bench() {
         mapfile -t IPS < <(cat "$PUBLIC_IPS_FILE" | grep -v '^$')
         
         if [ ${#IPS[@]} -gt 0 ]; then
-            echo "Found ${#IPS[@]} IPs, updating bench_config_fastevm.toml"
+            echo "Found ${#IPS[@]} IPs, updating bench_config.toml"
             
-            if [ -f "bench_config_fastevm.toml" ]; then
-                # Create a backup
-                cp bench_config_fastevm.toml bench_config_fastevm.toml.bak
+            if [ -f "bench_config.toml" ]; then
                 
                 # Build the new nodes array content in a temporary file
                 TMP_NODES=$(mktemp)
@@ -224,7 +232,7 @@ start_bench() {
                         next
                     }
                     { print }
-                ' bench_config_fastevm.toml.bak > bench_config_fastevm.toml
+                ' bench_config.toml > bench_config_fastevm.toml
                 
                 # Clean up temporary file
                 rm -f "$TMP_NODES"
@@ -257,7 +265,4 @@ build_gravity_bench
 echo "Starting network with prepared terraform and gcloud credentials..."
 start_network
 echo "Network started successfully!"
-start_bench
-echo "Benchmark started successfully!"
-
 

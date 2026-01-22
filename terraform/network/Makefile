@@ -312,6 +312,7 @@ genesis-config: watch-setup
 
 # run on the deployment client node
 # within the workspace directory, gravity-genesis-contract folder
+# TODO: refactor this for running on the local machine
 create-genesis: genesis-config
 	@echo "🔗 Creating genesis.json in the deployment client node"
 	@KEY_PATH=$$(terraform output -raw ssh_private_key_path 2>/dev/null || echo "fastevm-deploy-key"); \

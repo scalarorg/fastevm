@@ -26,6 +26,7 @@ help: ## Show available commands
 CLIENT_SSH_KEY := client-deploy-key
 CLIENT_USER := ubuntu
 CLIENT_SETUP_SCRIPT := scripts/setup.sh
+CLIENT_BENCH_SCRIPT := scripts/bench.sh
 CLIENT_NETWORK_SCRIPT := scripts/network.sh
 NETWORK_TERRAFORM_DIR := ../network
 FASTEVM_BRANCH ?= terraform-gravity
@@ -58,21 +59,26 @@ deploy: plan ## Deploy client node and run initial setup
 	@terraform apply -auto-approve
 	@echo "✅ Client node deployed"
 	@echo ""
-	@echo "📦 Copying setup script to client node..."
+	@echo "⏳ Waiting for SSH to be available..."
 	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found."; \
 		exit 1; \
 	fi; \
 	echo "Client node IP: $$CLIENT_IP"; \
+	bash scripts/wait-for-ssh.sh "$$CLIENT_IP" "$(CLIENT_SSH_KEY)" "$(CLIENT_USER)" || exit 1; \
+	echo ""
+	@echo "📦 Copying setup script to client node..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
 	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-		-i $(CLIENT_SSH_KEY) $(CLIENT_SETUP_SCRIPT) $(CLIENT_USER)@$$CLIENT_IP:~/setup.sh || { \
-		echo "❌ Failed to copy setup.sh"; exit 1; \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_SETUP_SCRIPT) $(CLIENT_BENCH_SCRIPT) 	$(CLIENT_USER)@$$CLIENT_IP:~/ || { \
+		echo "❌ Failed to copy setup.sh and bench.sh"; exit 1; \
 	}; \
 	echo "✅ Step 1 completed: Client node is ready"; \
-	echo "📝 Setup script is available at: ~/setup.sh"
+	echo "📝 Setup script is available at: ~/setup.sh"; \
+	echo "📝 Bench script is available at: ~/bench.sh"
 
 # Transfer gcloud credentials to client node
 transfer-creds: deploy ## Transfer gcloud credentials to client node
@@ -131,6 +137,38 @@ startup: transfer-creds
 	echo "📋 To attach to session: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tmux attach -t fastevm-setup'"; \
 	echo "📋 To view log file: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/setup.log'"
 
+bench: startup
+	@echo "🔧 Starting benchmark in tmux session on client node..."; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP \
+		"tmux kill-session -t fastevm-benchmark 2>/dev/null || true; \
+		tmux new-session -d -s fastevm-benchmark 'FASTEVM_BRANCH=$(FASTEVM_BRANCH) bash ~/bench.sh 2>&1 | tee ~/setup.log' || true"; \
+	echo "✅ Benchmark started in tmux session 'fastevm-benchmark'"; \
+	echo "📝 Log file: ~/benchmark.log on client node"; \
+	echo ""; \
+	echo "📊 Showing progress (Ctrl+C to stop watching, session continues in background):"; \
+	sleep 2; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/benchmark.log 2>/dev/null || (echo "Waiting for log file..." && sleep 1 && tail -f ~/benchmark.log)' || true; \
+	echo ""; \
+	echo "✅ Benchmark is running in tmux session 'fastevm-benchmark'"; \
+	echo "📋 To view progress: make view-benchmark"; \
+	echo "📋 To attach to session: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tmux attach -t fastevm-benchmark'"; \
+	echo "📋 To view log file: ssh -i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/benchmark.log'"
+
+view-benchmark: ## View benchmark script logs
+	@echo "📜 Viewing benchmark script logs..."; \
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
+	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
+		echo "❌ Client node not found. Run 'make deploy' first."; \
+		exit 1; \
+	fi; \
+	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
+	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP 'tail -f ~/benchmark.log 2>/dev/null || echo "❌ Log file not found. Run make benchmark first."'
 
 # Destroy network (from client node)
 destroy_network: ## Destroy network from client node
@@ -333,21 +371,28 @@ outputs: ## Show all outputs
 	@$(TERRAFORM_CMD) output
 
 copy-files:
+	@echo "⏳ Waiting for SSH to be available..."
 	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	if [ "$$CLIENT_IP" = "null" ] || [ -z "$$CLIENT_IP" ]; then \
 		echo "❌ Client node not found."; \
 		exit 1; \
 	fi; \
+	echo "Client node IP: $$CLIENT_IP"; \
+	bash scripts/wait-for-ssh.sh "$$CLIENT_IP" "$(CLIENT_SSH_KEY)" "$(CLIENT_USER)" || exit 1; \
+	echo ""
+	@echo "📦 Copying setup script to client node..."
+	@CLIENT_IP=$$($(TERRAFORM_CMD) output -json client_node_info | jq -r '.external_ip'); \
 	ssh-keygen -R $$CLIENT_IP 2>/dev/null || true; \
 	ssh-keyscan -H $$CLIENT_IP >> ~/.ssh/known_hosts 2>/dev/null || true; \
 	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-		-i $(CLIENT_SSH_KEY) $(CLIENT_SETUP_SCRIPT) $(CLIENT_USER)@$$CLIENT_IP:~/setup.sh || { \
+		-i $(CLIENT_SSH_KEY) $(CLIENT_SETUP_SCRIPT) $(CLIENT_BENCH_SCRIPT) $(CLIENT_USER)@$$CLIENT_IP:~/ || { \
 		echo "❌ Failed to copy setup.sh"; exit 1; \
 	}; \
 	echo "🔧 Executing setup script on client node..."; \
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
 		-i $(CLIENT_SSH_KEY) $(CLIENT_USER)@$$CLIENT_IP "FASTEVM_BRANCH=$(FASTEVM_BRANCH) bash ~/setup.sh"; \
 	echo "✅ Step 1 completed: Client node is ready"; \
-	echo "📝 Setup script is available at: ~/setup.sh"
+	echo "📝 Setup script is available at: ~/setup.sh"; \
+	echo "📝 Bench script is available at: ~/bench.sh"
 	@echo ""
 	@echo "📋 Next step: Run 'make deploy-network' to deploy the network from this client node"
